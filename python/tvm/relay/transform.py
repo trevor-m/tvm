@@ -464,6 +464,24 @@ def Legalize(legalize_map_attr_name="FTVMLegalize"):
     return _transform.Legalize(legalize_map_attr_name)
 
 
+def ExternOp(compiler):
+    """Set ops in an experession as external ops so that it will use the
+    external codegen tool.
+
+    Parameters
+    ----------
+    compiler : str
+        The compiler used for external codegen.
+
+    Returns
+    -------
+    ret : tvm.relay.Pass
+        The annotated pass that wrapps ops with subgraph_start and
+        subgraph_end.
+    """
+    return _transform.ExternOp(compiler)
+
+
 def RewriteAnnotatedOps(fallback_device):
     """Rewrite the annotated program where annotation operators, e.g.
     `on_deivce`, mark which device an expression should be scheduled to.
@@ -604,6 +622,18 @@ def PrintIR():
         The registered pass that prints the module IR.
     """
     return _transform.PrintIR()
+
+
+def PartitionGraph():
+    """Partition a Relay program into regions that can be executed on different
+    backends.
+
+    Returns
+    -------
+    ret: tvm.relay.Pass
+        The registered pass that partitions the Relay program.
+    """
+    return _transform.PartitionGraph()
 
 
 def gradient(expr, mod=None, mode='higher_order'):

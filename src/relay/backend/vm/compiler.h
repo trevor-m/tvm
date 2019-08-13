@@ -78,8 +78,9 @@ struct VMCompilerContext {
   std::vector<CachedFunc> cached_funcs;
   // The functions that have been lowered.
   std::unordered_map<LoweredFunc, size_t, NodeHash, NodeEqual> seen_funcs;
+  // List of external functions that are used by external libraries.
+  std::vector<Function> external_funcs;
 };
-
 
 class VMCompiler : public runtime::ModuleNode {
  public:
@@ -135,7 +136,11 @@ class VMCompiler : public runtime::ModuleNode {
 
   void PopulateGlobalMap();
 
-  void LibraryCodegen();
+  /* \brief Use TVM codegen to generat code for primitive functions. */
+  void PrimitiveFuncCodegen();
+
+  /* \brief Use TVM codegen to generat code for external functions. */
+  void ExternalFuncCodegen();
 
  protected:
   /*! \brief Target devices. */

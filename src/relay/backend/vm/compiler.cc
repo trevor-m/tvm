@@ -28,6 +28,7 @@
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/interpreter.h>
 #include <tvm/relay/qnn/transform.h>
+#include <tvm/ir.h>
 #include <tvm/logging.h>
 #include <tvm/relay/transform.h>
 #include <tvm/runtime/vm.h>
@@ -254,6 +255,9 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
         break;
       case Opcode::InvokePacked:
         last_register_ = instr.packed_args[instr.arity - 1];
+        break;
+      case Opcode::InvokeExternal:
+        last_register_ = instr.ext_args[instr.ext_arity - 1];
         break;
       case Opcode::If:
       case Opcode::Ret:
@@ -556,11 +560,72 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
     return ret_regs;
   }
 
+  void EmitInvokeExternal(const Function& func,
+                          const std::vector<Index>& unpacked_arg_regs,
+                          size_t arity,
+                          size_t return_count) {
+    CHECK(func->IsExternal());
+    // Append all subgraphs to a list, and then perform codegen for each
+    // category (i.e. the ones that use the same codegen should be compiled
+    // together.)
+    size_t subgraph_id = context_->external_funcs.size();
+    context_->external_funcs.push_back(func);
+    // Emit an instruction to invoke the external function/subgraph.
+    Emit(Instruction::InvokeExternal(subgraph_id, arity, return_count, unpacked_arg_regs));
+
+    if (return_count > 1) {
+      // return value is a tuple, we need to create a tuple
+      std::vector<Index> fields_registers;
+      for (size_t i = arity - return_count; i < arity; ++i) {
+        fields_registers.push_back(unpacked_arg_regs[i]);
+      }
+      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+    }
+  }
+
+  void EmitInvokePacked(const Function& func,
+                        const std::vector<Index>& unpacked_arg_regs,
+                        size_t arity,
+                        size_t return_count) {
+    Target target;
+    if (targets_.size() == 1) {
+      // homogeneous execution.
+      for (auto kv : targets_) {
+        target = kv.second;
+      }
+    } else {
+      // heterogeneous execution.
+      LOG(FATAL) << "Currently VM compiler doesn't support heterogeneous compilation";
+    }
+    auto key = CCacheKeyNode::make(func, target);
+    auto cfunc = engine_->Lower(key);
+    // TODO(jroesch): support lowered funcs for multiple targets
+    CHECK_EQ(cfunc->funcs.size(), 1);
+    auto op_index = -1;
+    if (context_->seen_funcs.find(cfunc->funcs[0]) == context_->seen_funcs.end()) {
+      op_index = context_->cached_funcs.size();
+      context_->cached_funcs.push_back(cfunc);
+      context_->seen_funcs[cfunc->funcs[0]] = op_index;
+    } else {
+      op_index = context_->seen_funcs[cfunc->funcs[0]];
+    }
+
+    Emit(Instruction::InvokePacked(op_index, arity, return_count, unpacked_arg_regs));
+
+    if (return_count > 1) {
+      // return value is a tuple, we need to create a tuple
+      std::vector<Index> fields_registers;
+      for (size_t i = arity - return_count; i < arity; ++i) {
+        fields_registers.push_back(unpacked_arg_regs[i]);
+      }
+      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+    }
+  }
+
   void EmitInvokePrimitive(const Function& func,
                            const std::vector<Index>& arg_registers,
                            const Type& ret_type) {
     std::vector<Index> unpacked_arg_regs;
-    std::vector<Instruction> allocs;
 
     // Arity calculation must flatten tuples.
     size_t arity = 0;
@@ -594,39 +659,11 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
     }
 
     // Next generate the invoke instruction.
-    CHECK(func->IsPrimitive());
-    Target target;
-    if (targets_.size() == 1) {
-      // homogeneous execution.
-      for (auto kv : targets_) {
-        target = kv.second;
-      }
+    CHECK(func->IsPrimitive() || func->IsExternal());
+    if (func->IsExternal()) {
+      return EmitInvokeExternal(func, unpacked_arg_regs, arity, return_count);
     } else {
-      // heterogeneous execution.
-      LOG(FATAL) << "Currently VM compiler doesn't support heterogeneous compilation";
-    }
-    auto key = CCacheKeyNode::make(func, target);
-    auto cfunc = engine_->Lower(key);
-    // TODO(jroesch): support lowered funcs for multiple targets
-    CHECK_EQ(cfunc->funcs.size(), 1);
-    auto op_index = -1;
-    if (context_->seen_funcs.find(cfunc->funcs[0]) == context_->seen_funcs.end()) {
-      op_index = context_->cached_funcs.size();
-      context_->cached_funcs.push_back(cfunc);
-      context_->seen_funcs[cfunc->funcs[0]] = op_index;
-    } else {
-      op_index = context_->seen_funcs[cfunc->funcs[0]];
-    }
-
-    Emit(Instruction::InvokePacked(op_index, arity, return_count, unpacked_arg_regs));
-
-    if (return_count > 1) {
-      // return value is a tuple, we need to create a tuple
-      std::vector<Index> fields_registers;
-      for (size_t i = arity - return_count; i < arity; ++i) {
-        fields_registers.push_back(unpacked_arg_regs[i]);
-      }
-      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+      return EmitInvokePacked(func, unpacked_arg_regs, arity, return_count);
     }
   }
 
@@ -670,7 +707,7 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
   }
 
   void VisitExpr_(const FunctionNode* func_node) {
-    if (!func_node->IsPrimitive()) {
+    if (!func_node->IsPrimitive() && !func_node->IsExternal()) {
       LOG(FATAL) << "local functions should have been removed by lambda lifting:" << std::endl
                  << "Program: " << AsText(GetRef<Function>(func_node), false) << std::endl
                  << "AST: " << GetRef<Function>(func_node);
@@ -888,11 +925,13 @@ void VMCompiler::Compile(Module mod,
     vm_->constants.push_back(runtime::vm::Tensor(data));
   }
 
-  LibraryCodegen();
+  PrimitiveFuncCodegen();
 
   for (auto gv : context_.global_map) {
     vm_->global_map.insert({gv.first->name_hint, gv.second});
   }
+
+  ExternalFuncCodegen();
 }
 
 Module VMCompiler::OptimizeModule(const Module& mod, const TargetsMap& targets) {
@@ -963,7 +1002,7 @@ void VMCompiler::PopulateGlobalMap() {
   }
 }
 
-void VMCompiler::LibraryCodegen() {
+void VMCompiler::PrimitiveFuncCodegen() {
   auto const &cached_funcs = context_.cached_funcs;
   if (cached_funcs.size() == 0) {
     return;
@@ -994,6 +1033,48 @@ void VMCompiler::LibraryCodegen() {
   size_t primitive_index = 0;
   for (auto cfunc : cached_funcs) {
     vm_->primitive_map.insert({cfunc->funcs[0]->name, primitive_index++});
+  }
+}
+
+void VMCompiler::ExternalFuncCodegen() {
+  // The codegen tool/compiler to the list of function mapping.
+  std::unordered_map<std::string, Module > comp_module;
+  // The codegen tool to lib index mapping.
+  std::unordered_map<std::string, size_t> comp_map;
+  // The function index to the external function and codegen tool mapping.
+  std::unordered_map<int, std::pair<std::string, std::string> > func_codgen;
+  for (size_t i = 0; i < context_.external_funcs.size(); i++) {
+    const auto& it = context_.external_funcs[i];
+    auto func_name = FunctionGetAttr(it, "func_name");
+    CHECK(func_name.defined()) << "Cannot find func_name attribute";
+    const auto* func_name_str = func_name.as<tvm::ir::StringImm>();
+    CHECK(func_name_str);
+    CHECK(it->IsExternal());
+    auto comp = FunctionGetAttr(it, "External");
+    const auto* comp_name = comp.as<tvm::ir::StringImm>();
+    CHECK(comp_name);
+    if (comp_module.count(comp_name->value) == 0) {
+      comp_module.emplace(comp_name->value, relay::ModuleNode::make({}, {}));
+    }
+    CHECK(it->checked_type_.defined())
+        << "Please perform type inference on the external function first."
+        << "\n";
+    comp_module[comp_name->value]->Add(GlobalVarNode::make(func_name_str->value), it);
+    func_codgen[i] = std::make_pair(func_name_str->value, comp_name->value);
+  }
+
+
+  for (const auto& it : comp_module) {
+    const auto *cg = runtime::Registry::Get("relay.ext." + it.first);
+    CHECK(cg) << "relay.ext." << it.first << " is not registered";
+    runtime::Module mod = (*cg)(it.second);
+    comp_map.emplace(it.first, vm_->ext_libs.size());
+    vm_->ext_libs.push_back(mod);
+  }
+
+  for (size_t i = 0; i < context_.external_funcs.size(); i++) {
+    vm_->external_func_map.emplace(i, std::get<0>(func_codgen[i]));
+    vm_->external_map.emplace(i, comp_map[std::get<1>(func_codgen[i])]);
   }
 }
 
