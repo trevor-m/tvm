@@ -180,7 +180,7 @@ def _update_shape_dtype(shape, dtype, params):
     return shape, dtype
 
 
-def optimize(graph, shape, dtype="float32", layout=None, target=None):
+def optimize(graph, shape, dtype="float32", layout=None):
     """Perform target and parameter invariant graph optimization.
 
     This is an advanced function that usually do not need to be called.
@@ -211,11 +211,7 @@ def optimize(graph, shape, dtype="float32", layout=None, target=None):
         graph = graph.apply(["CorrectLayout"])
 
     if cfg.ext_accel and cfg.ext_accel == 'tensorrt':
-        if isinstance(target, dict):
-            raise ValueError("External accelerator does not support input target as a dict")
-        target = tvm.target.create(target) if target else tvm.target.current_target()
-        if target and target.target_name == 'cuda':
-            graph = _subgraph._partition(graph, cfg.ext_accel)
+        graph = _subgraph._partition(graph, cfg.ext_accel)
 
     if cfg.pass_enabled("SimplifyInference"):
         graph = graph_attr.set_shape_inputs(graph, shape)
