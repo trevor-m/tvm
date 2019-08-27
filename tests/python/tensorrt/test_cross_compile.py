@@ -96,6 +96,8 @@ if __name__ == '__main__':
     with nnvm.compiler.build_config(opt_level=opt_level, ext_accel=ext_accel):
         graph, lib, params = nnvm.compiler.build(
             net, target, shape={"data": data_shape}, params=params, target_host=target_host)
+    num_trt_subgraphs = sum([1 for op in graph.json() if op['op'] == '_tensorrt_subgraph_op'])
+    assert num_trt_subgraphs >= 1
     print("===========Compiling model %s took %.3fs" % (network, time.time() - start))
 
     print("===========Saving lowered graph for model %s" % network)

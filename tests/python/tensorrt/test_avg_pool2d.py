@@ -48,6 +48,10 @@ def test_avg_pool2d():
         graph, lib, params = nnvm.compiler.build(sym, target,
                                                  shape={'data': input_shape},
                                                  params=params)
+    num_trt_subgraphs = sum([1 for op in trt_graph.json() if op['op'] == '_tensorrt_subgraph_op'])
+    assert num_trt_subgraphs >= 1
+    if not tvm.module.enabled("gpu"):
+        return
     compiled_model = graph_runtime.create(graph, lib, tvm.gpu())
     compiled_input = tvm.nd.array(data, ctx=tvm.gpu())
     compiled_model.set_input('data', compiled_input)

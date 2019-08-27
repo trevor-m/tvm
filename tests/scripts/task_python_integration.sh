@@ -37,6 +37,7 @@ python3 -m nose -v apps/extension/tests
 
 TVM_FFI=ctypes python3 -m nose -v tests/python/integration
 TVM_FFI=ctypes python3 -m nose -v tests/python/contrib
+TVM_FFI=ctypes python3 -m nose -v tests/python/tensorrt
 
 TVM_FFI=ctypes python3 -m nose -v tests/python/relay
 
