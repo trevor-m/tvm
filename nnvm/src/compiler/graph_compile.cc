@@ -323,10 +323,14 @@ nnvm::Graph GraphCompile(const nnvm::Graph& g) {
   }
   // Setup module.
   static const PackedFunc& fbuild = GetPackedFunc("nnvm.compiler.build_target");
-  tvm::runtime::Module module =
-      fbuild(tvm::Map<std::string, Array<tvm::LoweredFunc>>(
-                 tar_func_map.begin(), tar_func_map.end()),
-             "", target_host);
+  tvm::runtime::Module module;
+  // When using external accelerators such as TensorRT, there might not be any
+  // functions to compile in the graph. In that case, an empty module is used.
+  if (!tar_func_map.empty()) {
+    module = fbuild(tvm::Map<std::string, Array<tvm::LoweredFunc>>(
+                        tar_func_map.begin(), tar_func_map.end()),
+                    "", target_host);
+  }
 
   ret.attrs["module"] = std::make_shared<any>(std::move(module));
   ret = nnvm::ApplyPass(ret, "PlanMemory");
