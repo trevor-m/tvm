@@ -25,6 +25,7 @@
 #ifndef TVM_RUNTIME_VM_H_
 #define TVM_RUNTIME_VM_H_
 
+#include <tvm/relay/expr.h>
 #include <tvm/runtime/object.h>
 #include <tvm/runtime/packed_func.h>
 #include <memory>
@@ -69,6 +70,7 @@ enum class Opcode {
   GetTag = 13U,
   LoadConsti = 14U,
   Fatal = 15U,
+  InvokeExternal = 16U,
 };
 
 /*! \brief A single virtual machine instruction.
@@ -127,6 +129,16 @@ struct Instruction {
       Index output_size;
       /*! \brief The arguments to pass to the packed function. */
       RegName* packed_args;
+    };
+    struct /* InvokeExternal Operands */ {
+      /*! \brief The index into the external function table. */
+      Index ext_index;
+      /*! \brief The arity of the external function. */
+      Index ext_arity;
+      /*! \brief The number of outputs produced by the external function. */
+      Index ext_output_size;
+      /*! \brief The arguments to pass to the external function. */
+      RegName* ext_args;
     };
     struct /* If Operands */ {
       /*! \brief The register containing the test value. */
@@ -195,7 +207,7 @@ struct Instruction {
    *  \return The fatal instruction.
    * */  
   static Instruction Fatal();
-  /*! \brief Construct a invoke packed instruction.
+  /*! \brief Construct an invoke packed instruction.
    *  \param packed_index The index of the packed function.
    *  \param arity The arity of the function.
    *  \param output_size The number of outputs of the packed function.
@@ -204,6 +216,16 @@ struct Instruction {
    */
   static Instruction InvokePacked(Index packed_index, Index arity, Index output_size,
                                   const std::vector<RegName>& args);
+  /*! \brief Construct an invoke external instruction.
+   *  \param packed_index The index of the external function.
+   *  \param ext_arity The arity of the function.
+   *  \param ext_output_size The number of outputs of the external function.
+   *  \param args The argument registers.
+   *  \return The invoke external instruction.
+   */
+  static Instruction InvokeExternal(Index external_index, Index ext_arity, Index ext_output_size,
+                                    const std::vector<RegName>& args);
+
   /*! \brief Construct an allocate tensor instruction with constant shape.
    *  \param shape The shape of the tensor.
    *  \param dtype The dtype of the tensor.
@@ -409,6 +431,20 @@ class VirtualMachine : public runtime::ModuleNode {
   virtual void InvokePacked(Index packed_index, const PackedFunc& func, Index arg_count,
                             Index output_size, const std::vector<Object>& args);
 
+  /*!
+   * \brief Invoke an external function.
+   *
+   * \param external_index The offset of the external function in all functions.
+   * \param func The external function to be invoked.
+   * \param arg_count The number of arguments to the external function.
+   * \param output_size The number of outputs of the external function.
+   * \param args Arguments to the external function.
+   *
+   * \note The return value will be stored in the last output_size slots of args.
+   */
+  virtual void InvokeExternal(Index External_index, const relay::Function& func, Index arg_count,
+                              Index output_size, const std::vector<Object>& args);
+
   virtual ~VirtualMachine() {}
 
   const char* type_key() const final {
@@ -419,6 +455,8 @@ class VirtualMachine : public runtime::ModuleNode {
   runtime::Module lib;
   /*! \brief The virtual machine's packed function table. */
   std::vector<PackedFunc> packed_funcs;
+  /*! \brief The virtual machine's external function table. */
+  std::vector<relay::Function> external_funcs;
   /*! \brief The virtual machine's function table. */
   std::vector<VMFunction> functions;
   /*! \brief The current stack of call frames. */

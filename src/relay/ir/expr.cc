@@ -159,6 +159,12 @@ bool FunctionNode::IsPrimitive() const {
   return pval && pval->value != 0;
 }
 
+bool FunctionNode::IsExternal() const {
+  NodeRef res = FunctionGetAttr(GetRef<Function>(this), "External");
+  const ir::IntImm* pval = res.as<ir::IntImm>();
+  return pval && pval->value != 0;
+}
+
 NodeRef FunctionGetAttr(const Function& func, const std::string& key) {
   if (!func->attrs.defined()) { return NodeRef(); }
 

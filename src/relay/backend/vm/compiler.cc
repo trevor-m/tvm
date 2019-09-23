@@ -27,6 +27,7 @@
 #include <tvm/relay/error.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/interpreter.h>
+#include <tvm/ir.h>
 #include <tvm/logging.h>
 #include <tvm/relay/transform.h>
 #include <tvm/runtime/vm.h>
@@ -253,6 +254,9 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
         break;
       case Opcode::InvokePacked:
         last_register_ = instr.packed_args[instr.arity - 1];
+        break;
+      case Opcode::InvokeExternal:
+        last_register_ = instr.ext_args[instr.ext_arity - 1];
         break;
       case Opcode::If:
       case Opcode::Ret:
@@ -555,11 +559,75 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
     return ret_regs;
   }
 
+  void EmitInvokeExternal(const Function& func,
+                          const std::vector<Index>& unpacked_arg_regs,
+                          size_t arity,
+                          size_t return_count) {
+    CHECK(func->IsExternal());
+    auto comp = FunctionGetAttr(func, "External");
+    const auto* comp_name = comp.as<tvm::ir::StringImm>();
+    CHECK(comp_name);
+    // Append all subgraphs to a list, and then perform codegen for each
+    // category (i.e. the ones that use the same codegen should be compiled
+    // together.)
+    context_->external_funcs.push_back(func);
+    size_t subgraph_id = context_->external_funcs.size();
+    // Emit an instruction to invoke the external function/subgraph.
+    Emit(Instruction::InvokeExternal(subgraph_id, arity, return_count, unpacked_arg_regs));
+
+    if (return_count > 1) {
+      // return value is a tuple, we need to create a tuple
+      std::vector<Index> fields_registers;
+      for (size_t i = arity - return_count; i < arity; ++i) {
+        fields_registers.push_back(unpacked_arg_regs[i]);
+      }
+      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+    }
+  }
+
+  void EmitInvokePacked(const Function& func,
+                        const std::vector<Index>& unpacked_arg_regs,
+                        size_t arity,
+                        size_t return_count) {
+    Target target;
+    if (targets_.size() == 1) {
+      // homogeneous execution.
+      for (auto kv : targets_) {
+        target = kv.second;
+      }
+    } else {
+      // heterogeneous execution.
+      LOG(FATAL) << "Currently VM compiler doesn't support heterogeneous compilation";
+    }
+    auto key = CCacheKeyNode::make(func, target);
+    auto cfunc = engine_->Lower(key);
+    // TODO(jroesch): support lowered funcs for multiple targets
+    CHECK_EQ(cfunc->funcs.size(), 1);
+    auto op_index = -1;
+    if (context_->seen_funcs.find(cfunc->funcs[0]) == context_->seen_funcs.end()) {
+      op_index = context_->cached_funcs.size();
+      context_->cached_funcs.push_back(cfunc);
+      context_->seen_funcs[cfunc->funcs[0]] = op_index;
+    } else {
+      op_index = context_->seen_funcs[cfunc->funcs[0]];
+    }
+
+    Emit(Instruction::InvokePacked(op_index, arity, return_count, unpacked_arg_regs));
+
+    if (return_count > 1) {
+      // return value is a tuple, we need to create a tuple
+      std::vector<Index> fields_registers;
+      for (size_t i = arity - return_count; i < arity; ++i) {
+        fields_registers.push_back(unpacked_arg_regs[i]);
+      }
+      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+    }
+  }
+
   void EmitInvokePrimitive(const Function& func,
                            const std::vector<Index>& arg_registers,
                            const Type& ret_type) {
     std::vector<Index> unpacked_arg_regs;
-    std::vector<Instruction> allocs;
 
     // Arity calculation must flatten tuples.
     size_t arity = 0;
@@ -593,39 +661,11 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
     }
 
     // Next generate the invoke instruction.
-    CHECK(func->IsPrimitive());
-    Target target;
-    if (targets_.size() == 1) {
-      // homogeneous execution.
-      for (auto kv : targets_) {
-        target = kv.second;
-      }
+    CHECK(func->IsPrimitive() || func->IsExternal());
+    if (func->IsExternal()) {
+      return EmitInvokeExternal(func, unpacked_arg_regs, arity, return_count);
     } else {
-      // heterogeneous execution.
-      LOG(FATAL) << "Currently VM compiler doesn't support heterogeneous compilation";
-    }
-    auto key = CCacheKeyNode::make(func, target);
-    auto cfunc = engine_->Lower(key);
-    // TODO(jroesch): support lowered funcs for multiple targets
-    CHECK_EQ(cfunc->funcs.size(), 1);
-    auto op_index = -1;
-    if (context_->seen_funcs.find(cfunc->funcs[0]) == context_->seen_funcs.end()) {
-      op_index = context_->cached_funcs.size();
-      context_->cached_funcs.push_back(cfunc);
-      context_->seen_funcs[cfunc->funcs[0]] = op_index;
-    } else {
-      op_index = context_->seen_funcs[cfunc->funcs[0]];
-    }
-
-    Emit(Instruction::InvokePacked(op_index, arity, return_count, unpacked_arg_regs));
-
-    if (return_count > 1) {
-      // return value is a tuple, we need to create a tuple
-      std::vector<Index> fields_registers;
-      for (size_t i = arity - return_count; i < arity; ++i) {
-        fields_registers.push_back(unpacked_arg_regs[i]);
-      }
-      Emit(Instruction::AllocDatatype(0, return_count, fields_registers, NewRegister()));
+      return EmitInvokePacked(func, unpacked_arg_regs, arity, return_count);
     }
   }
 
@@ -669,7 +709,7 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
   }
 
   void VisitExpr_(const FunctionNode* func_node) {
-    if (!func_node->IsPrimitive()) {
+    if (!func_node->IsPrimitive() && !func_node->IsExternal()) {
       LOG(FATAL) << "local functions should have been removed by lambda lifting:" << std::endl
                  << "Program: " << AsText(GetRef<Function>(func_node), false) << std::endl
                  << "AST: " << GetRef<Function>(func_node);
