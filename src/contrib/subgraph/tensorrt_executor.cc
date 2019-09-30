@@ -473,12 +473,22 @@ void AddActivation(
   static const std::unordered_map<std::string, nvinfer1::ActivationType> op_map =
       {{"relu", nvinfer1::ActivationType::kRELU},
        {"sigmoid", nvinfer1::ActivationType::kSIGMOID},
-       {"tanh", nvinfer1::ActivationType::kTANH}};
+       {"tanh", nvinfer1::ActivationType::kTANH},
+       {"clip", nvinfer1::ActivationType::kCLIP}};
   auto it = op_map.find(nodes[nid].op_name);
   CHECK(it != op_map.end()) << "Unsupported activation type "
                             << nodes[nid].op_name << " in TensorRT";
   nvinfer1::IActivationLayer* act_layer = network->addActivation(*data, it->second);
   CHECK(act_layer != nullptr);
+  if (nodes[nid].op_name == "clip") {
+    // Set clip parameterss.
+    CHECK(nodes[nid].attrs.count("a_min"));
+    CHECK(nodes[nid].attrs.count("a_max"));
+    const float a_min = std::stof(nodes[nid].attrs.at("a_min"));
+    const float a_max = std::stof(nodes[nid].attrs.at("a_max"));
+    act_layer->setAlpha(a_min);
+    act_layer->setBeta(a_max);
+  }
   act_layer->setName(nodes[nid].node_name.c_str());
   nid2layer->emplace(nid, act_layer);
 }
@@ -823,6 +833,7 @@ static const std::unordered_map<std::string, AddTensorRTLayer> add_trt_layer_fun
      {"relu", AddActivation},
      {"sigmoid", AddActivation},
      {"tanh", AddActivation},
+     {"clip", AddActivation},
      {"elemwise_add", AddElementWiseBinaryOp},
      {"elemwise_sub", AddElementWiseBinaryOp},
      {"elemwise_mul", AddElementWiseBinaryOp},
