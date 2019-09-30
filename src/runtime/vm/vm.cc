@@ -784,13 +784,6 @@ void VirtualMachine::InvokePacked(Index packed_index, const PackedFunc& func,
   func.CallPacked(TVMArgs(values.data(), codes.data(), arity), &rv);
 }
 
-// TODO(@zhiics) Invoke the external function/subgraph.
-void VirtualMachine::InvokeExternal(Index ext_index,
-                                    const relay::Function& func,
-                                    Index arg_count, Index output_size,
-                                    const std::vector<Object>& args) {
-}
-
 void VirtualMachine::Init(const std::vector<TVMContext>& ctxs) {
   this->ctxs = ctxs;
 
@@ -806,12 +799,22 @@ void VirtualMachine::Init(const std::vector<TVMContext>& ctxs) {
     }
     packed_funcs[packed_index] = lib.GetFunction(packed_name);
   }
+
+  for (const auto& it : external_map) {
+    Index subgraph_id = it.first;
+    Index ext_lib_indx = it.second;
+    if (external_funcs.size() <= static_cast<size_t>(subgraph_id)) {
+      external_funcs.resize(subgraph_id + 1);
+    }
+    CHECK_GT(external_func_map.count(subgraph_id), 0U);
+    external_funcs[subgraph_id] =
+        ext_libs[ext_lib_indx].GetFunction(external_func_map[subgraph_id]);
+  }
 }
 
 inline void VirtualMachine::WriteRegister(Index r, const Object& val) {
   frames.back().register_file[r] = val;
 }
-
 inline Object VirtualMachine::ReadRegister(Index r) const {
   return frames.back().register_file[r];
 }
@@ -899,7 +902,7 @@ void VirtualMachine::RunLoop() {
         for (Index i = 0; i < arity; ++i) {
           args.push_back(ReadRegister(instr.ext_args[i]));
         }
-        InvokeExternal(instr.ext_index, func, arity, instr.ext_output_size, args);
+        InvokePacked(instr.ext_index, func, arity, instr.ext_output_size, args);
         for (Index i = 0; i < instr.ext_output_size; ++i) {
           WriteRegister(instr.ext_args[instr.ext_arity - instr.ext_output_size + i],
                         args[instr.ext_arity - instr.ext_output_size + i]);

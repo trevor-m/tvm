@@ -431,20 +431,6 @@ class VirtualMachine : public runtime::ModuleNode {
   virtual void InvokePacked(Index packed_index, const PackedFunc& func, Index arg_count,
                             Index output_size, const std::vector<Object>& args);
 
-  /*!
-   * \brief Invoke an external function.
-   *
-   * \param external_index The offset of the external function in all functions.
-   * \param func The external function to be invoked.
-   * \param arg_count The number of arguments to the external function.
-   * \param output_size The number of outputs of the external function.
-   * \param args Arguments to the external function.
-   *
-   * \note The return value will be stored in the last output_size slots of args.
-   */
-  virtual void InvokeExternal(Index External_index, const relay::Function& func, Index arg_count,
-                              Index output_size, const std::vector<Object>& args);
-
   virtual ~VirtualMachine() {}
 
   const char* type_key() const final {
@@ -453,10 +439,12 @@ class VirtualMachine : public runtime::ModuleNode {
 
   /*! \brief The runtime module/library that contains generated code. */
   runtime::Module lib;
+  /*! \brief The external module/library. */
+  std::vector<runtime::Module> ext_libs;
   /*! \brief The virtual machine's packed function table. */
   std::vector<PackedFunc> packed_funcs;
   /*! \brief The virtual machine's external function table. */
-  std::vector<relay::Function> external_funcs;
+  std::vector<PackedFunc> external_funcs;
   /*! \brief The virtual machine's function table. */
   std::vector<VMFunction> functions;
   /*! \brief The current stack of call frames. */
@@ -545,6 +533,15 @@ class VirtualMachine : public runtime::ModuleNode {
    * corresponds to the position of the `packed_funcs` list.
    */
   std::unordered_map<std::string, Index> primitive_map;
+
+  /*! \brief A mapping from the subgraph id to the external library index in the
+   * `ext_libs`.
+   */
+  std::unordered_map<Index, Index> external_map;
+
+  /*! \brief A mapping from the subgraph id to the external function name.
+   */
+  std::unordered_map<Index, std::string> external_func_map;
 
  private:
   /*! \brief Invoke a global setting up the VM state to execute.
