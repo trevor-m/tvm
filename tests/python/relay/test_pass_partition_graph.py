@@ -17,6 +17,7 @@
 """Unit tests for graph partitioning."""
 import numpy as np
 from nose.tools import nottest
+import time
 
 import tvm
 from tvm import relay
@@ -286,10 +287,8 @@ def test_extern_dnnl_mobilenet():
 
     #tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
 
-
 if __name__ == "__main__":
     test_multi_node_subgraph()
     test_extern_gcc_single_op()
     test_extern_gcc()
-    #test_extern_dnnl()
-    #test_extern_dnnl_mobilenet()
+    test_extern_dnnl()

@@ -903,7 +903,7 @@ void VirtualMachine::RunLoop() {
       case Opcode::InvokeExternal: {
         const auto& func = external_funcs[instr.ext_index];
         const auto& arity = instr.ext_arity;
-        std::vector<Object> args;
+        std::vector<ObjectRef> args;
         for (Index i = 0; i < arity; ++i) {
           args.push_back(ReadRegister(instr.ext_args[i]));
         }
