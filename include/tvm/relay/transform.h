@@ -599,6 +599,16 @@ TVM_DLL Pass EtaExpand(bool expand_constructor, bool expand_global_var);
  */
 TVM_DLL Pass PrintIR(bool show_meta_data = true);
 
+/*!
+ * \brief Converts the entire relay program into one that can be executed using
+ * TensorRT. If any of the operators are not supported by the TensorRT
+ * conversion, the unmodified program will be returned instead.
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass EnableTrt(int trt_ver_major = 6, int trt_ver_minor = 0,
+                       int trt_ver_patch = 1);
+
 }  // namespace transform
 
 /*!

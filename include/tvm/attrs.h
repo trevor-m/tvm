@@ -48,6 +48,7 @@
 #include <dmlc/common.h>
 #include <unordered_map>
 #include <vector>
+#include <cstring>
 #include <functional>
 #include <type_traits>
 #include <string>
