@@ -39,6 +39,8 @@
 #include <vector>
 #include <string>
 
+#include "../../relay/backend/contrib/tensorrt/trt_executor.h"
+
 namespace tvm {
 namespace runtime {
 
@@ -59,6 +61,9 @@ struct TVMOpParam {
   uint32_t num_inputs;
   uint32_t num_outputs;
   uint32_t flatten_data;
+  // 3rd Party Backend
+  std::string subgraph;
+  std::string backend;
 };
 
 /*!
@@ -241,6 +246,10 @@ class GraphRuntime : public ModuleNode {
         } else if (key == "flatten_data") {
           param->flatten_data = strtoul(value.c_str(), nullptr, 10);
           bitmask |= 8;
+        } else if (key == "subgraph") {
+          param->subgraph = value;
+        } else if (key == "backend") {
+          param->backend = value;
         }
       }
       CHECK_EQ(bitmask, 1|2|4|8) << "invalid format";
@@ -381,7 +390,7 @@ class GraphRuntime : public ModuleNode {
    */
   std::pair<std::function<void()>, std::shared_ptr<OpArgs> > CreateTVMOp(
       const TVMOpParam& attrs, const std::vector<DLTensor>& args,
-      size_t num_inputs);
+      size_t num_inputs, const std::string& node_name);
   // Get node entry index.
   uint32_t entry_id(uint32_t nid, uint32_t index) const {
     return node_row_ptr_[nid] + index;
@@ -420,6 +429,8 @@ class GraphRuntime : public ModuleNode {
   std::vector<size_t> data_alignment_;
   /*! \brief Operator on each node. */
   std::vector<std::function<void()> > op_execs_;
+  // TensorRT execution
+  relay::contrib::TrtExecutor trt_exec_;
 };
 
 std::vector<TVMContext> GetAllContext(const TVMArgs& args);
