@@ -37,10 +37,14 @@
 #include <vector>
 #include <string>
 
+// For NNVM TRT Integration
 #include "../../contrib/subgraph/subgraph.h"
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+// NNVM TRT Integration
 #include "../../contrib/subgraph/tensorrt_executor.h"
-#endif  // TVM_GRAPH_RUNTIME_TENSORRT
+// Relay TRT Integration
+#include "../../relay/backend/contrib/tensorrt/trt_executor.h"
+#endif
 
 namespace tvm {
 namespace runtime {
@@ -62,6 +66,9 @@ struct TVMOpParam {
   uint32_t num_inputs;
   uint32_t num_outputs;
   uint32_t flatten_data;
+  // 3rd Party Backend
+  std::string subgraph;
+  std::string backend;
 };
 
 /*!
@@ -265,6 +272,10 @@ class GraphRuntime : public ModuleNode {
         } else if (key == "flatten_data") {
           param->flatten_data = strtoul(value.c_str(), nullptr, 10);
           bitmask |= 8;
+        } else if (key == "subgraph") {
+          param->subgraph = value;
+        } else if (key == "backend") {
+          param->backend = value;
         }
       }
       CHECK_EQ(bitmask, 1|2|4|8) << "invalid format";
@@ -462,11 +473,11 @@ class GraphRuntime : public ModuleNode {
   /*! \brief Operator on each node. */
   std::vector<std::function<void()> > op_execs_;
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+  // NNVM TRT execution
   contrib::TensorRTExecManager tensorrt_exec_manager_;
+  // Relay TRT execution
+  relay::contrib::TrtExecutor trt_exec_;
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
-
-  /*! \brief Arg info of TVM ops */
-  std::vector<std::shared_ptr<OpArgs> > op_args_;
 };
 
 std::vector<TVMContext> GetAllContext(const TVMArgs& args);

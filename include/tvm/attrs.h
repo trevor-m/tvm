@@ -45,6 +45,7 @@
 #ifndef TVM_ATTRS_H_
 #define TVM_ATTRS_H_
 
+#include <cstring>
 #include <dmlc/common.h>
 #include <unordered_map>
 #include <vector>

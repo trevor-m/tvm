@@ -382,6 +382,7 @@ void GraphRuntime::SetupOpExecs() {
       }
     } else if (inode.op_type == "_tensorrt_subgraph_op") {
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+      // NNVM TRT integration
       CHECK_EQ(inode.subgraphs.size(), 1U) << "Only supports one subgraph per node";
       CHECK_EQ(inode.subgraphs[0].arg_nodes.size(), inode.inputs.size());
       op_execs_[nid] = tensorrt_exec_manager_.CreateExec(
@@ -430,6 +431,23 @@ std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRu
       TVM_CCALL(TVMArrayCopyFromTo(from, to, nullptr));
     };
     return {fexec, arg_ptr};
+  } else if (param.func_name == "__tensorrt_subgraph") {
+#if TVM_GRAPH_RUNTIME_TENSORRT
+    // Relay TRT integration
+    auto fexec = [arg_ptr, param, this]() {
+      // TODO(trevmorr): Use node name for unique subgraph identifier.
+      const std::string node_name = "tensorrt_subgraph";
+      tvm::runtime::PackedFunc pf = this->trt_exec_.GetFunction(node_name, param.subgraph);
+      TVMRetValue rv;
+      TVMArgs targs(arg_ptr->arg_values.data(),
+                    arg_ptr->arg_tcodes.data(),
+                    static_cast<int>(arg_ptr->arg_values.size()));
+      pf.CallPacked(targs, &rv);
+    };
+    return {fexec, arg_ptr};
+#else
+    LOG(FATAL) << "Not built with TensorRT support.";
+#endif
   }
   CHECK(!module_.IsEmpty())
     << "Module cannot be empty in order to get functions from the lib";

@@ -979,3 +979,25 @@ class ChangeBatch:
                 else:
                     return var
         return ChangeBatchMutator().visit(func)
+
+def EnableTrt(trt_version=(6, 0, 1)):
+    """Converts the entire relay program into one that can be executed using
+    TensorRT. If any of the operators are not supported by the TensorRT
+    conversion, the unmodified program will be returned instead.
+
+    Parameters
+    ----------
+    passes : Optional[Tuple[int]]
+        Which version of TensorRT to target for partitioning.
+
+    Returns
+    -------
+    ret: tvm.relay.Pass
+        The registered pass that partitions the Relay program.
+    """
+    if not isinstance(trt_version, (list, tuple)):
+        raise TypeError("trt_version is expected to be the type of " +
+                        "list/tuple.")
+    if len(trt_version) != 3:
+        raise TypeError("trt_version is expected to contain 3 elements.")
+    return _transform.EnableTrt(*trt_version)

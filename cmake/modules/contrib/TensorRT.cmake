@@ -17,16 +17,28 @@
 
 # TensorRT Module
 
-if(IS_DIRECTORY ${USE_TENSORRT})
-    set(TENSORRT_ROOT_DIR ${USE_TENSORRT})
-    message(STATUS "Custom TensorRT path: " ${TENSORRT_ROOT_DIR})
-    set(TENSORRT_INCLUDE_DIR ${TENSORRT_ROOT_DIR}/include)
-    set(TENSORRT_LIB_DIR ${TENSORRT_ROOT_DIR}/lib)
-    file(GLOB TENSORRT_SRCS src/contrib/subgraph/*.cc)
+if(USE_TENSORRT)
+    if(IS_DIRECTORY ${USE_TENSORRT})
+        set(TENSORRT_ROOT_DIR ${USE_TENSORRT})
+    endif()
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS ${TENSORRT_ROOT_DIR} PATH_SUFFIXES include)
+    find_library(TENSORRT_LIB_DIR nvinfer HINTS ${TENSORRT_ROOT_DIR} PATH_SUFFIXES lib)
+    find_package_handle_standard_args(TENSORRT DEFAULT_MSG TENSORRT_INCLUDE_DIR TENSORRT_LIB_DIR)
+    if(NOT TENSORRT_FOUND)
+        message(ERROR "Could not find TensorRT.")
+    endif()
     include_directories(${TENSORRT_INCLUDE_DIR})
+    list(APPEND TVM_RUNTIME_LINKER_LIBS ${TENSORRT_LIB_DIR})
+
+    # NNVM TRT sources
+    file(GLOB TENSORRT_SRCS src/contrib/subgraph/*.cc)
     list(APPEND RUNTIME_SRCS ${TENSORRT_SRCS})
-    find_library(TENSORRT_NVINFER_LIBRARY nvinfer ${TENSORRT_LIB_DIR})
-    list(APPEND TVM_RUNTIME_LINKER_LIBS ${TENSORRT_NVINFER_LIBRARY})
+
+    # Relay TRT sources
+    file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/*.cc)
+    list(APPEND COMPILER_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
+
+    # Set defines
     set_source_files_properties(${RUNTIME_GRAPH_SRCS}
             PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
 endif()
