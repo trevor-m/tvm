@@ -462,6 +462,7 @@ class GraphRuntime : public ModuleNode {
   /*! \brief Operator on each node. */
   std::vector<std::function<void()> > op_execs_;
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+  // NNVM TRT Integration
   contrib::TensorRTExecManager tensorrt_exec_manager_;
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 

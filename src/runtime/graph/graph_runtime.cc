@@ -381,6 +381,7 @@ void GraphRuntime::SetupOpExecs() {
       }
     } else if (inode.op_type == "_tensorrt_subgraph_op") {
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+      // NNVM TRT integration
       CHECK_EQ(inode.subgraphs.size(), 1U) << "Only supports one subgraph per node";
       CHECK_EQ(inode.subgraphs[0].arg_nodes.size(), inode.inputs.size());
       op_execs_[nid] = tensorrt_exec_manager_.CreateExec(
