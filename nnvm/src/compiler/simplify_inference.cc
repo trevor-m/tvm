@@ -101,6 +101,7 @@ Graph SimplifyInference(nnvm::Graph src) {
     static const Op* bn_op = Op::Get("batch_norm");
     static const Op* dropout_op = Op::Get("dropout");
     if (n->op() == bn_op) {
+      return false;
       *ret = BatchNormToInferUnpack(
           n->attrs,
           n->inputs[0],

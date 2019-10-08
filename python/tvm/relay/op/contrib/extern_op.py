@@ -104,3 +104,21 @@ def external_multiply(attrs, args, compiler):
     """Check if the external compiler should be used.
     """
     return get_extern_op(compiler, 'multiply')(attrs, args)
+
+@reg.register_extern_op("nn.global_avg_pool2d")
+def external_multiply(attrs, args, compiler):
+    """Check if the external compiler should be used.
+    """
+    return get_extern_op(compiler, 'global_avg_pool2d')(attrs, args)
+
+@reg.register_extern_op("nn.batch_flatten")
+def external_multiply(attrs, args, compiler):
+    """Check if the external compiler should be used.
+    """
+    return get_extern_op(compiler, 'batch_flatten')(attrs, args)
+
+@reg.register_extern_op("nn.softmax")
+def external_multiply(attrs, args, compiler):
+    """Check if the external compiler should be used.
+    """
+    return get_extern_op(compiler, 'softmax')(attrs, args)
