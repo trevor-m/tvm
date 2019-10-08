@@ -366,31 +366,19 @@ void GraphRuntime::SetupOpExecs() {
       uint32_t eid = this->entry_id(nid, index);
       args.push_back(*(data_entry_[eid].operator->()));
     }
+    CHECK(inode.op_type == "tvm_op") << "Can only take tvm_op as op";
 
-    if (inode.op_type == "tvm_op") {
-      std::shared_ptr<OpArgs> op_args = nullptr;
-      std::tie(op_execs_[nid], op_args) =
-          CreateTVMOp(inode.param, args, inode.inputs.size());
+    std::shared_ptr<OpArgs> op_args = nullptr;
+    std::tie(op_execs_[nid], op_args) =
+        CreateTVMOp(inode.param, args, inode.inputs.size());
 
-      for (size_t i = 0; i < inode.inputs.size(); i++) {
-        uint32_t eid = this->entry_id(inode.inputs[i]);
-        // check if op input is model input
-        if (input_node_eids.count(eid) > 0) {
-          input_dltensors_[eid].push_back(
-              static_cast<DLTensor*>(op_args->arg_values[i].v_handle));
-        }
+    for (size_t i = 0; i < inode.inputs.size(); i++) {
+      uint32_t eid = this->entry_id(inode.inputs[i]);
+      // check if op input is model input
+      if (input_node_eids.count(eid) > 0) {
+        input_dltensors_[eid].push_back(
+            static_cast<DLTensor*>(op_args->arg_values[i].v_handle));
       }
-    } else if (inode.op_type == "_tensorrt_subgraph_op") {
-#ifdef TVM_GRAPH_RUNTIME_TENSORRT
-      CHECK_EQ(inode.subgraphs.size(), 1U) << "Only supports one subgraph per node";
-      CHECK_EQ(inode.subgraphs[0].arg_nodes.size(), inode.inputs.size());
-      op_execs_[nid] = tensorrt_exec_manager_.CreateExec(
-          inode.name, inode.subgraphs[0], args);
-#else
-      LOG(FATAL) << "TensorRT NOT enabled for operator " << inode.op_type;
-#endif  // TVM_GRAPH_RUNTIME_TENSORRT
-    } else {
-      LOG(FATAL) << "Unknown op type " << inode.op_type << " in graph runtime";
     }
   }
 }
@@ -430,6 +418,22 @@ std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRu
       TVM_CCALL(TVMArrayCopyFromTo(from, to, nullptr));
     };
     return {fexec, arg_ptr};
+  } else if (param.func_name == "__tensorrt_subgraph") {
+#if TVM_GRAPH_RUNTIME_TENSORRT
+    auto fexec = [arg_ptr, param, this]() {
+      // TODO(trevmorr): Use
+      const std::string node_name = "tensorrt_subgraph";
+      tvm::runtime::PackedFunc pf = this->trt_exec_.GetFunction(node_name, param.subgraph);
+      TVMRetValue rv;
+      TVMArgs targs(arg_ptr->arg_values.data(),
+                    arg_ptr->arg_tcodes.data(),
+                    static_cast<int>(arg_ptr->arg_values.size()));
+      pf.CallPacked(targs, &rv);
+    };
+    return {fexec, arg_ptr};
+#else
+    LOG(FATAL) << "Not built with TensorRT support.";
+#endif
   }
   CHECK(!module_.IsEmpty())
     << "Module cannot be empty in order to get functions from the lib";
