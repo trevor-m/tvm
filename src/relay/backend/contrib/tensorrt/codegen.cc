@@ -15,7 +15,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <dlfcn.h>
+// #include <dlfcn.h>
 #include <stdlib.h>
 #include <tvm/relay/contrib_codegen.h>
 #include <tvm/relay/expr_functor.h>
@@ -24,8 +24,9 @@
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/ndarray.h>
 
-#include "utils.h"
+#include "trt_builder.h"
 #include <unordered_map>
+#include <vector>
 // #include "libs.h"
 #include "NvInfer.h"
 
@@ -33,162 +34,42 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-  // Logger for TensorRT info/warning/errors
-class TensorRTLogger : public nvinfer1::ILogger {
- public:
-  TensorRTLogger(): TensorRTLogger(Severity::kWARNING) {}
-  explicit TensorRTLogger(Severity severity): reportable_severity(severity) {}
-  void log(Severity severity, const char* msg) override {
-    // suppress messages with severity enum value greater than the reportable
-    // if (severity > reportable_severity) return;
 
-    switch (severity) {
-      case Severity::kINTERNAL_ERROR: LOG(ERROR) << "INTERNAL_ERROR: " << msg; break;
-      case Severity::kERROR: LOG(ERROR) << "ERROR: " << msg; break;
-      case Severity::kWARNING: LOG(WARNING) << "WARNING: " << msg; break;
-      case Severity::kINFO: LOG(INFO) << "INFO: " << msg; break;
-      default: LOG(INFO) << "UNKNOWN: " << msg; break;
-    }
+void ExecuteEngine(const TrtEngineAndContext& engine_and_context, tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+  auto engine = engine_and_context.engine;
+  auto context = engine_and_context.context;
+  const DLTensor* dptr = ((runtime::NDArray)args[0]).operator->();
+  runtime::NDArray out_arg = args[args.size() - 1];
+  auto out = reinterpret_cast<float*>(out_arg->data);
+  CHECK(args.size() == engine->getNbBindings());
+  const int num_bindings = engine->getNbBindings();
+  void* bindings[num_bindings];
+  if (!runtime::TypeMatch(dptr->dtype, kDLFloat, 32)) {
+    LOG(FATAL) << "Only support float32 type.";
   }
- private:
-  Severity reportable_severity{Severity::kWARNING};
-};
+  // Set input pointers
+  for (int i = 0; i < args.size() - 1; ++i) {
+    runtime::NDArray arg = args[i];
+    bindings[i] = reinterpret_cast<float*>(arg->data);
+  }
+  // Set output pointer
+  bindings[num_bindings-1] = out;
+  const int batch_size = dptr->shape[0];
+  LOG(INFO) << "batch_size: " << batch_size;
+  CHECK(context->execute(batch_size, bindings)) << "Running TensorRT failed.";
 
-// Parameters to convert an Op from relay to TensorRT
-struct AddTrtLayerParams {
-  const CallNode* call;
-};
-
-struct TrtEngineAndContext {
-  nvinfer1::ICudaEngine* engine;
-  nvinfer1::IExecutionContext* context;
-};
-
-
-void AddActivation(const AddTrtLayerParams& params) {
-  // CHECK(call->args.size() == 1) << "Activation requires one input.";
-  //params.call->args[0]
-  //nvinfer1::IActivationLayer* act_layer = network->addActivation(*data, it->second);
+            
+  *rv = bindings[num_bindings-1];
 }
-
-using AddTrtLayer = std::function<void(
-    const AddTrtLayerParams& params)>;
-
-static const std::unordered_map<std::string, AddTrtLayer> add_trt_layer_funcs = {
-    // {{"conv2d", AddConvolution},
-    //  {"batch_norm", AddBatchNorm},
-     {"nn.relu", AddActivation},
-    //  {"sigmoid", AddActivation},
-    //  {"tanh", AddActivation},
-    //  {"clip", AddActivation},
-    //  {"add", AddElementWiseBinaryOp},
-    //  {"elemwise_sub", AddElementWiseBinaryOp},
-    //  {"elemwise_mul", AddElementWiseBinaryOp},
-    //  {"elemwise_div", AddElementWiseBinaryOp},
-    //  {"elemwise_pow", AddElementWiseBinaryOp},
-    //  {"max_pool2d", AddPooling},
-    //  {"avg_pool2d", AddPooling},
-    //  {"global_max_pool2d", AddPooling},
-    //  {"global_avg_pool2d", AddPooling},
-    //  {"dense", AddFullyConnected},
-    //  {"softmax", AddSoftmax},
-    //  {"concatenate", AddConcatenate},
-    //  {"conv2d_transpose", AddDeconvolution},
-    //  {"slice_like", AddSliceLike},
-    };
-
-// FIXME: This is an experimental implementation. We should implement all utilities
-// and make a base class such as ExternBuilder for users to implement.
-class TrtBuilder : public ExprVisitor {
- public:
-  TrtBuilder(std::string id) {
-    this->_subgraph_id = id;
-
-    // Init TRT stuff
-    static TensorRTLogger trt_logger;
-    _builder = nvinfer1::createInferBuilder(trt_logger);
-    _builder->setMaxBatchSize(1);
-    _builder->setMaxWorkspaceSize(1 << 29);
-    //_builder->setFp16Mode(use_fp16_);
-    _network = _builder->createNetwork();
-  }
-
-  void VisitExpr_(const VarNode* node) final {
-    LOG(INFO) << "Adding input " << node->name_hint();
-
-    const std::string& tensor_name = node->name_hint();
-    auto shape = GetShape(node->checked_type());
-    nvinfer1::Dims dims = VectorToTrtDims(shape);
-    auto type = GetType(node->checked_type());
-    CHECK(type.is_float()) << "Only FP32 inputs are supported.";
-    auto tensor = _network->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
-    _trt_tensors[tensor_name] = tensor;
-
-    _subgraph_args.push_back(node->name_hint());
-    _out.clear();
-    _out.push_back(tensor_name);
-  }
-
-  void VisitExpr_(const TupleGetItemNode* op) final {
-    ; // Do nothing
-  }
-
-  void VisitExpr_(const CallNode* call) final {
-    // Ensure that nodes are processed in topological order by visiting their
-    // inputs first.
-    for (int i = 0; i < call->args.size(); ++i) {
-      VisitExpr(call->args[i]);
-    }
-
-    // auto type_node = call->checked_type().as<TensorTypeNode>();
-    // CHECK(type_node != nullptr && runtime::TypeMatch(type_node->dtype, kDLFloat, 32))
-    //     << "Only support single output tensor with float type";
-
-
-    const std::string& op_name = (call->op.as<OpNode>())->name;
-    // auto it = add_trt_layer_funcs.find(op_name);
-    // CHECK(it != add_trt_layer_funcs.end()) << "Unsupported operator conversion to TRT, op name: "
-    //     << op_name;
-
-    LOG(INFO) << "Processing op " << op_name;
-    // Prepare args
-    //AddTrtLayerParams params;
-    // Call convert
-    //it->second(params);
-    // TODO: Update output buffer
-    _out.clear();
-    _out.push_back({"hi"});
-  }
-
-  TrtEngineAndContext BuildEngine() {
-    nvinfer1::ICudaEngine* engine = _builder->buildCudaEngine(*_network);
-    nvinfer1::IExecutionContext* context = engine->createExecutionContext();
-    return {engine, context};
-  }
-
- private:
-  // Unused??
-  std::string _subgraph_id = "";
-  int _func_idx = 0;
-  int _buf_idx = 0;
-  std::vector<std::string> _subgraph_args;
-  std::vector<std::string> _subgraph_body;
-  std::vector<std::string> _func_decl;
-  std::vector<std::string> _buf_decl;
-  std::vector<std::string> _out;
-
-  // For TRT conversion
-  nvinfer1::IBuilder* _builder;
-  nvinfer1::INetworkDefinition* _network;
-  std::unordered_map<std::string, nvinfer1::ITensor*> _trt_tensors;
-};
 
 class TrtModuleNode : public ExternModuleNodeBase {
  public:
-  const std::vector<std::string> GetExternLibPaths(std::string id = "") const override {
+  const std::vector<std::string> GetExternLibPaths(const std::string& id = "") const override {
     // TensorRT doesn't create external libraries.
     return {};
   }
+
+  void CompileExternLib() override { }
 
   const std::string GetPrefix() const override {
     return "tensorrt_";
@@ -211,61 +92,48 @@ class TrtModuleNode : public ExternModuleNodeBase {
 
   runtime::PackedFunc GetFunction(const std::string& name,
                                   const std::shared_ptr<ModuleNode>& sptr_to_self) override {
-    _curr_id = GetSubgraphID(name);
-    // Open(this->GetExternLibPaths(_curr_id));
-    // CHECK(handle_) << "The external module has not been built or failed to open.\n";
-    LOG(INFO) << "get function";
+    curr_id_ = GetSubgraphID(name);
     // Generate an external packed function
     return PackedFunc([sptr_to_self, this](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-      const DLTensor* dptr = ((runtime::NDArray)args[0]).operator->();
-      runtime::NDArray out_arg = args[args.size() - 1];
-      auto out = reinterpret_cast<float*>(out_arg->data);
-      LOG(INFO) << "At TRT Runtime: " << this->_serialized_json;
-
-      auto it = _trt_engine_cache.find(_curr_id);
-      if (it == _trt_engine_cache.end()) {
+      auto it = trt_engine_cache_.find(curr_id_);
+      if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
-        Expr e = LoadJSON<Expr>(this->_serialized_json);
-        auto builder = TrtBuilder(GetPrefix() + _curr_id);
-        builder.VisitExpr(e);
-        auto engine_and_context = builder.BuildEngine();
-        // std::string code = builder.build();
-        LOG(INFO) << "built engine code";
-        //_trt_engine_cache[_curr_id] = code;
+        LOG(INFO) << "Building TensorRT engine for " << curr_id_;
+        Expr expr = LoadJSON<Expr>(this->serialized_json_);
+        auto builder = TrtBuilder(GetPrefix() + curr_id_);
+        auto engine_and_context = builder.BuildEngine(expr);
+        trt_engine_cache_[curr_id_] = engine_and_context;
       }
-      
-      // Get function from the library
-      // std::string encoded_name = GetPrefix() + _curr_id;
-      // auto func_s = reinterpret_cast<GccSubgraphFunc>(GetSymbol(encoded_name));
-
-      // Reinterpret data and function to the right type and invoke
-      // if (runtime::TypeMatch(dptr->dtype, kDLFloat, 32)) {
-      //   GccPackedArgs packed_args;
-      //   packed_args.data = (float**)malloc(sizeof(float*) * args.size());
-      //   for (int i = 0; i < args.size() - 1; ++i) {
-      //     runtime::NDArray arg = args[i];
-      //     packed_args.data[i] = reinterpret_cast<float*>(arg->data);
-      //   }
-      //   (*func_s)(packed_args, out);
-      // } else {
-      //   LOG(FATAL) << "Only support float32 type.";
-      // }
-      *rv = out;
+      auto engine_and_context = trt_engine_cache_[curr_id_];
+      ExecuteEngine(engine_and_context, args, rv);
     });
   }
 
-  void Build(const Expr& expr) override {
-    Function func = Downcast<Function>(expr);
-    CHECK(func.defined()) << "Input error: external codegen expects a Relay function.";
-    _serialized_json = SaveJSON(func->body);
-    LOG(INFO) << "Serialized relay subgraph for TRT conversion.";
+  void Build(const NodeRef& ref) override {
+    if (ref->derived_from<FunctionNode>()) {
+      // Debug runtime
+      Function func = Downcast<Function>(ref);
+      serialized_json_ = SaveJSON(func->body);
+    } else if (ref->derived_from<relay::ModuleNode>()) {
+      // Relay VM runtime
+      relay::Module mod = Downcast<relay::Module>(ref);
+      bool update = true;
+      for (const auto& it : mod->functions) {
+        // TODO(tmorris): what does multiple functions here mean?
+        Function func = Downcast<Function>(it.second);
+        serialized_json_ = SaveJSON(func->body); //update =true
+        update = false;
+      }
+      // CompileExternLib();
+    } else {
+      LOG(FATAL) << "The input ref is expected to be a Relay function or module";
+    }
   }
 
  private:
-  std::string _curr_id;
-  std::string _serialized_json;
-  std::unordered_map<std::string, TrtEngineAndContext> _trt_engine_cache;
-  std::unordered_map<std::string, nvinfer1::ITensor*> _trt_tensors;
+  std::string curr_id_;
+  std::string serialized_json_;
+  std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
 };
 
 
@@ -277,9 +145,9 @@ class TrtModuleNode : public ExternModuleNodeBase {
  * CUDA, etc, under TVM so the generated code could be packed in a runtime
  * module. This module simplifies code serialization and invocation.
  */
-runtime::Module TrtCompiler(const Expr& expr) {
+runtime::Module TrtCompiler(const NodeRef& ref) {
   std::shared_ptr<TrtModuleNode> n = std::make_shared<TrtModuleNode>();
-  n->Build(expr);
+  n->Build(ref);
   return runtime::Module(n);
 }
 

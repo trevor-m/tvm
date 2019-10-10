@@ -288,42 +288,26 @@ def test_extern_dnnl_mobilenet():
 def test_extern_tensorrt():
     dtype = 'float32'
     ishape = (1, 32, 14, 14)
-    w1shape = (32, 1, 3, 3)
     data = relay.var('data', shape=(ishape), dtype=dtype)
-    weight1 = relay.var('weight1', shape=(w1shape), dtype=dtype)
-    depthwise_conv2d_1 = relay.nn.conv2d(data,
-                                         weight1,
-                                         kernel_size=(3, 3),
-                                         padding=(1, 1),
-                                         groups=32)
-    depthwise_conv2d_2 = relay.nn.conv2d(depthwise_conv2d_1,
-                                         weight1,
-                                         kernel_size=(3, 3),
-                                         padding=(1, 1),
-                                         groups=32)
-    out = relay.add(depthwise_conv2d_1, depthwise_conv2d_2)
-
-    f = relay.Function([data, weight1], out)
+    out = relay.nn.relu(data)
+    f = relay.Function([data], out)
 
     mod = relay.Module()
     mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
     mod = relay.transform.PartitionGraph()(mod)
 
-    # ref_mod = relay.Module()
-    # ref_mod['main'] = f
+    i_data = np.random.uniform(-1, 1, ishape).astype(dtype)
 
-    i_data = np.random.uniform(0, 1, ishape).astype(dtype)
-    w1_data = np.random.uniform(0, 1, w1shape).astype(dtype)
+    ex = relay.create_executor("vm", mod=mod, ctx=tvm.gpu(0), target='cuda')
+    res = ex.evaluate()(i_data)
 
-    ex = relay.create_executor("debug", mod=mod, ctx=tvm.cpu(0))
-    res = ex.evaluate()(i_data, w1_data)
-    print('eval 2')
-    res = ex.evaluate()(i_data, w1_data)
-
-    # ref_ex = relay.create_executor("debug", mod=ref_mod, ctx=tvm.cpu(0))
-    # ref_res = ref_ex.evaluate()(i_data, w1_data)
-
-    # tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+    # Test against reference.
+    ref_mod = relay.Module()
+    ref_mod['main'] = f
+    ref_ex = relay.create_executor("debug", mod=ref_mod, ctx=tvm.cpu(0))
+    ref_res = ref_ex.evaluate()(i_data)
+    tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+    print('test passed')
 
 if __name__ == "__main__":
     # test_multi_node_subgraph()

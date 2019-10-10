@@ -24,7 +24,10 @@
  */
 #ifndef TVM_RELAY_BACKEND_TENSORRT_UTILS_H_
 #define TVM_RELAY_BACKEND_TENSORRT_UTILS_H_
+
 #include "NvInfer.h"
+
+#include <vector>
 
 namespace tvm {
 namespace relay {

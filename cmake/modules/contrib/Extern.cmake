@@ -43,7 +43,7 @@ if(USE_TENSORRT)
     #set_source_files_properties(${RUNTIME_GRAPH_SRCS}
     #        PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
     # Build codegen source
-    file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/codegen.cc)
+    file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/*.cc)
     list(APPEND COMPILER_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
 endif()
 
