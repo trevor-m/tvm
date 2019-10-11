@@ -96,7 +96,7 @@ class TrtModuleNode : public ExternModuleNodeBase {
         LOG(INFO) << "Building new TensorRT engine for subgraph " << curr_id_;
         Expr expr = LoadJSON<Expr>(this->serialized_json_);
         auto builder = TrtBuilder();
-        auto engine_and_context = builder.BuildEngine(expr_);
+        auto engine_and_context = builder.BuildEngine(expr);
         trt_engine_cache_[curr_id_] = engine_and_context;
       }
 
