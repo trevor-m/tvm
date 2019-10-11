@@ -42,11 +42,13 @@ struct TrtEngineAndContext {
 
 class TrtBuilder : public ExprVisitor {
  public:
-  TrtBuilder(std::string id);
+  TrtBuilder();
 
   void VisitExpr_(const VarNode* node) final;
 
-  // TODO(trevmorr): should this do nothing??
+  void VisitExpr_(const ConstantNode* node) final;
+
+  // TODO(trevmorr)
   void VisitExpr_(const TupleGetItemNode* op) final { } 
 
   void VisitExpr_(const CallNode* call) final;
@@ -54,13 +56,21 @@ class TrtBuilder : public ExprVisitor {
   TrtEngineAndContext BuildEngine(const Expr& expr);
 
  private:
+  nvinfer1::Weights GetTrtWeights();
+
   // Tracks outputs of operators as they are processed.
   std::vector<nvinfer1::ITensor*> out_tensors_;
 
   // For TRT conversion
   nvinfer1::IBuilder* builder_;
   nvinfer1::INetworkDefinition* network_;
-  // std::unordered_map<std::string, nvinfer1::ITensor*> trt_tensors_;
+
+  std::unordered_map<std::string, nvinfer1::ITensor*> trt_inputs_;
+  // TODO(trevmorr): cache weights into here
+  // std::unordered_map<std::string, nvinfer1::Weights> trt_weights_;
+  // TODO(trevmorr): populate these and use for execution
+  // std::vector<std::string> network_input_names_;
+  // std::vector<std::string> network_output_names_;
 };
 
 }  // namespace contrib

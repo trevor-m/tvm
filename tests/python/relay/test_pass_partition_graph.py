@@ -285,33 +285,88 @@ def test_extern_dnnl_mobilenet():
 
     #tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
 
-def test_extern_tensorrt():
+def test_extern_tensorrt_conv():
     dtype = 'float32'
     ishape = (1, 32, 14, 14)
+    w1shape = (32, 1, 3, 3)
     data = relay.var('data', shape=(ishape), dtype=dtype)
-    out = relay.nn.relu(data)
-    f = relay.Function([data], out)
+    weight1 = relay.var('weight1', shape=(w1shape), dtype=dtype)
+    depthwise_conv2d_1 = relay.nn.conv2d(data,
+                                         weight1,
+                                         kernel_size=(3, 3),
+                                         padding=(1, 1),
+                                         groups=32)
+    out = depthwise_conv2d_1
+    f = relay.Function([data, weight1], out)
+
+    mod = relay.Module()
+    mod["main"] = f
+    mod = relay.transform.ExternOp("tensorrt")(mod)
+    mod = relay.transform.PartitionGraph()(mod)
+
+    # mod = relay.Module()
+    # mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
+    # mod = relay.transform.PartitionGraph()(mod)
+
+    ref_mod = relay.Module()
+    ref_mod['main'] = f
+
+    i_data = np.random.uniform(-1, 1, ishape).astype(dtype)
+    w1_data = np.random.uniform(0, 1, w1shape).astype(dtype)
+
+    # Test against reference.
+    for kind in ["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu())
+        res = ex.evaluate()(i_data)
+
+        ref_ex = relay.create_executor(kind, mod=ref_mod, ctx=tvm.cpu(0))
+        ref_res = ref_ex.evaluate()(i_data)
+
+        tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
+    print('test passed')
+
+def test_extern_tensorrt_simple():
+    dtype = 'float32'
+    xshape = (1, 32, 14, 14)
+    yshape = (1, 32,  1,  1)
+    zshape = (1,  1,  1,  1)
+    x = relay.var('x', shape=(xshape), dtype=dtype)
+    y = relay.var('y', shape=(yshape), dtype=dtype)
+    z = relay.var('z', shape=(zshape), dtype=dtype)
+    w = z * (x + y)
+    out = relay.nn.relu(w)
+    f = relay.Function([x, y, z], out)
 
     mod = relay.Module()
     mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
     mod = relay.transform.PartitionGraph()(mod)
 
-    i_data = np.random.uniform(-1, 1, ishape).astype(dtype)
-
-    ex = relay.create_executor("vm", mod=mod, ctx=tvm.gpu(0), target='cuda')
-    res = ex.evaluate()(i_data)
-
-    # Test against reference.
     ref_mod = relay.Module()
     ref_mod['main'] = f
-    ref_ex = relay.create_executor("debug", mod=ref_mod, ctx=tvm.cpu(0))
-    ref_res = ref_ex.evaluate()(i_data)
-    tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
-    print('test passed')
+
+    x_data = np.random.uniform(-1, 1, xshape).astype(dtype)
+    y_data = np.random.uniform(-1, 1, yshape).astype(dtype)
+    z_data = np.random.uniform(-1, 1, zshape).astype(dtype)
+
+    # Test against reference.
+    for kind in ["vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
+        res = ex.evaluate()(x_data, y_data, z_data)
+        # TRT engine is reused for second execution.
+        res = ex.evaluate()(x_data, y_data, z_data)
+
+        ref_ex = relay.create_executor(kind, mod=ref_mod, ctx=tvm.cpu(0))
+        ref_res = ref_ex.evaluate()(x_data, y_data, z_data)
+
+        tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
+    print('Test passed.')
 
 if __name__ == "__main__":
     # test_multi_node_subgraph()
     # test_extern_gcc_single_op()
     # test_extern_gcc()
     # test_extern_dnnl()
-    test_extern_tensorrt()
+    # test_extern_tensorrt()
+     test_extern_tensorrt_simple()

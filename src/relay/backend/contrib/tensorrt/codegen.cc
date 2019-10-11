@@ -27,7 +27,6 @@
 #include "trt_builder.h"
 #include <unordered_map>
 #include <vector>
-// #include "libs.h"
 #include "NvInfer.h"
 
 namespace tvm {
@@ -39,26 +38,29 @@ void ExecuteEngine(const TrtEngineAndContext& engine_and_context, tvm::TVMArgs a
   auto engine = engine_and_context.engine;
   auto context = engine_and_context.context;
   const DLTensor* dptr = ((runtime::NDArray)args[0]).operator->();
-  runtime::NDArray out_arg = args[args.size() - 1];
-  auto out = reinterpret_cast<float*>(out_arg->data);
-  CHECK(args.size() == engine->getNbBindings());
+
   const int num_bindings = engine->getNbBindings();
+  CHECK(args.size() == num_bindings);
   void* bindings[num_bindings];
   if (!runtime::TypeMatch(dptr->dtype, kDLFloat, 32)) {
     LOG(FATAL) << "Only support float32 type.";
   }
-  // Set input pointers
+  // Set inputs.
+  // TODO(trevmorr): Look up bindings by name.
   for (int i = 0; i < args.size() - 1; ++i) {
     runtime::NDArray arg = args[i];
     bindings[i] = reinterpret_cast<float*>(arg->data);
   }
-  // Set output pointer
+  // Set outputs.
+  // TODO(trevmorr): Allow multiple outputs.
+  runtime::NDArray out_arg = args[args.size() - 1];
+  auto out = reinterpret_cast<float*>(out_arg->data);
   bindings[num_bindings-1] = out;
   const int batch_size = dptr->shape[0];
-  LOG(INFO) << "batch_size: " << batch_size;
   CHECK(context->execute(batch_size, bindings)) << "Running TensorRT failed.";
 
-            
+  // TODO(trevmorr): Look up bindings by name.
+  // TODO(trevmorr): Allow multiple outputs.
   *rv = bindings[num_bindings-1];
 }
 
@@ -75,13 +77,6 @@ class TrtModuleNode : public ExternModuleNodeBase {
     return "tensorrt_";
   }
 
-  /*!
-   * \brief Get the source code of the external module.
-   *
-   * \param format The format of the source code.
-   *
-   * \return The source code of the external library module in the text form.
-   */
   TVM_DLL std::string GetSource(const std::string& format = "") override {
     return "";
   }
@@ -98,12 +93,14 @@ class TrtModuleNode : public ExternModuleNodeBase {
       auto it = trt_engine_cache_.find(curr_id_);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
-        LOG(INFO) << "Building TensorRT engine for " << curr_id_;
+        LOG(INFO) << "Building new TensorRT engine for subgraph " << curr_id_;
         Expr expr = LoadJSON<Expr>(this->serialized_json_);
-        auto builder = TrtBuilder(GetPrefix() + curr_id_);
-        auto engine_and_context = builder.BuildEngine(expr);
+        auto builder = TrtBuilder();
+        auto engine_and_context = builder.BuildEngine(expr_);
         trt_engine_cache_[curr_id_] = engine_and_context;
       }
+
+      LOG(INFO) << "Executing TensorRT engine for subgraph " << curr_id_;
       auto engine_and_context = trt_engine_cache_[curr_id_];
       ExecuteEngine(engine_and_context, args, rv);
     });
@@ -111,20 +108,14 @@ class TrtModuleNode : public ExternModuleNodeBase {
 
   void Build(const NodeRef& ref) override {
     if (ref->derived_from<FunctionNode>()) {
-      // Debug runtime
       Function func = Downcast<Function>(ref);
       serialized_json_ = SaveJSON(func->body);
     } else if (ref->derived_from<relay::ModuleNode>()) {
-      // Relay VM runtime
       relay::Module mod = Downcast<relay::Module>(ref);
-      bool update = true;
       for (const auto& it : mod->functions) {
-        // TODO(tmorris): what does multiple functions here mean?
         Function func = Downcast<Function>(it.second);
-        serialized_json_ = SaveJSON(func->body); //update =true
-        update = false;
+        serialized_json_ = SaveJSON(func->body);
       }
-      // CompileExternLib();
     } else {
       LOG(FATAL) << "The input ref is expected to be a Relay function or module";
     }

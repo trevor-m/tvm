@@ -15,13 +15,29 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=invalid-name, unused-argument
-"""GCC compiler supported operators."""
+"""TensorRT compiler supported operators."""
 from __future__ import absolute_import
 
 def conv2d(attrs, args):
     """Check if the external codegen should be used.
     """
-    return False
+    return True
+
+def dense(attrs, args):
+    """Check if the external codegen should be used.
+    """
+    return True
+
+def relu(attrs, args):
+    """Check if the external codegen should be used.
+    """
+    return True
+
+def batch_norm(attrs, args):
+    """Check if the external codegen should be used.
+    FIXME: Turn off due to not support of multiple outputs.
+    """
+    return True
 
 def subtract(attrs, args):
     """Check if the external codegen should be used.
