@@ -39,8 +39,9 @@ void ExecuteEngine(const TrtEngineAndContext& engine_and_context, tvm::TVMArgs a
   auto context = engine_and_context.context;
   const DLTensor* dptr = ((runtime::NDArray)args[0]).operator->();
 
+  // const int num_outputs = 1;
   const int num_bindings = engine->getNbBindings();
-  CHECK(args.size() == num_bindings);
+  // CHECK(args.size() == num_bindings);
   void* bindings[num_bindings];
   if (!runtime::TypeMatch(dptr->dtype, kDLFloat, 32)) {
     LOG(FATAL) << "Only support float32 type.";
@@ -48,8 +49,15 @@ void ExecuteEngine(const TrtEngineAndContext& engine_and_context, tvm::TVMArgs a
   // Set inputs.
   // TODO(trevmorr): Look up bindings by name.
   for (int i = 0; i < args.size() - 1; ++i) {
-    runtime::NDArray arg = args[i];
-    bindings[i] = reinterpret_cast<float*>(arg->data);
+    auto it = engine_and_context.network_input_map.find(i);
+    if (it != engine_and_context.network_input_map.end()) {
+      runtime::NDArray arg = args[i];
+      int binding_index = engine->getBindingIndex(it->second.c_str());
+      CHECK(binding_index != -1);
+      bindings[binding_index] = reinterpret_cast<float*>(arg->data);
+    } else {
+      // LOG(WARNING) << "input " << i << " was baked into TRT engine already.";
+    }
   }
   // Set outputs.
   // TODO(trevmorr): Allow multiple outputs.
@@ -87,20 +95,21 @@ class TrtModuleNode : public ExternModuleNodeBase {
 
   runtime::PackedFunc GetFunction(const std::string& name,
                                   const std::shared_ptr<ModuleNode>& sptr_to_self) override {
-    curr_id_ = GetSubgraphID(name);
+    // LOG(INFO) << "getfn " << name;
     // Generate an external packed function
-    return PackedFunc([sptr_to_self, this](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+    return PackedFunc([sptr_to_self, this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+      curr_id_ = GetSubgraphID(name);
       auto it = trt_engine_cache_.find(curr_id_);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
         LOG(INFO) << "Building new TensorRT engine for subgraph " << curr_id_;
         Expr expr = LoadJSON<Expr>(this->serialized_json_);
-        auto builder = TrtBuilder();
+        auto builder = TrtBuilder(args);
         auto engine_and_context = builder.BuildEngine(expr);
         trt_engine_cache_[curr_id_] = engine_and_context;
       }
 
-      LOG(INFO) << "Executing TensorRT engine for subgraph " << curr_id_;
+      // LOG(INFO) << "Executing TensorRT engine for subgraph " << curr_id_;
       auto engine_and_context = trt_engine_cache_[curr_id_];
       ExecuteEngine(engine_and_context, args, rv);
     });
@@ -110,11 +119,14 @@ class TrtModuleNode : public ExternModuleNodeBase {
     if (ref->derived_from<FunctionNode>()) {
       Function func = Downcast<Function>(ref);
       serialized_json_ = SaveJSON(func->body);
+      // LOG(INFO) << AsText(func->body);
     } else if (ref->derived_from<relay::ModuleNode>()) {
       relay::Module mod = Downcast<relay::Module>(ref);
       for (const auto& it : mod->functions) {
+        // TODO(trevmorr): handle this loop properly
         Function func = Downcast<Function>(it.second);
         serialized_json_ = SaveJSON(func->body);
+        // LOG(INFO) << AsText(func->body);
       }
     } else {
       LOG(FATAL) << "The input ref is expected to be a Relay function or module";

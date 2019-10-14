@@ -17,102 +17,60 @@
  */
 
 #include "trt_builder.h"
+#include "trt_logger.h"
 #include "utils.h"
+#include "trt_ops.h"
 
 namespace tvm {
 namespace relay {
 namespace contrib {
 
-// Logger for TensorRT info/warning/errors
-class TensorRTLogger : public nvinfer1::ILogger {
- public:
-  TensorRTLogger() : TensorRTLogger(Severity::kWARNING) {}
-  explicit TensorRTLogger(Severity severity) : reportable_severity(severity) {}
-  void log(Severity severity, const char* msg) override {
-    // suppress messages with severity enum value greater than the reportable
-    // if (severity > reportable_severity) return;
-
-    switch (severity) {
-      case Severity::kINTERNAL_ERROR: LOG(ERROR) << "INTERNAL_ERROR: " << msg; break;
-      case Severity::kERROR: LOG(ERROR) << "ERROR: " << msg; break;
-      case Severity::kWARNING: LOG(WARNING) << "WARNING: " << msg; break;
-      case Severity::kINFO: LOG(INFO) << "INFO: " << msg; break;
-      case Severity::kVERBOSE: LOG(INFO) << "VERBOSE: " << msg; break;
-      default: LOG(INFO) << "UNKNOWN: " << msg; break;
-    }
+static size_t GetTensorSize(const DLTensor* arr) {
+  size_t size = 1;
+  for (tvm_index_t i = 0; i < arr->ndim; ++i) {
+    size *= arr->shape[i];
   }
-
- private:
-  Severity reportable_severity{Severity::kWARNING};
-};
-
-// Parameters to convert an Op from relay to TensorRT
-struct AddTrtLayerParams {
-  const CallNode* call;
-  nvinfer1::INetworkDefinition* network;
-  std::string op_name;
-  std::vector<nvinfer1::ITensor*> inputs;
-  std::vector<nvinfer1::ITensor*> outputs;
-
-  AddTrtLayerParams(nvinfer1::INetworkDefinition* network) : network(network) {}
-};
-
-void AddActivation(AddTrtLayerParams& params) {
-  CHECK(params.inputs.size() == 1) << "Activation op expects 1 input.";
-  static const std::unordered_map<std::string, nvinfer1::ActivationType>
-      op_map = {{"nn.relu", nvinfer1::ActivationType::kRELU},
-                {"sigmoid", nvinfer1::ActivationType::kSIGMOID},
-                {"tanh", nvinfer1::ActivationType::kTANH}};
-  auto it = op_map.find(params.op_name);
-  CHECK(it != op_map.end()) << "Unsupported activation type " << params.op_name;
-  nvinfer1::IActivationLayer* act_layer = params.network->addActivation(*params.inputs.at(0), nvinfer1::ActivationType::kRELU);
-  CHECK(act_layer != nullptr);
-  params.outputs.push_back(act_layer->getOutput(0));
+  return size;
 }
 
-void AddElementWiseBinaryOp(AddTrtLayerParams& params) {
-  CHECK(params.inputs.size() == 2) << "Binary op expects 2 inputs.";
-  static const std::unordered_map<std::string, nvinfer1::ElementWiseOperation> op_map =
-      {{"add", nvinfer1::ElementWiseOperation::kSUM},
-       {"subtract", nvinfer1::ElementWiseOperation::kSUB},
-       {"multiply", nvinfer1::ElementWiseOperation::kPROD},
-       {"divide", nvinfer1::ElementWiseOperation::kDIV},
-       {"power", nvinfer1::ElementWiseOperation::kPOW}};
-  auto it = op_map.find(params.op_name);
-  CHECK(it != op_map.end()) << "Unsupported elementwise type " << params.op_name;
-  nvinfer1::IElementWiseLayer* elemwise_layer =
-      params.network->addElementWise(*params.inputs.at(0), *params.inputs.at(1), it->second);
-  CHECK(elemwise_layer != nullptr);
-  params.outputs.push_back(elemwise_layer->getOutput(0));
+static size_t GetTensorBytes(const DLTensor* arr) {
+  size_t size = GetTensorSize(arr);
+  size *= (arr->dtype.bits * arr->dtype.lanes + 7) / 8;
+  return size;
 }
 
-using AddTrtLayer = std::function<void(AddTrtLayerParams& params)>;
-
-static const std::unordered_map<std::string, AddTrtLayer> add_trt_layer_funcs =
+// TODO(trevmorr): Make a function to return this
+static const std::unordered_map<std::string, TrtOpConverter*> trt_op_converters =
     {
-        // {"nn.conv2d", AddConvolution},
-        {"nn.relu", AddActivation},
-        {"sigmoid", AddActivation},
-        {"tanh", AddActivation},
-        // {"nn.batch_norm", AddBatchNorm},
-        {"add", AddElementWiseBinaryOp},
-        {"subtract", AddElementWiseBinaryOp},
-        {"multiply", AddElementWiseBinaryOp},
-        {"divide", AddElementWiseBinaryOp},
-        {"power", AddElementWiseBinaryOp},
+        {"nn.relu", new ActivationOpConverter()},
+        {"sigmoid", new ActivationOpConverter()},
+        {"tanh", new ActivationOpConverter()},
+        {"nn.batch_flatten", new BatchFlattenOpConverter()},
+        {"nn.batch_norm", new BatchNormOpConverter()},
+        {"nn.conv2d", new Conv2DOpConverter()},
+        {"nn.dense", new DenseOpConverter()},
+        {"nn.bias_add", new ElementWiseBinaryOpConverter()},
+        // {"nn.bias_add", new BiasAddOpConverter()},
+        {"add", new ElementWiseBinaryOpConverter()},
+        {"subtract", new ElementWiseBinaryOpConverter()},
+        {"multiply", new ElementWiseBinaryOpConverter()},
+        {"divide", new ElementWiseBinaryOpConverter()},
+        {"power", new ElementWiseBinaryOpConverter()},
         // {"clip", AddActivation},
         // {"max_pool2d", AddPooling},
         // {"avg_pool2d", AddPooling},
         // {"global_max_pool2d", AddPooling},
-        // {"global_avg_pool2d", AddPooling},
-        // {"dense", AddFullyConnected},
-        // {"softmax", AddSoftmax},
+        {"nn.global_avg_pool2d", new PoolingOpConverter()},
+        {"nn.softmax", new SoftmaxOpConverter()},
+        {"expand_dims", new ExpandDimsOpConverter()},
+        {"sqrt", new UnaryOpConverter()},
+        {"negative", new UnaryOpConverter()},
         // {"concatenate", AddConcatenate},
         // {"conv2d_transpose", AddDeconvolution},
         // {"slice_like", AddSliceLike},
 };
 
-TrtBuilder::TrtBuilder() {
+TrtBuilder::TrtBuilder(tvm::TVMArgs args) : execution_args_(args), var_node_counter_(0) {
   // Create TRT builder and network.
   static TensorRTLogger trt_logger;
   builder_ = nvinfer1::createInferBuilder(trt_logger);
@@ -120,6 +78,8 @@ TrtBuilder::TrtBuilder() {
   builder_->setMaxWorkspaceSize(1 << 29);
   // builder_->setFp16Mode(use_fp16_);
   network_ = builder_->createNetwork();
+  // network_ = builder_->createNetworkV2(1U <<
+  //       static_cast<int>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH));
 }
 
 TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
@@ -134,20 +94,42 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   }
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
-  return {engine, context};
+
+  // TODO(trevmorr): add more validations
+  CHECK_EQ(engine->getNbBindings(), network_input_map_.size() + out_tensors_.size());
+  return {engine, context, network_input_map_};
+}
+
+nvinfer1::Weights TrtBuilder::GetInputAsWeights(const VarNode* node) {
+  const int var_node_idx = var_node_input_map_[node];
+  runtime::NDArray arg = execution_args_[var_node_idx];
+  DLTensor* dptr = const_cast<DLTensor*>(arg.operator->());
+  CHECK_EQ(dptr->ctx.device_type, kDLGPU);
+  CHECK_EQ(static_cast<int>(dptr->dtype.code), kDLFloat);
+  const size_t weight_bytes = GetTensorBytes(dptr);
+  nvinfer1::Weights wt{nvinfer1::DataType::kFLOAT, nullptr, 0};
+  // TODO(trevmorr): manage memory properly
+  wt.values = malloc(weight_bytes);
+  wt.count = GetTensorSize(dptr);
+  CHECK_EQ(TVMArrayCopyToBytes(dptr, const_cast<void*>(wt.values), weight_bytes), 0)
+      << TVMGetLastError();
+  return wt;
 }
 
 void TrtBuilder::VisitExpr_(const VarNode* node) {
+  const int id = TrackVarNode(node);
+
   const std::string& tensor_name = node->name_hint();
   auto it = trt_inputs_.find(tensor_name);
   if (it == trt_inputs_.end()) {
-    LOG(INFO) << "Added TRT network input " << node->name_hint();
-    auto shape = GetShape(node->checked_type());
+    auto shape = GetShape(node->checked_type(), /*remove_batch_dim=*/true);
+    LOG(INFO) << "Added TRT network input " << node->name_hint() << " " << DebugString(shape);
     nvinfer1::Dims dims = VectorToTrtDims(shape);
     auto type = GetType(node->checked_type());
     CHECK(type.is_float()) << "Only FP32 inputs are supported.";
     trt_inputs_[tensor_name] =
         network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
+    network_input_map_[id] = tensor_name;
   }
 
   out_tensors_.clear();
@@ -156,36 +138,82 @@ void TrtBuilder::VisitExpr_(const VarNode* node) {
 
 void TrtBuilder::VisitExpr_(const ConstantNode* node) {
   // TODO(trevmorr)
+  runtime::NDArray arg = node->data;
+  DLTensor* dptr = const_cast<DLTensor*>(arg.operator->());
+  // CHECK_EQ(dptr->ctx.device_type, kDLGPU);
+  CHECK_EQ(static_cast<int>(dptr->dtype.code), kDLFloat);
+  const size_t weight_bytes = GetTensorBytes(dptr);
+  nvinfer1::Weights wt{nvinfer1::DataType::kFLOAT, nullptr, 0};
+  // TODO(trevmorr): manage memory properly
+  wt.values = malloc(weight_bytes);
+  wt.count = GetTensorSize(dptr);
+  CHECK_EQ(TVMArrayCopyToBytes(dptr, const_cast<void*>(wt.values), weight_bytes), 0)
+      << TVMGetLastError();
+
+  nvinfer1::Dims dims;
+  dims.d[0] = 1; // in case of scalar
+  dims.nbDims = dptr->ndim;
+  for (int i = 0; i < dims.nbDims; ++i) dims.d[i] = dptr->shape[i];
+  LOG(INFO) << "Adding constant with shape " << DebugString(TrtDimsToVector(dims));
+  auto const_layer = network_->addConstant(dims, wt);
+
+  out_tensors_.clear();
+  out_tensors_.push_back(const_layer->getOutput(0));
+  // LOG(FATAL) << "not implemented";
 }
 
 void TrtBuilder::VisitExpr_(const CallNode* call) {
-  AddTrtLayerParams params(network_);
+  AddTrtLayerParams params(network_, call);
+  // Look up converter.
+  auto it = trt_op_converters.find(params.op_name);
+  CHECK(it != trt_op_converters.end())
+      << "Unsupported operator conversion to TRT, op name: " << params.op_name;
+  const TrtOpConverter* converter = it->second;
 
   // Ensure that nodes are processed in topological order by visiting their
   // inputs first.
+  CHECK(converter->input_types.size() == call->args.size())
+      << "Op expected a different number of inputs.";
   for (int i = 0; i < call->args.size(); ++i) {
-    VisitExpr(call->args[i]);
-    // Add outputs from args as inputs to this op.
-    for (auto out : out_tensors_) {
-      params.inputs.push_back(out);
+    // Handle special case where input must be constant array on CPU.
+    if (converter->input_types[i] == kWeight) {
+      // Input must be a constant weight
+      if (auto* var = call->args[i].as<VarNode>()) {
+        LOG(WARNING) << "TRT requires a constant input for input " << i << " of op " << params.op_name << ", but relay.Var was used instead. The value supplied to the Var during this execution will be used for all future executions.";
+        // Hack: get from input
+        TrackVarNode(var);
+        nvinfer1::Weights weights = GetInputAsWeights(var);
+        // Include shape
+        params.inputs.push_back(TrtOpInput(weights, GetShape(var->checked_type())));
+      } else if (call->args[i].as<ConstantNode>()) {
+        // TODO
+        LOG(FATAL) << "not implemented";
+      } else {
+        LOG(FATAL) << "TRT requires a constant input here.";
+      }
+    } else {
+      VisitExpr(call->args[i]);
+      // Add outputs from args as inputs to this op.
+      for (auto out : out_tensors_) {
+        params.inputs.push_back(out);
+      }
     }
   }
 
-  // Get op name and look up conversion function.
-  params.op_name = (call->op.as<OpNode>())->name;
-  LOG(INFO) << "Processing op " << params.op_name;
-  auto it = add_trt_layer_funcs.find(params.op_name);
-  CHECK(it != add_trt_layer_funcs.end())
-      << "Unsupported operator conversion to TRT, op name: " << params.op_name;
-
   // Convert op to TRT.
-  it->second(params);
+  converter->Convert(params);
 
   // Get outputs.
   out_tensors_.clear();
   for (auto out : params.outputs) {
     out_tensors_.push_back(out);
   }
+}
+
+int TrtBuilder::TrackVarNode(const VarNode* node) {
+  int var_node_idx = var_node_counter_++;
+  var_node_input_map_[node] = var_node_idx;
+  return var_node_idx;
 }
 
 }  // namespace contrib

@@ -16,6 +16,7 @@
 # under the License.
 """Unit tests for graph partitioning."""
 import numpy as np
+import time
 
 import tvm
 from tvm import relay
@@ -300,13 +301,8 @@ def test_extern_tensorrt_conv():
     f = relay.Function([data, weight1], out)
 
     mod = relay.Module()
-    mod["main"] = f
-    mod = relay.transform.ExternOp("tensorrt")(mod)
+    mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
     mod = relay.transform.PartitionGraph()(mod)
-
-    # mod = relay.Module()
-    # mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
-    # mod = relay.transform.PartitionGraph()(mod)
 
     ref_mod = relay.Module()
     ref_mod['main'] = f
@@ -315,12 +311,50 @@ def test_extern_tensorrt_conv():
     w1_data = np.random.uniform(0, 1, w1shape).astype(dtype)
 
     # Test against reference.
-    for kind in ["debug", "vm"]:
-        ex = relay.create_executor(kind, mod=mod, ctx=tvm.cpu())
-        res = ex.evaluate()(i_data)
+    for kind in ["vm"]: #["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
+        res = ex.evaluate()(i_data, w1_data)
 
         ref_ex = relay.create_executor(kind, mod=ref_mod, ctx=tvm.cpu(0))
-        ref_res = ref_ex.evaluate()(i_data)
+        ref_res = ref_ex.evaluate()(i_data, w1_data)
+
+        tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
+    print('test passed')
+
+def test_extern_tensorrt_dense():
+    dtype = 'float32'
+    ishape = (1, 64)
+    w1shape = (10, 64)
+    data = relay.var('data', shape=(ishape), dtype=dtype)
+    weight1 = relay.var('weight1', shape=(w1shape), dtype=dtype)
+    depthwise_conv2d_1 = relay.nn.dense(data, weight1)
+    out = depthwise_conv2d_1
+    print(out)
+    f = relay.Function([data, weight1], out)
+
+    # mod = relay.Module()
+    # mod["main"] = f
+    # mod = relay.transform.ExternOp("tensorrt")(mod)
+    # mod = relay.transform.PartitionGraph()(mod)
+
+    mod = relay.Module()
+    mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
+    mod = relay.transform.PartitionGraph()(mod)
+
+    ref_mod = relay.Module()
+    ref_mod['main'] = f
+
+    i_data = np.random.uniform(-1, 1, ishape).astype(dtype)
+    w1_data = np.random.uniform(0, 1, w1shape).astype(dtype)
+
+    # Test against reference.
+    for kind in ["vm"]: #["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
+        res = ex.evaluate()(i_data, w1_data)
+
+        ref_ex = relay.create_executor(kind, mod=ref_mod, ctx=tvm.cpu(0))
+        ref_res = ref_ex.evaluate()(i_data, w1_data)
 
         tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
 
@@ -350,8 +384,9 @@ def test_extern_tensorrt_simple():
     z_data = np.random.uniform(-1, 1, zshape).astype(dtype)
 
     # Test against reference.
-    for kind in ["vm"]:
+    for kind in ["vm"]: # ["vm" , "debug"]:
         ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
+        # First execution will trigger build of TRT engine(s).
         res = ex.evaluate()(x_data, y_data, z_data)
         # TRT engine is reused for second execution.
         res = ex.evaluate()(x_data, y_data, z_data)
@@ -363,10 +398,48 @@ def test_extern_tensorrt_simple():
 
     print('Test passed.')
 
+def test_extern_tensorrt_mobilenet():
+    # FIXME: This test is only for demo purpose and supposed to be removed.
+    dtype = 'float32'
+    input_shape = (1, 3, 224, 224)
+    #mod, params = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+    from mxnet.gluon.model_zoo.vision import get_model
+    block = get_model('mobilenet1.0', pretrained=True)
+    mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
+
+    # mod = relay.transform.ExternOp('tensorrt')(mod)
+    # mod = relay.transform.PartitionGraph()(mod)
+
+    mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+    mod = relay.transform.PartitionGraph()(mod)
+
+    i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
+
+    for kind in ["vm"]: #["debug", "vm"]:
+        ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
+        res = ex.evaluate()(i_data, **params)
+
+        times = []
+        for i in range(1000):
+            start_time = time.time()
+            res = ex.evaluate()(i_data, **params)
+            times.append(time.time() - start_time)
+        print('Mean latency', np.mean(times)*1000)
+
+    # FIXME: When subgraph has only one op, Relay executor will use the cache value instead
+    # of re-computing, so the following checking logic does not work.
+    # ref_mod, params = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+    # ref_ex = relay.create_executor("vm", mod=ref_mod, ctx=tvm.cpu(0))
+    # ref_res = ref_ex.evaluate()(i_data, **params)
+
+    # tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
 if __name__ == "__main__":
     # test_multi_node_subgraph()
     # test_extern_gcc_single_op()
     # test_extern_gcc()
     # test_extern_dnnl()
     # test_extern_tensorrt()
-     test_extern_tensorrt_simple()
+    # test_extern_tensorrt_dense()
+    # test_extern_tensorrt_conv()
+    test_extern_tensorrt_mobilenet()

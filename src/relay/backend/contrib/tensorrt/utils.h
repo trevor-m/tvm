@@ -17,11 +17,6 @@
  * under the License.
  */
 
-/*!
- *  Copyright (c) 2018 by Contributors
- * \file relay/backend/utils.h
- * \brief Utils function for backend
- */
 #ifndef TVM_RELAY_BACKEND_TENSORRT_UTILS_H_
 #define TVM_RELAY_BACKEND_TENSORRT_UTILS_H_
 
@@ -42,16 +37,32 @@ nvinfer1::Dims VectorToTrtDims(const std::vector<int>& vec) {
   return dims;
 }
 
-std::vector<int> GetShape(const Type& type) {
+std::vector<int> TrtDimsToVector(const nvinfer1::Dims& dims) {
+  return std::vector<int>(dims.d, dims.d + dims.nbDims);
+}
+
+std::vector<int> GetShape(const Type& type, bool remove_batch_dim = false) {
   const auto* ttype = type.as<TensorTypeNode>();
   CHECK(ttype);
   std::vector<int> _shape;
-  for (int i = 0; i < ttype->shape.size(); ++i) {
+  const int start_index = remove_batch_dim ? 1 : 0;
+  for (int i = start_index; i < ttype->shape.size(); ++i) {
     auto* val = ttype->shape[i].as<IntImm>();
     CHECK(val);
     _shape.push_back(val->value);
   }
   return _shape;
+}
+
+std::string DebugString(const std::vector<int>& vec) {
+  std::ostringstream ss;
+  ss << "(";
+  for (int i = 0; i < vec.size(); ++i) {
+    if (i != 0) ss << ", ";
+    ss << vec[i];
+  }
+  ss << ")";
+  return ss.str();
 }
 
 DataType GetType(const Type& type) {

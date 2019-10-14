@@ -53,3 +53,18 @@ def multiply(attrs, args):
     """Check if the external codegen should be used.
     """
     return True
+
+def global_avg_pool2d(attrs, args):
+    """Check if the external codegen should be used.
+    """
+    return True
+
+def batch_flatten(attrs, args):
+    """Check if the external codegen should be used.
+    """
+    return True
+
+def softmax(attrs, args):
+    """Check if the external codegen should be used.
+    """
+    return True

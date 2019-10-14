@@ -38,25 +38,30 @@ namespace contrib {
 struct TrtEngineAndContext {
   nvinfer1::ICudaEngine* engine;
   nvinfer1::IExecutionContext* context;
+  std::unordered_map<int, std::string> network_input_map;
 };
 
 class TrtBuilder : public ExprVisitor {
  public:
-  TrtBuilder();
+  TrtBuilder(tvm::TVMArgs args);
 
   void VisitExpr_(const VarNode* node) final;
 
   void VisitExpr_(const ConstantNode* node) final;
 
   // TODO(trevmorr)
-  void VisitExpr_(const TupleGetItemNode* op) final { } 
+  // void VisitExpr_(const TupleGetItemNode* op) final { 
+  //   ;
+  // } 
 
   void VisitExpr_(const CallNode* call) final;
 
   TrtEngineAndContext BuildEngine(const Expr& expr);
 
  private:
-  nvinfer1::Weights GetTrtWeights();
+  nvinfer1::Weights GetInputAsWeights(const VarNode* node);
+
+  int TrackVarNode(const VarNode* node);
 
   // Tracks outputs of operators as they are processed.
   std::vector<nvinfer1::ITensor*> out_tensors_;
@@ -69,8 +74,17 @@ class TrtBuilder : public ExprVisitor {
   // TODO(trevmorr): cache weights into here
   // std::unordered_map<std::string, nvinfer1::Weights> trt_weights_;
   // TODO(trevmorr): populate these and use for execution
-  // std::vector<std::string> network_input_names_;
+
+  // index -> name
+  std::unordered_map<int, std::string> network_input_map_;
   // std::vector<std::string> network_output_names_;
+
+  // Execution inputs.
+  tvm::TVMArgs execution_args_;
+
+  // Map VarNodes to index in execution_args_.
+  int var_node_counter_;
+  std::unordered_map<const VarNode*, int> var_node_input_map_;
 };
 
 }  // namespace contrib
