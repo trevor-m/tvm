@@ -90,11 +90,23 @@ public:
     static const std::unordered_map<std::string, nvinfer1::ActivationType>
         op_map = {{"nn.relu", nvinfer1::ActivationType::kRELU},
                   {"sigmoid", nvinfer1::ActivationType::kSIGMOID},
-                  {"tanh", nvinfer1::ActivationType::kTANH}};
+                  {"tanh", nvinfer1::ActivationType::kTANH},
+                  {"clip", nvinfer1::ActivationType::kCLIP},
+                  {"nn.leaky_relu", nvinfer1::ActivationType::kLEAKY_RELU},
+                  };
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported activation type " << params.op_name;
     nvinfer1::IActivationLayer* act_layer =
         params.network->addActivation(*params.inputs.at(0).tensor, nvinfer1::ActivationType::kRELU);
+    if (params.op_name == "clip") {
+      // Set clip parameterss.
+      const auto* clip_attr = params.call->attrs.as<ClipAttrs>();
+      act_layer->setAlpha(clip_attr->a_min);
+      act_layer->setAlpha(clip_attr->a_max);
+    } else if (params.op_name == "nn.leaky_relu") {
+      const auto* leaky_relu_attr = params.call->attrs.as<LeakyReluAttrs>();
+      act_layer->setAlpha(leaky_relu_attr->alpha);
+    }
     CHECK(act_layer != nullptr);
     params.outputs.push_back(act_layer->getOutput(0));
   }
@@ -110,7 +122,7 @@ public:
         {"subtract", nvinfer1::ElementWiseOperation::kSUB},
         {"multiply", nvinfer1::ElementWiseOperation::kPROD},
         {"divide", nvinfer1::ElementWiseOperation::kDIV},
-        {"power", nvinfer1::ElementWiseOperation::kPOW}
+        {"power", nvinfer1::ElementWiseOperation::kPOW},
         {"nn.bias_add", nvinfer1::ElementWiseOperation::kSUM}};
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported elementwise type " << params.op_name;
@@ -292,13 +304,51 @@ public:
     auto input_tensor = params.inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     static const std::unordered_map<std::string, nvinfer1::PoolingType> op_map =
-      {{"max_pool2d", nvinfer1::PoolingType::kMAX},
-       {"avg_pool2d", nvinfer1::PoolingType::kAVERAGE},
-       {"nn.global_max_pool2d", nvinfer1::PoolingType::kMAX},
+      {{"nn.max_pool2d", nvinfer1::PoolingType::kMAX},
+       {"nn.avg_pool2d", nvinfer1::PoolingType::kAVERAGE}};
+    auto it = op_map.find(params.op_name);
+    CHECK(it != op_map.end()) << "Unsupported pooling type " << params.op_name << " in TensorRT";
+
+    nvinfer1::DimsHW window_size, strides, padding;
+    bool count_include_pad = false;
+    if (params.op_name == "nn.max_pool2d") {
+      const auto* pool_attr = params.call->attrs.as<MaxPool2DAttrs>();
+      CHECK(pool_attr->layout == "NCHW");
+      window_size = nvinfer1::DimsHW(pool_attr->pool_size[0].as<IntImm>()->value, pool_attr->pool_size[1].as<IntImm>()->value);
+      strides = nvinfer1::DimsHW(pool_attr->strides[0].as<IntImm>()->value, pool_attr->strides[1].as<IntImm>()->value);
+      padding = nvinfer1::DimsHW(pool_attr->padding[0].as<IntImm>()->value, pool_attr->padding[1].as<IntImm>()->value);
+      CHECK(!pool_attr->ceil_mode);
+    } else if (params.op_name == "nn.avg_pool2d") {
+      const auto* pool_attr = params.call->attrs.as<AvgPool2DAttrs>();
+      CHECK(pool_attr->layout == "NCHW");
+      window_size = nvinfer1::DimsHW(pool_attr->pool_size[0].as<IntImm>()->value, pool_attr->pool_size[1].as<IntImm>()->value);
+      strides = nvinfer1::DimsHW(pool_attr->strides[0].as<IntImm>()->value, pool_attr->strides[1].as<IntImm>()->value);
+      padding = nvinfer1::DimsHW(pool_attr->padding[0].as<IntImm>()->value, pool_attr->padding[1].as<IntImm>()->value);
+      CHECK(!pool_attr->ceil_mode);
+      count_include_pad = pool_attr->count_include_pad;
+    }
+
+    auto pool_layer = params.network->addPooling(*input_tensor, it->second, window_size);
+    CHECK(pool_layer != nullptr);
+    pool_layer->setStride(strides);
+    pool_layer->setPadding(padding);
+    pool_layer->setAverageCountExcludesPadding(!count_include_pad);
+    params.outputs.push_back(pool_layer->getOutput(0));
+  }
+};
+
+class GlobalPoolingOpConverter : public TrtOpConverter {
+public:
+  GlobalPoolingOpConverter() : TrtOpConverter({kTensor}) { }
+
+  void Convert(AddTrtLayerParams& params) const {
+    auto input_tensor = params.inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
+    static const std::unordered_map<std::string, nvinfer1::PoolingType> op_map =
+      {{"nn.global_max_pool2d", nvinfer1::PoolingType::kMAX},
        {"nn.global_avg_pool2d", nvinfer1::PoolingType::kAVERAGE}};
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported pooling type " << params.op_name << " in TensorRT";
-    // TODO(trevmorr): this is only global_avg_pool2d
     const auto* pool_attr = params.call->attrs.as<GlobalPool2DAttrs>();
     CHECK(pool_attr->layout == "NCHW");
     const auto window_size = nvinfer1::DimsHW(input_dims[1], input_dims[2]);
@@ -331,10 +381,19 @@ public:
   UnaryOpConverter() : TrtOpConverter({kTensor}) { }
 
   void Convert(AddTrtLayerParams& params) const {
+    // The following ops are supported by TRT but don't exist in relay yet:
+    // recip, tan, sinh, cosh, asin, acos, asinh, acosh, atanh
     static const std::unordered_map<std::string, nvinfer1::UnaryOperation> op_map =
-        {{"sqrt", nvinfer1::UnaryOperation::kSQRT},
-        {"negative", nvinfer1::UnaryOperation::kNEG}
-        // TODO(trevmorr): https://docs.nvidia.com/deeplearning/sdk/tensorrt-api/c_api/namespacenvinfer1.html#aeaeaae08a730508ead278d52b8517a09
+        {{"exp", nvinfer1::UnaryOperation::kEXP},
+         {"log", nvinfer1::UnaryOperation::kLOG},
+         {"sqrt", nvinfer1::UnaryOperation::kSQRT},
+         {"abs", nvinfer1::UnaryOperation::kABS},
+         {"negative", nvinfer1::UnaryOperation::kNEG},
+         {"sin", nvinfer1::UnaryOperation::kSIN},
+         {"cos", nvinfer1::UnaryOperation::kCOS},
+         {"atan", nvinfer1::UnaryOperation::kATAN},
+         {"ceil", nvinfer1::UnaryOperation::kCEIL},
+         {"floor", nvinfer1::UnaryOperation::kFLOOR},
         };
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported unary type " << params.op_name;
@@ -345,19 +404,19 @@ public:
   }
 };
 
-class BiasAddOpConverter : public TrtOpConverter {
-public:
-  BiasAddOpConverter() : TrtOpConverter({kTensor, kWeight}) { }
+// class BiasAddOpConverter : public TrtOpConverter {
+// public:
+//   BiasAddOpConverter() : TrtOpConverter({kTensor, kWeight}) { }
 
-  void Convert(AddTrtLayerParams& params) const {
-    nvinfer1::Weights shift{nvinfer1::DataType::kFLOAT, nullptr, 0};
-    nvinfer1::Weights power{nvinfer1::DataType::kFLOAT, nullptr, 0};
-    nvinfer1::IScaleLayer* scale_layer = params.network->addScale(
-      *params.inputs.at(0).tensor, nvinfer1::ScaleMode::kCHANNEL, params.inputs.at(1).weight, shift, power);
-    CHECK(scale_layer != nullptr);
-    params.outputs.push_back(scale_layer->getOutput(0));
-  }
-};
+//   void Convert(AddTrtLayerParams& params) const {
+//     nvinfer1::Weights shift{nvinfer1::DataType::kFLOAT, nullptr, 0};
+//     nvinfer1::Weights power{nvinfer1::DataType::kFLOAT, nullptr, 0};
+//     nvinfer1::IScaleLayer* scale_layer = params.network->addScale(
+//       *params.inputs.at(0).tensor, nvinfer1::ScaleMode::kCHANNEL, params.inputs.at(1).weight, shift, power);
+//     CHECK(scale_layer != nullptr);
+//     params.outputs.push_back(scale_layer->getOutput(0));
+//   }
+// };
 
 }  // namespace contrib
 }  // namespace relay
