@@ -404,14 +404,14 @@ def test_extern_tensorrt_mobilenet():
     input_shape = (1, 3, 224, 224)
     #mod, params = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
     from mxnet.gluon.model_zoo.vision import get_model
-    block = get_model('mobilenet1.0', pretrained=True)
+    block = get_model('resnet50_v1', pretrained=True)
     mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
     # mod = relay.transform.ExternOp('tensorrt')(mod)
     # mod = relay.transform.PartitionGraph()(mod)
 
-    mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
-    mod = relay.transform.PartitionGraph()(mod)
+    # mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+    # mod = relay.transform.PartitionGraph()(mod)
 
     i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
 
@@ -420,11 +420,51 @@ def test_extern_tensorrt_mobilenet():
         res = ex.evaluate()(i_data, **params)
 
         times = []
-        for i in range(1000):
+        for i in range(10):
             start_time = time.time()
             res = ex.evaluate()(i_data, **params)
             times.append(time.time() - start_time)
         print('Mean latency', np.mean(times)*1000)
+
+    # FIXME: When subgraph has only one op, Relay executor will use the cache value instead
+    # of re-computing, so the following checking logic does not work.
+    # ref_mod, params = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+    # ref_ex = relay.create_executor("vm", mod=ref_mod, ctx=tvm.cpu(0))
+    # ref_res = ref_ex.evaluate()(i_data, **params)
+
+    # tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
+def test_extern_tensorrt_mobilenet_perf():
+    # FIXME: This test is only for demo purpose and supposed to be removed.
+    dtype = 'float32'
+    input_shape = (1, 3, 224, 224)
+    #mod, params = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+    from mxnet.gluon.model_zoo.vision import get_model
+    block = get_model('resnet50_v1', pretrained=True)
+    mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
+
+    # mod = relay.transform.ExternOp('tensorrt')(mod)
+    # mod = relay.transform.PartitionGraph()(mod)
+
+    # mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+    # mod = relay.transform.PartitionGraph()(mod)
+
+    i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
+
+    num_iteration = 100
+    with relay.build_config(opt_level=3):
+        model = tvm.relay.vm.compile(mod, 'cuda', params=params)
+        model.init(ctx.gpu(0))
+        for i in range(1):
+            self._model.invoke('main', data)
+
+        start_time = time.time()
+        for i in range(num_iteration):
+            #result = self._model.evaluate()(data) 
+            self._model.invoke('main', data)
+        end_time = time.time()
+        latency = (end_time-start_time)/num_iteration*1000
+        print(latency)
 
     # FIXME: When subgraph has only one op, Relay executor will use the cache value instead
     # of re-computing, so the following checking logic does not work.

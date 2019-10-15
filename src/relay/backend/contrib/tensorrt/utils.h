@@ -30,6 +30,8 @@ namespace contrib {
 
 nvinfer1::Dims VectorToTrtDims(const std::vector<int>& vec) {
   nvinfer1::Dims dims;
+  // Dims(nbDims=0, d[0]=1) is used to represent a scalar in TRT.
+  dims.d[0] = 1;
   dims.nbDims = vec.size();
   for (int i = 0; i < vec.size(); ++i) {
     dims.d[i] = vec[i];

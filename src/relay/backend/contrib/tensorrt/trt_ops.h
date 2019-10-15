@@ -35,21 +35,6 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-enum TrtInputType {
-  kTensor,
-  kWeight,
-};
-
-struct TrtOpInput {
-  TrtInputType type;
-  nvinfer1::ITensor* tensor;
-  nvinfer1::Weights weight;
-  std::vector<int> weight_shape;
-
-  TrtOpInput(nvinfer1::ITensor* tensor) : tensor(tensor), type(kTensor) {}
-  TrtOpInput(nvinfer1::Weights weight, const std::vector<int>& shape) : weight(weight), type(kWeight), weight_shape(shape) {}
-};
-
 // Parameters to convert an Op from relay to TensorRT
 struct AddTrtLayerParams {
   const CallNode* call;
@@ -162,16 +147,16 @@ public:
     auto weight_shape = params.inputs.at(1).weight_shape;
     const auto* conv2d_attr = params.call->attrs.as<Conv2DAttrs>();
     CHECK(conv2d_attr->data_layout == "NCHW");
-    if (auto channels = conv2d_attr->channels.as<IntImm>()) {
-      CHECK_EQ(channels->value, weight_shape[0]) << "debug: need to use channels";
-    }
+    CHECK(conv2d_attr->out_layout == "" || conv2d_attr->out_layout == "NCHW");
+    CHECK(conv2d_attr->kernel_layout == "OIHW");
 
+    // Could use conv2d_attr->channels.as<IntImm>()->value
     const int num_outputs = weight_shape[0]; //* conv2d_attr->groups;
     const auto kernel_size = nvinfer1::DimsHW(weight_shape[2], weight_shape[3]);
     nvinfer1::Weights bias{nvinfer1::DataType::kFLOAT, nullptr, 0};
     auto conv_layer = params.network->addConvolution(*params.inputs.at(0).tensor, num_outputs, kernel_size, params.inputs.at(1).weight, bias);
     CHECK(conv_layer != nullptr);
-
+    // TODO(trevmorr): dilation
     const auto padding = nvinfer1::DimsHW(conv2d_attr->padding[0].as<IntImm>()->value, conv2d_attr->padding[1].as<IntImm>()->value);
     conv_layer->setPadding(padding);
     const auto strides = nvinfer1::DimsHW(conv2d_attr->strides[0].as<IntImm>()->value, conv2d_attr->strides[1].as<IntImm>()->value);

@@ -103,6 +103,15 @@ class TrtModuleNode : public ExternModuleNodeBase {
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
         LOG(INFO) << "Building new TensorRT engine for subgraph " << curr_id_;
+        // for(int i = 0; i < args.size(); i++) {
+        //   runtime::NDArray arg = args[i];
+        //   DLTensor* dptr = const_cast<DLTensor*>(arg.operator->());
+        //   size_t size = 1;
+        //   for (tvm_index_t i = 0; i < dptr->ndim; ++i) {
+        //     size *= dptr->shape[i];
+        //   }
+        //   LOG(INFO) << "input " << i << ": " << size;
+        // }
         Expr expr = LoadJSON<Expr>(this->serialized_json_);
         auto builder = TrtBuilder(args);
         auto engine_and_context = builder.BuildEngine(expr);

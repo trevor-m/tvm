@@ -96,22 +96,26 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   // Process graph and create INetworkDefinition.
   VisitExpr(expr);
   // Mark outputs.
-  for (int i = 0; i < out_tensors_.size(); ++i) {
+  const int num_outputs = node_output_map_[expr.operator->()].size();
+  for (int i = 0; i < num_outputs; ++i) {
+    auto out = node_output_map_[expr.operator->()][i];
+    CHECK(out.type == kTensor);
+    auto out_tensor = out.tensor;
     std::string output_name = "tensorrt_output" + std::to_string(i);
-    LOG(INFO) << "Added TRT network output: " << out_tensors_[i]->getName() << " -> " << output_name;
-    out_tensors_[i]->setName(output_name.c_str());
-    network_->markOutput(*out_tensors_[i]);
+    LOG(INFO) << "Added TRT network output: " << out_tensor->getName() << " -> " << output_name;
+    out_tensor->setName(output_name.c_str());
+    network_->markOutput(*out_tensor);
   }
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
 
   // TODO(trevmorr): add more validations
-  CHECK_EQ(engine->getNbBindings(), network_input_map_.size() + out_tensors_.size());
+  CHECK_EQ(engine->getNbBindings(), network_input_map_.size() + num_outputs);
   return {engine, context, network_input_map_};
 }
 
 nvinfer1::Weights TrtBuilder::GetInputAsWeights(const VarNode* node) {
-  const int var_node_idx = var_node_input_map_[node];
+  const int var_node_idx = TrackVarNode(node);
   runtime::NDArray arg = execution_args_[var_node_idx];
   DLTensor* dptr = const_cast<DLTensor*>(arg.operator->());
   CHECK_EQ(dptr->ctx.device_type, kDLGPU);
@@ -123,7 +127,19 @@ nvinfer1::Weights TrtBuilder::GetInputAsWeights(const VarNode* node) {
   wt.count = GetTensorSize(dptr);
   CHECK_EQ(TVMArrayCopyToBytes(dptr, const_cast<void*>(wt.values), weight_bytes), 0)
       << TVMGetLastError();
-  return wt;
+
+  node_output_map_[node] = {TrtOpInput(wt, GetShape(node->checked_type()))};
+}
+
+void TrtBuilder::VisitExpr_(const TupleGetItemNode* op) {
+  if (const auto* tuple = op->tuple.as<TupleNode>()) {
+    Expr item = tuple->fields[op->index];
+    VisitExpr(item);
+    node_output_map_[op] = node_output_map_[item.operator->()];
+  } else {
+    VisitExpr(op->tuple);
+    node_output_map_[op] = node_output_map_[op->tuple.operator->()];
+  }
 }
 
 void TrtBuilder::VisitExpr_(const VarNode* node) {
@@ -140,10 +156,11 @@ void TrtBuilder::VisitExpr_(const VarNode* node) {
     trt_inputs_[tensor_name] =
         network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
     network_input_map_[id] = tensor_name;
+  } else {
+    LOG(WARNING) << "Found input twice?";
   }
 
-  out_tensors_.clear();
-  out_tensors_.push_back(trt_inputs_[tensor_name]);
+  node_output_map_[node] = {TrtOpInput(trt_inputs_[tensor_name])};
 }
 
 void TrtBuilder::VisitExpr_(const ConstantNode* node) {
@@ -160,16 +177,12 @@ void TrtBuilder::VisitExpr_(const ConstantNode* node) {
   CHECK_EQ(TVMArrayCopyToBytes(dptr, const_cast<void*>(wt.values), weight_bytes), 0)
       << TVMGetLastError();
 
-  nvinfer1::Dims dims;
-  dims.d[0] = 1; // in case of scalar
-  dims.nbDims = dptr->ndim;
-  for (int i = 0; i < dims.nbDims; ++i) dims.d[i] = dptr->shape[i];
-  LOG(INFO) << "Adding constant with shape " << DebugString(TrtDimsToVector(dims));
+  std::vector<int> shape(dptr->shape, dptr->shape + dptr->ndim);
+  nvinfer1::Dims dims = VectorToTrtDims(shape);
   auto const_layer = network_->addConstant(dims, wt);
+  CHECK(const_layer != nullptr);
 
-  out_tensors_.clear();
-  out_tensors_.push_back(const_layer->getOutput(0));
-  // LOG(FATAL) << "not implemented";
+  node_output_map_[node] = {TrtOpInput(const_layer->getOutput(0))};
 }
 
 void TrtBuilder::VisitExpr_(const CallNode* call) {
@@ -189,24 +202,42 @@ void TrtBuilder::VisitExpr_(const CallNode* call) {
     if (converter->input_types[i] == kWeight) {
       // Input must be a constant weight
       if (auto* var = call->args[i].as<VarNode>()) {
-        LOG(WARNING) << "TRT requires a constant input for input " << i << " of op " << params.op_name << ", but relay.Var was used instead. The value supplied to the Var during this execution will be used for all future executions.";
-        // Hack: get from input
-        TrackVarNode(var);
-        nvinfer1::Weights weights = GetInputAsWeights(var);
-        // Include shape
-        params.inputs.push_back(TrtOpInput(weights, GetShape(var->checked_type())));
+        LOG(WARNING) << "TRT requires a constant input for input " << i << " of op " << params.op_name << ", but relay.Var was used instead. The value supplied to the Var during this execution will be used for all future executions: " << var->name_hint();
+        GetInputAsWeights(var);
       } else if (call->args[i].as<ConstantNode>()) {
-        // TODO
-        LOG(FATAL) << "not implemented";
+        LOG(FATAL) << "Not implemented.";
       } else {
         LOG(FATAL) << "TRT requires a constant input here.";
       }
     } else {
       VisitExpr(call->args[i]);
-      // Add outputs from args as inputs to this op.
-      for (auto out : out_tensors_) {
-        params.inputs.push_back(out);
-      }
+    }
+  }
+
+  // Get inputs.
+  for (int i = 0; i < call->args.size(); ++i) {
+    LOG(INFO) << "Lookup input: " << call->args[i].operator->();
+    if (auto* var = call->args[i].as<VarNode>()) {
+      LOG(INFO) << "var: " << var;
+    } else if (auto* var = call->args[i].as<CallNode>()) {
+      LOG(INFO) << "call: " << var;
+    } else if (auto* var = call->args[i].as<ConstantNode>()) {
+      LOG(INFO) << "constant: " << var;
+    } else if (auto* var = call->args[i].as<TupleGetItemNode>()) {
+      LOG(INFO) << "tuple: " << var;
+    } 
+    for (auto out : node_output_map_[call->args[i].operator->()]) {
+      params.inputs.push_back(out);
+    }
+  }
+  CHECK(converter->input_types.size() == params.inputs.size());
+
+  LOG(INFO) << "Converting op: " << params.op_name;
+  for (auto input : params.inputs) {
+    if (input.type == kTensor) {
+      LOG(INFO) << "Input tensor: " << input.tensor->getName() << " " << DebugString(TrtDimsToVector(input.tensor->getDimensions()));
+    } else {
+      LOG(INFO) << "Input weight: " << DebugString(input.weight_shape);
     }
   }
 
@@ -214,14 +245,19 @@ void TrtBuilder::VisitExpr_(const CallNode* call) {
   converter->Convert(params);
 
   // Get outputs.
-  out_tensors_.clear();
+  node_output_map_[call] = {};
+  std::vector<TrtOpInput> outputs;
   for (auto out : params.outputs) {
-    out_tensors_.push_back(out);
+    node_output_map_[call].push_back(TrtOpInput(out));
+    LOG(INFO) << call << ": Output tensor: " << out->getName() << " " << DebugString(TrtDimsToVector(out->getDimensions()));
   }
 }
 
 int TrtBuilder::TrackVarNode(const VarNode* node) {
-  int var_node_idx = var_node_counter_++;
+  // TODO(trevmorr): make more robust
+  const int trim_length = std::string("tensorrt_input").length();
+  int var_node_idx = std::stoi(node->name_hint().substr(trim_length, std::string::npos));
+  // int var_node_idx = var_node_counter_++;
   var_node_input_map_[node] = var_node_idx;
   return var_node_idx;
 }

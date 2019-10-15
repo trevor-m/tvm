@@ -41,6 +41,21 @@ struct TrtEngineAndContext {
   std::unordered_map<int, std::string> network_input_map;
 };
 
+enum TrtInputType {
+  kTensor,
+  kWeight,
+};
+
+struct TrtOpInput {
+  TrtInputType type;
+  nvinfer1::ITensor* tensor;
+  nvinfer1::Weights weight;
+  std::vector<int> weight_shape;
+
+  TrtOpInput(nvinfer1::ITensor* tensor) : tensor(tensor), type(kTensor) {}
+  TrtOpInput(nvinfer1::Weights weight, const std::vector<int>& shape) : weight(weight), type(kWeight), weight_shape(shape) {}
+};
+
 class TrtBuilder : public ExprVisitor {
  public:
   TrtBuilder(tvm::TVMArgs args);
@@ -49,10 +64,7 @@ class TrtBuilder : public ExprVisitor {
 
   void VisitExpr_(const ConstantNode* node) final;
 
-  // TODO(trevmorr)
-  // void VisitExpr_(const TupleGetItemNode* op) final { 
-  //   ;
-  // } 
+  void VisitExpr_(const TupleGetItemNode* op) final;
 
   void VisitExpr_(const CallNode* call) final;
 
@@ -63,13 +75,14 @@ class TrtBuilder : public ExprVisitor {
 
   int TrackVarNode(const VarNode* node);
 
-  // Tracks outputs of operators as they are processed.
-  std::vector<nvinfer1::ITensor*> out_tensors_;
+  // Maps a node to its outputs.
+  std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
 
   // For TRT conversion
   nvinfer1::IBuilder* builder_;
   nvinfer1::INetworkDefinition* network_;
 
+  // VarNode name_hint -> input tensor
   std::unordered_map<std::string, nvinfer1::ITensor*> trt_inputs_;
   // TODO(trevmorr): cache weights into here
   // std::unordered_map<std::string, nvinfer1::Weights> trt_weights_;
