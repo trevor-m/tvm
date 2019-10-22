@@ -1,5 +1,3 @@
-# Usage
-# nvprof --profile-from-start-off python3 test_tensorrt.py 2>&1 | tee profile.txt
 import numpy as np
 import time
 from mxnet.gluon.model_zoo.vision import get_model
@@ -8,6 +6,10 @@ import tvm
 from tvm import relay
 import tvm.relay.testing
 import tvm.relay.transform
+from tvm.contrib import graph_runtime
+
+from tvm.relay.annotation import subgraph_begin, subgraph_end
+from test_pass_partition_graph import WholeGraphAnnotator
 
 def test_extern_tensorrt():
     dtype = 'float32'
@@ -33,7 +35,7 @@ def test_extern_tensorrt():
     z_data = np.random.uniform(-1, 1, zshape).astype(dtype)
 
     # Test against reference.
-    for kind in ["vm"]: # ["vm" , "debug"]:
+    for kind in ["vm" , "debug", "graph"]:
         ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
         # First execution will trigger build of TRT engine(s).
         res = ex.evaluate()(x_data, y_data, z_data)
@@ -102,8 +104,6 @@ def test_extern_tensorrt_perf(model='resnet50_v1', use_trt=True, profile=False, 
     mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
     if use_trt:
-        from tvm.relay.annotation import subgraph_begin, subgraph_end
-        from test_pass_partition_graph import WholeGraphAnnotator
         mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
         mod = relay.transform.PartitionGraph()(mod)
 
@@ -140,7 +140,6 @@ def test_extern_tensorrt_perf(model='resnet50_v1', use_trt=True, profile=False, 
     return latency
 
 if __name__ == "__main__":
-    # test_extern_tensorrt()
     latency = {}
     models = [
         'alexnet',
