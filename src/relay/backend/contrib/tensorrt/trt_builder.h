@@ -55,7 +55,7 @@ struct TrtOpInput {
 
 class TrtBuilder : public ExprVisitor {
  public:
-  TrtBuilder(tvm::TVMArgs args);
+  TrtBuilder(const std::vector<DLTensor*>& args);
 
   void VisitExpr_(const VarNode* node) final;
 
@@ -72,6 +72,8 @@ class TrtBuilder : public ExprVisitor {
  private:
   nvinfer1::Weights GetNdArrayAsWeights(const runtime::NDArray& array,
                                         DLDeviceType src_device);
+  nvinfer1::Weights GetDLTensorAsWeights(DLTensor* dptr,
+                                         DLDeviceType src_device);
   nvinfer1::Weights GetInputAsWeights(const VarNode* node);
   void CleanUp();
 
@@ -94,7 +96,7 @@ class TrtBuilder : public ExprVisitor {
   std::unordered_map<int, std::string> network_input_map_;
 
   // Execution inputs from this invocation.
-  tvm::TVMArgs execution_args_;
+  const std::vector<DLTensor*>& execution_args_;
 
   // Maps VarNodes to index in execution_args_.
   int var_node_counter_;

@@ -24,49 +24,11 @@
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/ndarray.h>
 
-#include <unordered_map>
-#include <vector>
-#include "NvInfer.h"
-#include "trt_builder.h"
+#include "trt_executor.h"
 
 namespace tvm {
 namespace relay {
 namespace contrib {
-
-void ExecuteEngine(const TrtEngineAndContext& engine_and_context,
-                   tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-  auto engine = engine_and_context.engine;
-  auto context = engine_and_context.context;
-  const int num_bindings = engine->getNbBindings();
-  std::vector<void*> bindings(num_bindings, nullptr);
-  // Set inputs.
-  // TODO(trevmorr): Assumes output is at the end - is this true?
-  for (int i = 0; i < args.size() - 1; ++i) {
-    auto it = engine_and_context.network_input_map.find(i);
-    if (it != engine_and_context.network_input_map.end()) {
-      runtime::NDArray arg = args[i];
-      int binding_index = engine->getBindingIndex(it->second.c_str());
-      CHECK(binding_index != -1);
-      if (!runtime::TypeMatch(arg->dtype, kDLFloat, 32)) {
-        LOG(FATAL) << "Only support float32 type.";
-      }
-      bindings[binding_index] = reinterpret_cast<float*>(arg->data);
-    }
-  }
-  // Set outputs.
-  // TODO(trevmorr): Allow multiple outputs.
-  runtime::NDArray out_arg = args[args.size() - 1];
-  auto out = reinterpret_cast<float*>(out_arg->data);
-  bindings[num_bindings - 1] = out;
-  // Use batch size from first input.
-  const int batch_size = ((runtime::NDArray)args[0])->shape[0];
-  CHECK(context->execute(batch_size, bindings.data()))
-      << "Running TensorRT failed.";
-
-  // TODO(trevmorr): Look up bindings by name.
-  // TODO(trevmorr): Allow multiple outputs.
-  *rv = bindings[num_bindings - 1];
-}
 
 class TrtModuleNode : public ExternModuleNodeBase {
  public:
@@ -84,40 +46,20 @@ class TrtModuleNode : public ExternModuleNodeBase {
       const std::string& name,
       const std::shared_ptr<ModuleNode>& sptr_to_self) override {
     // Generate an external packed function
-    return PackedFunc([sptr_to_self, this, name](tvm::TVMArgs args,
-                                                 tvm::TVMRetValue* rv) {
-      curr_id_ = GetSubgraphID(name);
-      auto it = trt_engine_cache_.find(curr_id_);
-      if (it == trt_engine_cache_.end()) {
-        // Build new trt engine and place in cache.
-        LOG(INFO) << "Building new TensorRT engine for subgraph " << curr_id_;
-        // Expr expr = LoadJSON<Expr>(this->serialized_json_);
-        auto builder = TrtBuilder(args);
-        auto engine_and_context = builder.BuildEngine(expr_);
-        LOG(INFO) << "Finished building engine";
-        trt_engine_cache_[curr_id_] = engine_and_context;
-      }
-
-      // LOG(INFO) << "Executing TensorRT engine for subgraph " << curr_id_;
-      auto engine_and_context = trt_engine_cache_[curr_id_];
-      ExecuteEngine(engine_and_context, args, rv);
-    });
+    std::string id = GetSubgraphID(name);
+    return trt_exec_.GetFunction(id, this->serialized_json_);
   }
 
   void Build(const NodeRef& ref) override {
     if (ref->derived_from<FunctionNode>()) {
       Function func = Downcast<Function>(ref);
-      expr_ = func->body;
-      // serialized_json_ = SaveJSON(func->body);
-      // LOG(INFO) << AsText(func->body);
+      serialized_json_ = SaveJSON(func->body);
     } else if (ref->derived_from<relay::ModuleNode>()) {
       relay::Module mod = Downcast<relay::Module>(ref);
       for (const auto& it : mod->functions) {
         // TODO(trevmorr): handle this loop properly
         Function func = Downcast<Function>(it.second);
-        // serialized_json_ = SaveJSON(func->body);
-        expr_ = func->body;
-        // LOG(INFO) << AsText(func->body);
+        serialized_json_ = SaveJSON(func->body);
       }
     } else {
       LOG(FATAL)
@@ -126,10 +68,8 @@ class TrtModuleNode : public ExternModuleNodeBase {
   }
 
  private:
-  std::string curr_id_;
   std::string serialized_json_;
-  Expr expr_;
-  std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
+  TrtExecutor trt_exec_;
 };
 
 /*!

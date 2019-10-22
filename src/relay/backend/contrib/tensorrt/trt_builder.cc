@@ -65,12 +65,12 @@ static const std::unordered_map<std::string, TrtOpConverter*>
         // {"slice_like", AddSliceLike},
 };
 
-TrtBuilder::TrtBuilder(tvm::TVMArgs args)
+TrtBuilder::TrtBuilder(const std::vector<DLTensor*>& args)
     : execution_args_(args), var_node_counter_(0) {
   // Create TRT builder and network.
   static TensorRTLogger trt_logger;
   builder_ = nvinfer1::createInferBuilder(trt_logger);
-  const int batch_size = ((runtime::NDArray)args[0]).Shape()[0];
+  const int batch_size = args[0]->shape[0];
   builder_->setMaxBatchSize(batch_size);
   const size_t workspace_size = size_t(1) << 31;
   builder_->setMaxWorkspaceSize(workspace_size);
@@ -101,9 +101,8 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   return {engine, context, network_input_map_};
 }
 
-nvinfer1::Weights TrtBuilder::GetNdArrayAsWeights(const runtime::NDArray& array,
-                                                  DLDeviceType src_device) {
-  DLTensor* dptr = const_cast<DLTensor*>(array.operator->());
+nvinfer1::Weights TrtBuilder::GetDLTensorAsWeights(DLTensor* dptr,
+                                                   DLDeviceType src_device) {
   CHECK_EQ(dptr->ctx.device_type, src_device);
   CHECK_EQ(static_cast<int>(dptr->dtype.code), kDLFloat);
   const size_t weight_bytes = runtime::GetDataSize(*dptr);
@@ -122,10 +121,16 @@ nvinfer1::Weights TrtBuilder::GetNdArrayAsWeights(const runtime::NDArray& array,
   return weight;
 }
 
+nvinfer1::Weights TrtBuilder::GetNdArrayAsWeights(const runtime::NDArray& array,
+                                                  DLDeviceType src_device) {
+  DLTensor* dptr = const_cast<DLTensor*>(array.operator->());
+  return GetDLTensorAsWeights(dptr, src_device);
+}
+
 nvinfer1::Weights TrtBuilder::GetInputAsWeights(const VarNode* node) {
   const int var_node_idx = TrackVarNode(node);
   nvinfer1::Weights weight =
-      GetNdArrayAsWeights(execution_args_[var_node_idx], kDLGPU);
+      GetDLTensorAsWeights(execution_args_[var_node_idx], kDLGPU);
   node_output_map_[node] = {TrtOpInput(weight, GetShape(node->checked_type()))};
 }
 
