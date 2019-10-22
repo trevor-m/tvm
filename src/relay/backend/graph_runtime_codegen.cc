@@ -398,6 +398,32 @@ class GraphRuntimeCodegen
       LOG(FATAL) << "TVM only support calls to primitive functions "
                  << "(i.e functions composed of fusable operator invocations)";
     }
+    // Prevent lowering of TRT subgraphs.
+    auto compiler = FunctionGetAttr(func, "External");
+    if (compiler.defined()) {
+      const tvm::ir::StringImm* code_gen = compiler.as<tvm::ir::StringImm>();
+      CHECK(code_gen);
+      // Serialize relay func and store in subgraph attr.
+      auto attrs = GraphAttrs();
+      attrs["subgraph"] = SaveJSON(func->body);
+      attrs["backend"] = code_gen->value;
+      // Get inputs.
+      std::vector<GraphNodeRef> inputs;
+      for (auto arg : op->args) {
+        auto res = VisitExpr(arg);
+        for (auto nr : res) {
+          inputs.push_back(nr);
+        }
+      }
+      // TODO(trevmorr): Set number of outputs
+      const std::string op_name = "__tensorrt_subgraph";
+      auto node = GraphOpNode::make_node_ptr(_GetUniqueName(op_name),
+                                              attrs,
+                                              op_name,
+                                              inputs,
+                                              GraphAttrs());
+      return AddNode(node, expr);
+    }
 
     CHECK_GE(storage_device_map_.count(expr), 0);
     auto pf0 = GetPackedFunc("relay.backend._make_CCacheKey");

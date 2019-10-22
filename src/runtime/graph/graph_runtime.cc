@@ -344,7 +344,7 @@ void GraphRuntime::SetupOpExecs() {
 
     std::shared_ptr<OpArgs> op_args = nullptr;
     std::tie(op_execs_[nid], op_args) =
-        CreateTVMOp(inode.param, args, inode.inputs.size());
+        CreateTVMOp(inode.param, args, inode.inputs.size(), inode.name);
 
     for (size_t i = 0; i < inode.inputs.size(); i++) {
       uint32_t eid = this->entry_id(inode.inputs[i]);
@@ -360,7 +360,8 @@ void GraphRuntime::SetupOpExecs() {
 std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRuntime::CreateTVMOp(
     const TVMOpParam& param,
     const std::vector<DLTensor>& args,
-    size_t num_inputs) {
+    size_t num_inputs,
+    const std::string& node_name) {
   std::shared_ptr<GraphRuntime::OpArgs> arg_ptr = std::make_shared<GraphRuntime::OpArgs>();
   // setup address.
   arg_ptr->args = args;
@@ -390,6 +391,16 @@ std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRu
       DLTensor* from = static_cast<DLTensor*>(arg_ptr->arg_values[0].v_handle);
       DLTensor* to = static_cast<DLTensor*>(arg_ptr->arg_values[1].v_handle);
       TVM_CCALL(TVMArrayCopyFromTo(from, to, nullptr));
+    };
+    return {fexec, arg_ptr};
+  } else if (param.func_name == "__tensorrt_subgraph") {
+    auto fexec = [arg_ptr, node_name, param, this]() {
+      tvm::runtime::PackedFunc pf = this->trt_exec_.GetFunction(node_name, param.subgraph);
+      TVMRetValue rv;
+      TVMArgs targs(arg_ptr->arg_values.data(),
+                    arg_ptr->arg_tcodes.data(),
+                    static_cast<int>(arg_ptr->arg_values.size()));
+      pf.CallPacked(targs, &rv);
     };
     return {fexec, arg_ptr};
   }
