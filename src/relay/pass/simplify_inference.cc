@@ -139,9 +139,7 @@ class InferenceSimplifier : public ExprMutator {
       return new_e;
     }
     if (const auto* call = new_n->tuple.as<CallNode>()) {
-      // trevmorr
-      if (false && call->op.same_as(batch_norm)) {
-      // if (call->op.same_as(batch_norm)) {
+      if (call->op.same_as(batch_norm)) {
         return BatchNormToInferUnpack(call->attrs, call->args[0], call->args[1], call->args[2],
                                       call->args[3], call->args[4], ty_map_.at(call->args[0]));
       } else if (call->op.same_as(dropout)) {
@@ -156,9 +154,7 @@ class InferenceSimplifier : public ExprMutator {
     static const Op& instance_norm = Op::Get("nn.instance_norm");
     static const Op& layer_norm = Op::Get("nn.layer_norm");
     auto new_n = ExprMutator::VisitExpr_(n);
-    // trevmorr
-    if (false && n->op.same_as(batch_norm)) {
-    //if (n->op.same_as(batch_norm)) {
+    if (n->op.same_as(batch_norm)) {
       ty_map_[new_n.as<CallNode>()->args[0]] = n->args[0]->checked_type();
     } else if (n->op.same_as(layer_norm)) {
       const auto* call = new_n.as<CallNode>();

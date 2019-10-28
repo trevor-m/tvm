@@ -30,6 +30,7 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
+// TODO(trevmorr): Disable SimplifyInference path when using TRT.
 class TrtModuleNode : public ExternModuleNodeBase {
  public:
   void CompileExternLib() override {}

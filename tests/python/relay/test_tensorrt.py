@@ -49,24 +49,39 @@ def test_extern_tensorrt():
 
     print('Test passed.')
 
-def test_extern_tensorrt_graph_runtime_perf(model, num_iteration=1000):
-    # FIXME: This test is only for demo purpose and supposed to be removed.
+def test_extern_tensorrt_graph_runtime_perf(model, use_trt=False, profile=False, num_iteration=1000):
+    if profile:
+        import ctypes
+        _cudart = ctypes.CDLL('libcudart.so')
+
     dtype = 'float32'
-    input_shape = (1, 3, 224, 224)
+    input_shape = (128, 3, 224, 224)
     block = get_model(model, pretrained=True)
     mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
-    mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
-    mod = relay.transform.PartitionGraph()(mod)
+    if use_trt:
+        mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+        mod = relay.transform.PartitionGraph()(mod)
+        graph, lib, params = relay.build(mod, "cuda", params=params)
+    else:
+        with relay.build_config(opt_level=3):
+            graph, lib, params = relay.build(mod, "cuda", params=params)
 
     i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
 
-    graph, lib, params = relay.build(mod, "cuda", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
     mod.set_input(**params)
+    # Warmup
     for i in range(10):
         mod.run(data=i_data)
 
+    # Start profiling
+    if profile:
+        ret = _cudart.cudaProfilerStart()
+        if ret != 0:
+            raise Exception("cudaProfilerStart() returned %d" % ret)
+
+    # Time
     times = []
     for i in range(num_iteration):
         start_time = time.time()
@@ -78,7 +93,7 @@ def test_extern_tensorrt_graph_runtime_perf(model, num_iteration=1000):
     return latency
 
 
-def test_extern_tensorrt_perf(model='resnet50_v1', use_trt=True, runtime='vm', profile=False, num_iteration=1000):
+def test_extern_tensorrt_perf(model='resnet50_v1', use_trt=True, profile=False, num_iteration=1000):
     if profile:
         import ctypes
         _cudart = ctypes.CDLL('libcudart.so')
@@ -154,7 +169,7 @@ if __name__ == "__main__":
         'densenet201'
         ]
     for model in models:
-        latency[model] = test_extern_tensorrt_perf(model=model)
+        latency[model] = test_extern_tensorrt_graph_runtime_perf(model=model)
     
     for model in models:
         print(model, latency[model])
