@@ -20,12 +20,12 @@
 #define TVM_RELAY_BACKEND_TRT_EXECUTOR_H_
 
 #include <stdlib.h>
-#include <tvm/relay/contrib_codegen.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
 #include <tvm/relay/type.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/ndarray.h>
+#include <tvm/node/serialization.h>
 
 #include <unordered_map>
 #include <vector>
@@ -47,7 +47,7 @@ class TrtExecutor {
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
         LOG(INFO) << "Building new TensorRT engine for subgraph " << id;
-        Expr expr = LoadJSON<Expr>(serialized_subgraph);
+        auto expr = Downcast<Expr>(LoadJSON(serialized_subgraph));
 
         auto inputs = ConvertInputs(args);
         auto builder = TrtBuilder(inputs);

@@ -248,8 +248,6 @@ class GraphRuntime : public ModuleNode {
     std::vector<NodeEntry> inputs;
     // control deps
     std::vector<uint32_t> control_deps;
-    // subgraphs
-    std::vector<contrib::Subgraph> subgraphs;
     // JSON Loader
     void LoadAttrs(dmlc::JSONReader *reader, TVMOpParam* param) {
       int bitmask = 0;
@@ -278,18 +276,6 @@ class GraphRuntime : public ModuleNode {
       CHECK_EQ(bitmask, 1|2|4|8) << "invalid format";
     }
 
-    // Subgraph loader
-    static void LoadSubgraphs(dmlc::JSONReader *reader,
-                              std::vector<contrib::Subgraph>* subgraphs) {
-      reader->BeginArray();
-      while (reader->NextArrayItem()) {
-        subgraphs->emplace_back();
-        reader->Read(&subgraphs->back());
-      }
-      CHECK(subgraphs->size() == 1U)
-        << "Only supports at most one subgraph per operator node for now";
-    }
-
     // JSON Loader
     void Load(dmlc::JSONReader *reader) {
       reader->BeginObject();
@@ -309,8 +295,6 @@ class GraphRuntime : public ModuleNode {
           this->LoadAttrs(reader, &param);
         } else if (key == "control_deps") {
           reader->Read(&control_deps);
-        } else if (key == "subgraphs") {
-          this->LoadSubgraphs(reader, &subgraphs);
         } else {
           LOG(FATAL) << "do not support key " << key;
         }

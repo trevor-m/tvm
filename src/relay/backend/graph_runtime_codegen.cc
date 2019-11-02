@@ -27,6 +27,7 @@
 #include <tvm/node/ir_functor.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/runtime/device_api.h>
+#include <tvm/node/serialization.h>
 
 
 #include <list>
