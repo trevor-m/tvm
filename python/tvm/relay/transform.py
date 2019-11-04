@@ -974,3 +974,13 @@ class ChangeBatch:
                 else:
                     return var
         return ChangeBatchMutator().visit(func)
+
+def PartitionGraph():
+    """Partition a Relay program into regions that can be executed on different
+    backends.
+    Returns
+    -------
+    ret: tvm.relay.Pass
+        The registered pass that partitions the Relay program.
+    """
+    return _transform.EnableTrt()

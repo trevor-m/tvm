@@ -8,9 +8,6 @@ import tvm.relay.testing
 import tvm.relay.transform
 from tvm.contrib import graph_runtime
 
-from tvm.relay.annotation import subgraph_begin, subgraph_end
-from test_pass_partition_graph import WholeGraphAnnotator
-
 def test_extern_tensorrt():
     dtype = 'float32'
     xshape = (1, 32, 14, 14)
@@ -24,8 +21,9 @@ def test_extern_tensorrt():
     f = relay.Function([x, y, z], out)
 
     mod = relay.Module()
-    mod['main'] = WholeGraphAnnotator('tensorrt').visit(f)
+    mod['main'] = f
     mod = relay.transform.PartitionGraph()(mod)
+    print(mod)
 
     ref_mod = relay.Module()
     ref_mod['main'] = f
@@ -35,7 +33,7 @@ def test_extern_tensorrt():
     z_data = np.random.uniform(-1, 1, zshape).astype(dtype)
 
     # Test against reference.
-    for kind in ["vm" , "debug", "graph"]:
+    for kind in ["graph"]:
         ex = relay.create_executor(kind, mod=mod, ctx=tvm.gpu(0), target='cuda')
         # First execution will trigger build of TRT engine(s).
         res = ex.evaluate()(x_data, y_data, z_data)
@@ -93,18 +91,21 @@ def test_extern_tensorrt_maskrcnn(use_trt=True, profile=False, num_iteration=100
     print(model, latency)
     return latency
 
-def test_extern_tensorrt_graph_runtime_perf(model, use_trt=False, profile=False, num_iteration=1000):
+def test_extern_tensorrt_graph_runtime_perf(model, use_trt=True, profile=False, num_iteration=1000):
     if profile:
         import ctypes
         _cudart = ctypes.CDLL('libcudart.so')
 
     dtype = 'float32'
-    input_shape = (128, 3, 224, 224)
+    input_shape = (1, 3, 224, 224)
     block = get_model(model, pretrained=True)
     mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
     if use_trt:
-        mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+        # mod['main'] = WholeGraphAnnotator('tensorrt').visit(mod['main'])
+        # mod = relay.transform.PartitionGraph()(mod)
+        #mod = relay.Module()
+        #mod['main'] = f
         mod = relay.transform.PartitionGraph()(mod)
         graph, lib, params = relay.build(mod, "cuda", params=params)
     else:
@@ -184,35 +185,33 @@ def test_extern_tensorrt_perf(model='resnet50_v1', use_trt=True, profile=False, 
     return latency
 
 if __name__ == "__main__":
-    test_extern_tensorrt_maskrcnn()
-    exit(0)
     latency = {}
     models = [
-        'alexnet',
-        'resnet18_v1',
-        'resnet34_v1',
+        # 'alexnet',
+        # 'resnet18_v1',
+        # 'resnet34_v1',
         'resnet50_v1',
-        'resnet101_v1',
-        'resnet152_v1',
-        'resnet18_v2',
-        'resnet34_v2',
-        'resnet50_v2',
-        'resnet101_v2',
-        'resnet152_v2',
-        'squeezenet1.0',
-        'mobilenet0.25',
-        'mobilenet0.5',
-        'mobilenet0.75',
-        'mobilenet1.0',
-        'mobilenetv2_0.25',
-        'mobilenetv2_0.5',
-        'mobilenetv2_0.75',
-        'mobilenetv2_1.0',
-        'vgg11',
-        'vgg16',
-        'densenet121',
-        'densenet169',
-        'densenet201'
+        # 'resnet101_v1',
+        # 'resnet152_v1',
+        # 'resnet18_v2',
+        # 'resnet34_v2',
+        # 'resnet50_v2',
+        # 'resnet101_v2',
+        # 'resnet152_v2',
+        # 'squeezenet1.0',
+        # 'mobilenet0.25',
+        # 'mobilenet0.5',
+        # 'mobilenet0.75',
+        # 'mobilenet1.0',
+        # 'mobilenetv2_0.25',
+        # 'mobilenetv2_0.5',
+        # 'mobilenetv2_0.75',
+        # 'mobilenetv2_1.0',
+        # 'vgg11',
+        # 'vgg16',
+        # 'densenet121',
+        # 'densenet169',
+        # 'densenet201'
         ]
     for model in models:
         latency[model] = test_extern_tensorrt_graph_runtime_perf(model=model)
