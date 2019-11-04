@@ -22,7 +22,7 @@ def test_extern_tensorrt():
 
     mod = relay.Module()
     mod['main'] = f
-    mod = relay.transform.PartitionGraph()(mod)
+    mod = relay.transform.EnableTrt()(mod)
     print(mod)
 
     ref_mod = relay.Module()
@@ -106,7 +106,7 @@ def test_extern_tensorrt_graph_runtime_perf(model, use_trt=True, profile=False, 
         # mod = relay.transform.PartitionGraph()(mod)
         #mod = relay.Module()
         #mod['main'] = f
-        mod = relay.transform.PartitionGraph()(mod)
+        mod = relay.transform.EnableTrt()(mod)
         graph, lib, params = relay.build(mod, "cuda", params=params)
     else:
         with relay.build_config(opt_level=3):

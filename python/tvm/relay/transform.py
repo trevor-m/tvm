@@ -975,7 +975,7 @@ class ChangeBatch:
                     return var
         return ChangeBatchMutator().visit(func)
 
-def PartitionGraph():
+def EnableTrt():
     """Partition a Relay program into regions that can be executed on different
     backends.
     Returns

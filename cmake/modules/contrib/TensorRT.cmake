@@ -29,7 +29,12 @@ if(USE_TENSORRT)
     endif()
     include_directories(${TENSORRT_INCLUDE_DIR})
     list(APPEND TVM_RUNTIME_LINKER_LIBS ${TENSORRT_LIB_DIR})
-    # Build codegen source
+
+    # NNVM TRT sources
+    file(GLOB TENSORRT_SRCS src/contrib/subgraph/*.cc)
+    list(APPEND RUNTIME_SRCS ${TENSORRT_SRCS})
+
+    # Relay TRT sources
     file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/*.cc)
     list(APPEND COMPILER_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
 
