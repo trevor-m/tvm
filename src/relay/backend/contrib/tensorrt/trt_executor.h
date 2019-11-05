@@ -90,8 +90,9 @@ class TrtExecutor {
     std::vector<void*> bindings(num_bindings, nullptr);
     // Set inputs.
     auto inputs = ConvertInputs(args);
+    const int num_outputs = engine_and_context.network_outputs.size();
     // TODO(trevmorr): Assumes output is at the end - is this true?
-    for (int i = 0; i < inputs.size() - 1; ++i) {
+    for (int i = 0; i < inputs.size() - num_outputs; ++i) {
       auto it = engine_and_context.network_input_map.find(i);
       if (it != engine_and_context.network_input_map.end()) {
         DLTensor* arg = inputs[i];
@@ -105,8 +106,13 @@ class TrtExecutor {
     }
     // Set outputs.
     // TODO(trevmorr): Allow multiple outputs.
-    DLTensor* out_arg = inputs[inputs.size() - 1];
-    bindings[num_bindings - 1] = reinterpret_cast<float*>(out_arg->data);
+    for (int i = 0; i < num_outputs; ++i) {
+      const int index_in_inputs = inputs.size() - num_outputs + i;
+      DLTensor* out_arg = inputs[index_in_inputs];
+      int binding_index = engine->getBindingIndex(engine_and_context.network_outputs[0].c_str());
+      CHECK(binding_index != -1);
+      bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
+    }
     // Use batch size from first input.
     const int batch_size = inputs[0]->shape[0];
     CHECK(context->execute(batch_size, bindings.data()))

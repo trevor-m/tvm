@@ -84,11 +84,13 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   VisitExpr(expr);
   // Mark outputs.
   auto network_outputs = node_output_map_[expr.operator->()];
+  std::vector<std::string> network_output_names;
   for (int i = 0; i < network_outputs.size(); ++i) {
     CHECK(network_outputs[i].type == kTensor);
     auto out_tensor = network_outputs[i].tensor;
     std::string output_name = "tensorrt_output" + std::to_string(i);
     out_tensor->setName(output_name.c_str());
+    network_output_names.push_back(output_name);
     network_->markOutput(*out_tensor);
     DLOG(INFO) << "Added TRT network output: " << out_tensor->getName()
                << " -> " << output_name;
@@ -98,7 +100,7 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
            network_input_map_.size() + network_outputs.size());
   CleanUp();
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
-  return {engine, context, network_input_map_};
+  return {engine, context, network_input_map_, network_output_names};
 }
 
 nvinfer1::Weights TrtBuilder::GetDLTensorAsWeights(DLTensor* dptr,
@@ -138,12 +140,11 @@ void TrtBuilder::VisitExpr_(const TupleGetItemNode* op) {
   if (const auto* tuple = op->tuple.as<TupleNode>()) {
     Expr item = tuple->fields[op->index];
     VisitExpr(item);
-    // TODO(trevmorr): Index into outputs?
     node_output_map_[op] = node_output_map_[item.operator->()];
   } else {
     VisitExpr(op->tuple);
-    // TODO(trevmorr): Index into outputs?
-    node_output_map_[op] = node_output_map_[op->tuple.operator->()];
+    // Index into tensor outputs from expr.
+    node_output_map_[op] = {node_output_map_[op->tuple.operator->()][op->index]};
   }
 }
 

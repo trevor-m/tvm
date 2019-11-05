@@ -35,6 +35,7 @@ struct TrtEngineAndContext {
   nvinfer1::ICudaEngine* engine;
   nvinfer1::IExecutionContext* context;
   std::unordered_map<int, std::string> network_input_map;
+  std::vector<std::string> network_outputs;
 };
 
 enum TrtInputType {
