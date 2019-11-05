@@ -59,7 +59,7 @@ def test_extern_tensorrt_graph_runtime_perf(model, use_trt=True, profile=False, 
 
     if use_trt:
         mod = relay.transform.EnableTrt()(mod)
-        with relay.build_config(opt_level=0, disabled_pass={"SimplifyInference"}):
+        with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
             graph, lib, params = relay.build(mod, "cuda", params=params)
     else:
         with relay.build_config(opt_level=3):

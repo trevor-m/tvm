@@ -366,7 +366,7 @@ void GraphRuntime::SetupOpExecs() {
       uint32_t eid = this->entry_id(nid, index);
       args.push_back(*(data_entry_[eid].operator->()));
     }
-    
+
     if (inode.op_type == "tvm_op") {
       std::shared_ptr<OpArgs> op_args = nullptr;
       std::tie(op_execs_[nid], op_args) =
