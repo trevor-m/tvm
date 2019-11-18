@@ -47,9 +47,11 @@ class TensorRTLogger : public nvinfer1::ILogger {
       case Severity::kINFO:
         LOG(INFO) << "INFO: " << msg;
         break;
+#ifdef TRT_5_1
       case Severity::kVERBOSE:
         // LOG(INFO) << "VERBOSE: " << msg;
         break;
+#endif
       default:
         LOG(INFO) << "UNKNOWN: " << msg;
         break;

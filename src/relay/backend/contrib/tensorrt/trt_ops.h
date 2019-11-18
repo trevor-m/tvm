@@ -83,14 +83,17 @@ class ActivationOpConverter : public TrtOpConverter {
             {"nn.relu", nvinfer1::ActivationType::kRELU},
             {"sigmoid", nvinfer1::ActivationType::kSIGMOID},
             {"tanh", nvinfer1::ActivationType::kTANH},
+#ifdef TRT_5_1
             {"clip", nvinfer1::ActivationType::kCLIP},
             {"nn.leaky_relu", nvinfer1::ActivationType::kLEAKY_RELU},
+#endif
         };
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported activation type "
                               << params.op_name;
     nvinfer1::IActivationLayer* act_layer = params.network->addActivation(
-        *params.inputs.at(0).tensor, nvinfer1::ActivationType::kRELU);
+        *params.inputs.at(0).tensor, it->second);
+#ifdef TRT_5_1
     if (params.op_name == "clip") {
       const auto* clip_attr = params.call->attrs.as<ClipAttrs>();
       act_layer->setAlpha(clip_attr->a_min);
@@ -99,6 +102,7 @@ class ActivationOpConverter : public TrtOpConverter {
       const auto* leaky_relu_attr = params.call->attrs.as<LeakyReluAttrs>();
       act_layer->setAlpha(leaky_relu_attr->alpha);
     }
+#endif
     CHECK(act_layer != nullptr);
     params.outputs.push_back(act_layer->getOutput(0));
   }
@@ -339,11 +343,13 @@ class PoolingOpConverter : public TrtOpConverter {
     pool_layer->setStride(strides);
     pool_layer->setPadding(padding);
     pool_layer->setAverageCountExcludesPadding(!count_include_pad);
+#ifdef TRT_5_1
     if (ceil_mode) {
       pool_layer->setPaddingMode(nvinfer1::PaddingMode::kCAFFE_ROUND_UP);
     } else {
       pool_layer->setPaddingMode(nvinfer1::PaddingMode::kCAFFE_ROUND_DOWN);
     }
+#endif
     params.outputs.push_back(pool_layer->getOutput(0));
   }
 };
@@ -404,11 +410,13 @@ class UnaryOpConverter : public TrtOpConverter {
             {"sqrt", nvinfer1::UnaryOperation::kSQRT},
             {"abs", nvinfer1::UnaryOperation::kABS},
             {"negative", nvinfer1::UnaryOperation::kNEG},
+#ifdef TRT_5_1
             {"sin", nvinfer1::UnaryOperation::kSIN},
             {"cos", nvinfer1::UnaryOperation::kCOS},
             {"atan", nvinfer1::UnaryOperation::kATAN},
             {"ceil", nvinfer1::UnaryOperation::kCEIL},
             {"floor", nvinfer1::UnaryOperation::kFLOOR},
+#endif
         };
     auto it = op_map.find(params.op_name);
     CHECK(it != op_map.end()) << "Unsupported unary type " << params.op_name;
