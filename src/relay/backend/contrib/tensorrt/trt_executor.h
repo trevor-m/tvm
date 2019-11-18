@@ -109,7 +109,7 @@ class TrtExecutor {
     for (int i = 0; i < num_outputs; ++i) {
       const int index_in_inputs = inputs.size() - num_outputs + i;
       DLTensor* out_arg = inputs[index_in_inputs];
-      int binding_index = engine->getBindingIndex(engine_and_context.network_outputs[0].c_str());
+      int binding_index = engine->getBindingIndex(engine_and_context.network_outputs[i].c_str());
       CHECK(binding_index != -1);
       bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
     }
@@ -120,7 +120,7 @@ class TrtExecutor {
 
     // TODO(trevmorr): Look up bindings by name.
     // TODO(trevmorr): Allow multiple outputs.
-    *rv = bindings[num_bindings - 1];
+    *rv = bindings[num_bindings - num_outputs];
   }
 };
 
