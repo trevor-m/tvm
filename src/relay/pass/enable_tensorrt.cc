@@ -60,7 +60,12 @@ static const std::unordered_set<std::string> trt_base_compatible_ops = {
     {"nn.batch_flatten"},
     {"expand_dims"},
     {"concatenate"},
-    {"nn.conv2d_transpose"}};
+    {"nn.conv2d_transpose"},
+    // INT8
+    {"relay.op.annotation.simulated_quantize"},
+    {"annotation.cast_hint"},
+    {"annotation.stop_fusion"}
+    };
 
 // Ops which are supported by TRT 5.1.5+
 static const std::unordered_set<std::string> trt_5_1_5_compatible_ops = {
@@ -124,6 +129,7 @@ class TrtChecker : public ExprVisitor {
     const std::string op_name = (call->op.as<OpNode>())->name;
     if (trt_compatible_ops.count(op_name) == 0) {
       compatible_ = false;
+      LOG(INFO) << op_name << " is not supported by TensorRT.";
     }
     if (op_name == "nn.conv2d") {
       if (const auto* conv2d_attr = call->attrs.as<Conv2DAttrs>()) {

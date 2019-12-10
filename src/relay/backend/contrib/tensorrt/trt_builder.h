@@ -28,6 +28,12 @@
 #include <vector>
 #include "NvInfer.h"
 
+#define TRT_VERSION_GE(major, minor, patch)                     \
+  ((NV_TENSORRT_MAJOR > major) ||                               \
+   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR > minor) || \
+   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
+    NV_TENSORRT_PATCH > patch))
+
 namespace tvm {
 namespace relay {
 namespace contrib {
@@ -87,6 +93,12 @@ class TrtBuilder : public ExprVisitor {
   // For TRT conversion
   nvinfer1::IBuilder* builder_;
   nvinfer1::INetworkDefinition* network_;
+#if TRT_VERSION_GE(6, 0, 0)
+  nvinfer1::IBuilderConfig* builder_config_;
+#endif
+
+  // If a simulated_quantization node is detected
+  bool use_int8_;
 
   // VarNode name_hint -> input tensor
   std::unordered_map<std::string, nvinfer1::ITensor*> trt_inputs_;

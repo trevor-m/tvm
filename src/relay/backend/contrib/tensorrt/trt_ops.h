@@ -526,6 +526,47 @@ class Conv2DTransposeOpConverter : public TrtOpConverter {
   }
 };
 
+class SimulatedQuantizeOpConverter : public TrtOpConverter {
+ public:
+  SimulatedQuantizeOpConverter()
+      : TrtOpConverter({kTensor, kWeight, kWeight, kWeight}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto scale = params->inputs.at(1).weight;
+    auto clip_min = params->inputs.at(2).weight;
+    auto clip_max = params->inputs.at(3).weight;
+    // const auto* attr = params->call->attrs.as<SimulatedQuantizeAttrs>();
+    CHECK_EQ(scale.count, 1);
+    CHECK_EQ(clip_min.count, 1);
+    CHECK_EQ(clip_max.count, 1);
+
+
+    const float* scale_ptr = reinterpret_cast<const float*>(scale.values);
+    input->setDynamicRange(-scale_ptr[0], scale_ptr[0]);
+
+    // nvinfer1::IScaleLayer* scale_layer = params->network->addScale(
+    //     *params->inputs.at(0).tensor, nvinfer1::ScaleMode::kCHANNEL,
+    //     weight_shift, weight_scale, power);
+    // CHECK(scale_layer != nullptr);
+    // params->outputs.push_back(scale_layer->getOutput(0));
+    params->outputs.push_back(input);
+  }
+};
+
+class IdentityOpConverter : public TrtOpConverter {
+ public:
+  IdentityOpConverter()
+      : TrtOpConverter({}, /*variable_input_count=*/true) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    for (auto input : params->inputs) {
+      // CHECK(input.type == kTensor);
+      params->outputs.push_back(input.tensor);
+    }
+  }
+};
+
 }  // namespace contrib
 }  // namespace relay
 }  // namespace tvm

@@ -69,26 +69,53 @@ static const std::unordered_map<std::string, TrtOpConverter*>
         {"concatenate", new ConcatOpConverter()},
         {"nn.conv2d_transpose", new Conv2DTransposeOpConverter()},
         // {"slice_like", AddSliceLike},
+        {"relay.op.annotation.simulated_quantize", new SimulatedQuantizeOpConverter()},
+        {"annotation.cast_hint", new IdentityOpConverter()},
+        {"annotation.stop_fusion", new IdentityOpConverter()}
 };
 
 TrtBuilder::TrtBuilder(const std::vector<DLTensor*>& args)
-    : execution_args_(args), var_node_counter_(0) {
-  // Create TRT builder and network.
+    : execution_args_(args), var_node_counter_(0), use_int8_(false) {
   static TensorRTLogger trt_logger;
   builder_ = nvinfer1::createInferBuilder(trt_logger);
-  const int batch_size = args[0]->shape[0];
-  builder_->setMaxBatchSize(batch_size);
+  // Get configuration settings.
   const size_t workspace_size =
       dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
-  builder_->setMaxWorkspaceSize(workspace_size);
   const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
+  const bool use_int8 = dmlc::GetEnv("TVM_TENSORRT_USE_INT8", false);
+  // Create network and set configuration.
+// #if TRT_VERSION_GE(6, 0, 0)
+//   auto network_flags = 0; // 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+//   builder_config_ = builder_->createBuilderConfig();
+//   builder_config_->setMaxWorkspaceSize(workspace_size);
+//   if (use_fp16) builder_config_->setFlag(nvinfer1::BuilderFlag::kFP16);
+//   builder_config_->setFlag(nvinfer1::BuilderFlag::kINT8);
+//   network_ = 
+//       builder_->createNetworkV2(network_flags);
+// #else
+  const int batch_size = args[0]->shape[0];
+  builder_->setMaxBatchSize(batch_size);
+  builder_->setMaxWorkspaceSize(workspace_size);
   builder_->setFp16Mode(use_fp16);
+  builder_->setInt8Mode(use_int8);
   network_ = builder_->createNetwork();
+// #endif
 }
 
 TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   // Process graph and create INetworkDefinition.
   VisitExpr(expr);
+
+  for (int i = 0; i < network_->getNbLayers(); i++) {
+    auto* layer = network_->getLayer(i);
+    for (int j = 0; j < layer->getNbInputs(); j++) {
+      layer->getInput(j)->setDynamicRange(-127.0f, 127.0f);
+    }
+    for (int j = 0; j < layer->getNbOutputs(); j++) {
+      layer->getOutput(j)->setDynamicRange(-127.0f, 127.0f);
+    }
+  }
+
   // Mark outputs.
   auto network_outputs = node_output_map_[expr.operator->()];
   std::vector<std::string> network_output_names;
@@ -102,7 +129,12 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
     DLOG(INFO) << "Added TRT network output: " << out_tensor->getName()
                << " -> " << output_name;
   }
+  // Build engine.
+//#if TRT_VERSION_GE(6, 0, 0)
+//  nvinfer1::ICudaEngine* engine = builder_->buildEngineWithConfig(*network_, *builder_config_);
+//#else
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
+//#endif
   CHECK_EQ(engine->getNbBindings(),
            network_input_map_.size() + network_outputs.size());
   CleanUp();
@@ -213,8 +245,11 @@ void TrtBuilder::VisitExpr_(const CallNode* call) {
       // Input must be a constant weight
       if (auto* var = call->args[i].as<VarNode>()) {
         GetInputAsWeights(var);
-      } else if (call->args[i].as<ConstantNode>()) {
-        LOG(FATAL) << "Not implemented.";
+      } else if (const ConstantNode* node = call->args[i].as<ConstantNode>()) {
+        nvinfer1::Weights weight = GetNdArrayAsWeights(node->data, kDLCPU);
+        node_output_map_[node] = {TrtOpInput(weight, GetShape(node->checked_type()))};
+        // VisitExpr(call->args[i]);
+        // LOG(FATAL) << "Not implemented.";
       } else {
         LOG(FATAL) << "TRT requires a constant input here.";
       }

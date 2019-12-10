@@ -25,12 +25,6 @@
 #include <string>
 #include <vector>
 
-#define TRT_VERSION_GE(major, minor, patch)                     \
-  ((NV_TENSORRT_MAJOR > major) ||                               \
-   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR > minor) || \
-   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
-    NV_TENSORRT_PATCH > patch))
-
 namespace tvm {
 namespace relay {
 namespace contrib {

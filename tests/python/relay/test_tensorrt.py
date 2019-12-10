@@ -151,7 +151,44 @@ def test_tensorrt_integration():
     for model in models:
         print(model, latency[model])
 
+def test_tensorrt_prequantized(model='resnet50_v1', use_trt=True, num_iteration=100):
+    dtype = 'float32'
+    input_shape = (1, 3, 224, 224)
+    i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
+    block = get_model(model, pretrained=True)
+    mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
+    # with relay.quantize.qconfig(skip_k_conv=0, round_for_shift=True, do_simulation=True):
+    #     mod['main'] = relay.quantize.quantize(mod['main'], params)
+
+    if use_trt:
+        mod = relay.transform.EnableTrt()(mod)
+        assert mod['main'].attrs and mod['main'].attrs.External == 'tensorrt'
+        with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
+            graph, lib, params = relay.build(mod, "cuda", params=params)
+    else:
+        with relay.build_config(opt_level=3):
+            graph, lib, params = relay.build(mod, "cuda", params=params)
+
+    mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
+    mod.set_input(**params)
+    # Warmup
+    for i in range(10):
+        mod.run(data=i_data)
+
+    # Time
+    times = []
+    for i in range(num_iteration):
+        start_time = time.time()
+        mod.run(data=i_data)
+        res = mod.get_output(0)
+        times.append(time.time() - start_time)
+    latency = 1000.0 * np.mean(times)
+    print(model, latency)
+    return latency, res
+
+
 if __name__ == '__main__':
-    test_tensorrt_simple()
-    test_tensorrt_not_compatible()
-    test_tensorrt_integration()
+    # test_tensorrt_simple()
+    # test_tensorrt_not_compatible()
+    test_tensorrt_prequantized()
+    # test_tensorrt_integration()
