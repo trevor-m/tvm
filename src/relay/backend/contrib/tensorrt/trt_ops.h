@@ -426,17 +426,16 @@ class PoolingOpConverter : public TrtOpConverter {
     } else {
       pool_layer->setPadding(prepadding);
     }
-    if (params->op_name == "nn.avg_pool2d" && strides.h() == 1 &&
-        strides.w() == 1) {
-      // Ignore for strided pool - TRT thinks there is asymmetric padding.
-      // TODO(trevmorr): Remove ignore in future.
+    if (params->op_name == "nn.avg_pool2d") {
       pool_layer->setAverageCountExcludesPadding(!count_include_pad);
     }
+#if TRT_VERSION_GE(5, 1, 5)
     if (ceil_mode) {
       pool_layer->setPaddingMode(nvinfer1::PaddingMode::kEXPLICIT_ROUND_UP);
-    } else {
-      pool_layer->setPaddingMode(nvinfer1::PaddingMode::kEXPLICIT_ROUND_DOWN);
     }
+#else
+    CHECK(!ceil_mode);
+#endif
     params->outputs.push_back(pool_layer->getOutput(0));
   }
 };
@@ -738,6 +737,7 @@ class ReduceOpConverter : public TrtOpConverter {
   }
 };
 
+#if TRT_VERSION_GE(5, 1, 5)
 class StridedSliceOpConverter : public TrtOpConverter {
  public:
   StridedSliceOpConverter() : TrtOpConverter({kTensor}) {}
@@ -779,6 +779,7 @@ class StridedSliceOpConverter : public TrtOpConverter {
     params->outputs.push_back(slice_layer->getOutput(0));
   }
 };
+#endif
 
 class AdaptivePoolingOpConverter : public TrtOpConverter {
  public:
@@ -798,7 +799,6 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
 
     // This is an approximation of adaptive pooling. Results will not be
     // mathematically exact except when output_size is (1, 1).
-    // TODO(trevmorr): Only use TRT for this op when output size is (1, 1).
     const auto output_size =
         nvinfer1::DimsHW(attrs->output_size[0].as<IntImm>()->value,
                          attrs->output_size[1].as<IntImm>()->value);

@@ -248,14 +248,21 @@ class TrtChecker : public ExprVisitor {
           LOG(INFO) << op_name << " not supported: must be NCHW.";
         }
         if (attrs->count_include_pad) {
-          // TODO(trevmorr): Also disable count_include_pad in combination with
-          // strides.
-          if (attrs->padding.size() == 4) {
+          if (attrs->padding.size() == 4 ||
+              (attrs->strides.size() == 2 &&
+               (attrs->strides[0].as<IntImm>()->value != 1 ||
+                attrs->strides[1].as<IntImm>()->value != 1))) {
             compatible_ = false;
-            LOG(INFO) << op_name << " not supported: inclusive-counted blended "
-                                    "or average pooling is not supported in "
-                                    "combination with asymmetric padding";
+            LOG(INFO) << op_name
+                      << " not supported: inclusive-counted blended or average "
+                         "pooling is not supported in combination with "
+                         "asymmetric padding or with strides.";
           }
+        }
+        if (attrs->ceil_mode && !TrtVersionGe(trt_version_, 5, 1, 5)) {
+          compatible_ = false;
+          LOG(INFO) << op_name << " not supported: ceil_mode=True requires "
+                                  "TensorRT 5.1.5 or greater.";
         }
       }
     }
@@ -401,6 +408,18 @@ class TrtChecker : public ExprVisitor {
             LOG(INFO) << op_name
                       << " not supported: start/end values must be positive.";
           }
+        }
+      }
+    }
+    if (op_name == "adaptive_max_pool2d" || op_name == "adaptive_avg_pool2d") {
+      if (const auto* attrs = call->attrs.as<AdaptivePool2DAttrs>()) {
+        if ((attrs->output_size.size() == 1 &&
+             attrs->output_size[0].as<IntImm>()->value != 1) ||
+            (attrs->output_size.size() == 2 &&
+             (attrs->output_size[0].as<IntImm>()->value != 1 ||
+              attrs->output_size[1].as<IntImm>()->value != 1))) {
+          compatible_ = false;
+          LOG(INFO) << op_name << " not supported: output size must be (1, 1).";
         }
       }
     }
