@@ -19,7 +19,6 @@
 #include <string>
 
 #include "trt_builder.h"
-#include "trt_logger.h"
 #include "trt_ops.h"
 #include "utils.h"
 
@@ -27,66 +26,66 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-// TODO(trevmorr): Make a function to return this
-static const std::unordered_map<std::string, TrtOpConverter*>
-    trt_op_converters = {
-        // Activation ops
+const std::unordered_map<std::string, TrtOpConverter*>* GetOpConverters() {
+  static auto* const map =
+      new std::unordered_map<std::string, TrtOpConverter*>({
         {"nn.relu", new ActivationOpConverter()},
-        {"sigmoid", new ActivationOpConverter()},
-        {"tanh", new ActivationOpConverter()},
-        {"nn.batch_norm", new BatchNormOpConverter()},
-        {"nn.softmax", new SoftmaxOpConverter()},
-        {"nn.conv2d", new Conv2DOpConverter()},
-        {"nn.dense", new DenseOpConverter()},
-        {"nn.bias_add", new BiasAddOpConverter()},
-        {"add", new ElementWiseBinaryOpConverter()},
-        {"subtract", new ElementWiseBinaryOpConverter()},
-        {"multiply", new ElementWiseBinaryOpConverter()},
-        {"divide", new ElementWiseBinaryOpConverter()},
-        {"power", new ElementWiseBinaryOpConverter()},
-        {"nn.max_pool2d", new PoolingOpConverter()},
-        {"nn.avg_pool2d", new PoolingOpConverter()},
-        {"nn.global_max_pool2d", new GlobalPoolingOpConverter()},
-        {"nn.global_avg_pool2d", new GlobalPoolingOpConverter()},
-        {"exp", new UnaryOpConverter()},
-        {"log", new UnaryOpConverter()},
-        {"sqrt", new UnaryOpConverter()},
-        {"abs", new UnaryOpConverter()},
-        {"negative", new UnaryOpConverter()},
-        {"nn.batch_flatten", new BatchFlattenOpConverter()},
-        {"expand_dims", new ExpandDimsOpConverter()},
-        {"squeeze", new SqueezeOpConverter()},
-        {"concatenate", new ConcatOpConverter()},
-        {"nn.conv2d_transpose", new Conv2DTransposeOpConverter()},
-        {"transpose", new TransposeOpConverter()},
-        {"reshape", new ReshapeOpConverter()},
-        {"nn.pad", new PadOpConverter()},
-        {"sum", new ReduceOpConverter()},
-        {"prod", new ReduceOpConverter()},
-        {"max", new ReduceOpConverter()},
-        {"min", new ReduceOpConverter()},
-        {"mean", new ReduceOpConverter()},
-        {"contrib.adaptive_max_pool2d", new AdaptivePoolingOpConverter()},
-        {"contrib.adaptive_avg_pool2d", new AdaptivePoolingOpConverter()},
+            {"sigmoid", new ActivationOpConverter()},
+            {"tanh", new ActivationOpConverter()},
+            {"nn.batch_norm", new BatchNormOpConverter()},
+            {"nn.softmax", new SoftmaxOpConverter()},
+            {"nn.conv2d", new Conv2DOpConverter()},
+            {"nn.dense", new DenseOpConverter()},
+            {"nn.bias_add", new BiasAddOpConverter()},
+            {"add", new ElementWiseBinaryOpConverter()},
+            {"subtract", new ElementWiseBinaryOpConverter()},
+            {"multiply", new ElementWiseBinaryOpConverter()},
+            {"divide", new ElementWiseBinaryOpConverter()},
+            {"power", new ElementWiseBinaryOpConverter()},
+            {"nn.max_pool2d", new PoolingOpConverter()},
+            {"nn.avg_pool2d", new PoolingOpConverter()},
+            {"nn.global_max_pool2d", new GlobalPoolingOpConverter()},
+            {"nn.global_avg_pool2d", new GlobalPoolingOpConverter()},
+            {"exp", new UnaryOpConverter()},
+            {"log", new UnaryOpConverter()},
+            {"sqrt", new UnaryOpConverter()},
+            {"abs", new UnaryOpConverter()},
+            {"negative", new UnaryOpConverter()},
+            {"nn.batch_flatten", new BatchFlattenOpConverter()},
+            {"expand_dims", new ExpandDimsOpConverter()},
+            {"squeeze", new SqueezeOpConverter()},
+            {"concatenate", new ConcatOpConverter()},
+            {"nn.conv2d_transpose", new Conv2DTransposeOpConverter()},
+            {"transpose", new TransposeOpConverter()},
+            {"reshape", new ReshapeOpConverter()},
+            {"nn.pad", new PadOpConverter()},
+            {"sum", new ReduceOpConverter()},
+            {"prod", new ReduceOpConverter()},
+            {"max", new ReduceOpConverter()},
+            {"min", new ReduceOpConverter()},
+            {"mean", new ReduceOpConverter()},
+            {"contrib.adaptive_max_pool2d", new AdaptivePoolingOpConverter()},
+            {"contrib.adaptive_avg_pool2d", new AdaptivePoolingOpConverter()},
 #if TRT_VERSION_GE(5, 1, 5)
-        {"clip", new ActivationOpConverter()},
-        {"nn.leaky_relu", new ActivationOpConverter()},
-        {"sin", new UnaryOpConverter()},
-        {"cos", new UnaryOpConverter()},
-        {"atan", new UnaryOpConverter()},
-        {"ceil", new UnaryOpConverter()},
-        {"floor", new UnaryOpConverter()},
-        {"strided_slice", new StridedSliceOpConverter()},
+            {"clip", new ActivationOpConverter()},
+            {"nn.leaky_relu", new ActivationOpConverter()},
+            {"sin", new UnaryOpConverter()},
+            {"cos", new UnaryOpConverter()},
+            {"atan", new UnaryOpConverter()},
+            {"ceil", new UnaryOpConverter()},
+            {"floor", new UnaryOpConverter()},
+            {"strided_slice", new StridedSliceOpConverter()},
 #endif
-};
+      });
+  return map;
+}
 
 TrtBuilder::TrtBuilder(const std::vector<DLTensor*>& args)
     : execution_args_(args) {
   // Create TRT builder and network.
-  static TensorRTLogger trt_logger;
-  builder_ = nvinfer1::createInferBuilder(trt_logger);
-  const int batch_size = args[0]->shape[0];
-  builder_->setMaxBatchSize(batch_size);
+  builder_ = nvinfer1::createInferBuilder(logger_);
+  batch_size_ = args[0]->shape[0];
+  builder_->setMaxBatchSize(batch_size_);
   const size_t workspace_size =
       dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
   builder_->setMaxWorkspaceSize(workspace_size);
@@ -99,7 +98,9 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   // Process graph and create INetworkDefinition.
   VisitExpr(expr);
   // Mark outputs.
-  auto network_outputs = node_output_map_[expr.operator->()];
+  auto it = node_output_map_.find(expr.operator->());
+  CHECK(it != node_output_map_.end()) << "Output was not found.";
+  auto network_outputs = it->second;
   std::vector<std::string> network_output_names;
   for (int i = 0; i < network_outputs.size(); ++i) {
     CHECK(network_outputs[i].type == kTensor);
@@ -129,7 +130,7 @@ nvinfer1::Weights TrtBuilder::GetDLTensorAsWeights(DLTensor* dptr,
   for (tvm_index_t i = 0; i < dptr->ndim; ++i) {
     count *= dptr->shape[i];
   }
-  CHECK(count * 4 == weight_bytes);
+  CHECK_EQ(count * 4, weight_bytes);
   weight.count = count;
   weight.values = new float[count];
   CHECK_EQ(
@@ -252,8 +253,8 @@ void TrtBuilder::VisitExpr_(const ConstantNode* node) {
 void TrtBuilder::VisitExpr_(const CallNode* call) {
   AddTrtLayerParams params(network_, call);
   // Look up converter.
-  auto it = trt_op_converters.find(params.op_name);
-  CHECK(it != trt_op_converters.end())
+  auto it = GetOpConverters()->find(params.op_name);
+  CHECK(it != GetOpConverters()->end())
       << "Unsupported operator conversion to TRT, op name: " << params.op_name;
   const TrtOpConverter* converter = it->second;
 

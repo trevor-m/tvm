@@ -39,4 +39,6 @@ if(USE_TENSORRT)
     # Set defines
     set_source_files_properties(${RUNTIME_GRAPH_SRCS}
             PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
+    set_source_files_properties(${COMPILER_SRCS}
+            PROPERTIES COMPILE_DEFINITIONS "TVM_COMPILER_TENSORRT")
 endif()

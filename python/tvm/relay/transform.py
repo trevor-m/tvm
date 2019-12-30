@@ -1033,7 +1033,18 @@ class ChangeBatch:
                     return var
         return ChangeBatchMutator().visit(func)
 
-def EnableTrt(trt_version=(6, 0, 1)):
+def GetTrtVersion():
+    """Gets the version of TensorRT that TVM is built against.
+
+    Returns
+    -------
+    ret: Tuple[int]
+        TensorRT version as a tuple of major, minor, and patch number. If TVM
+        is not built with TensorRT, an empty tuple is returned instead.
+    """
+    return tuple(map(int, _transform.GetTrtVersion()))
+
+def EnableTrt(trt_version=None):
     """Converts the entire relay program into one that can be executed using
     TensorRT. If any of the operators are not supported by the TensorRT
     conversion, the unmodified program will be returned instead.
@@ -1041,13 +1052,20 @@ def EnableTrt(trt_version=(6, 0, 1)):
     Parameters
     ----------
     passes : Optional[Tuple[int]]
-        Which version of TensorRT to target for partitioning.
+        Which version of TensorRT to target for partitioning as a tuple of
+        (major, minor, patch). If not specified, will attempt to get using
+        GetTrtVersion.
 
     Returns
     -------
     ret: tvm.relay.Pass
         The registered pass that partitions the Relay program.
     """
+    if not trt_version:
+        trt_version = GetTrtVersion()
+        # If TVM wasn't built against TRT, default to TRT 6.
+        if not trt_version:
+            trt_version = (6, 0, 1)
     if not isinstance(trt_version, (list, tuple)):
         raise TypeError("trt_version is expected to be the type of " +
                         "list/tuple.")

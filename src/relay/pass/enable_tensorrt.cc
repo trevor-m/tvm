@@ -24,12 +24,16 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
+#include <tvm/node/container.h>
 
 #include <string>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#if TVM_COMPILER_TENSORRT
+#include "NvInfer.h"
+#endif
 
 namespace tvm {
 namespace relay {
@@ -523,6 +527,14 @@ Expr FixPyTorchAddmm(const Expr& e) { return PyTorchAddmmFixer().Mutate(e); }
 
 namespace transform {
 
+Array<Integer> GetTrtVersion() {
+#if TVM_COMPILER_TENSORRT
+  return {Integer(NV_TENSORRT_MAJOR), Integer(NV_TENSORRT_MINOR), Integer(NV_TENSORRT_PATCH)};
+#else
+  return {};
+#endif
+}
+
 Pass FixPyTorchAddmm() {
   runtime::TypedPackedFunc<Function(Function, Module, PassContext)> pass_func =
       [=](Function f, Module m, PassContext pc) {
@@ -548,6 +560,7 @@ Pass EnableTrt(int trt_ver_major, int trt_ver_minor, int trt_ver_patch) {
 }
 
 TVM_REGISTER_API("relay._transform.EnableTrt").set_body_typed(EnableTrt);
+TVM_REGISTER_API("relay._transform.GetTrtVersion").set_body_typed(GetTrtVersion);
 
 }  // namespace transform
 

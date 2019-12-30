@@ -34,6 +34,8 @@
   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
   NV_TENSORRT_PATCH >= patch))
 
+#include "trt_logger.h"
+
 namespace tvm {
 namespace relay {
 namespace contrib {
@@ -113,6 +115,7 @@ class TrtBuilder : public ExprVisitor {
   std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
 
   // TensorRT builder and network definition.
+  TrtLogger logger_;
   nvinfer1::IBuilder* builder_;
   nvinfer1::INetworkDefinition* network_;
 
@@ -121,6 +124,7 @@ class TrtBuilder : public ExprVisitor {
 
   // Execution inputs from this invocation.
   const std::vector<DLTensor*>& execution_args_;
+  int batch_size_;
 
   // Maps execution_args_ input index -> TRT input tensor name / VarNode
   // name_hint.
