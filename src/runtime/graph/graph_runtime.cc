@@ -391,24 +391,6 @@ std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRu
       TVM_CCALL(TVMArrayCopyFromTo(from, to, nullptr));
     };
     return {fexec, arg_ptr};
-  } else if (param.func_name == "__tensorrt_subgraph") {
-#if TVM_GRAPH_RUNTIME_TENSORRT
-    // Relay TRT integration
-    const std::string& serialized_subgraph = param.subgraph;
-    auto fexec = [arg_ptr, &serialized_subgraph, this]() {
-      // TODO(trevmorr): Use node name for unique subgraph identifier.
-      const std::string node_name = "tensorrt_subgraph";
-      tvm::runtime::PackedFunc pf = this->trt_exec_.GetFunction(node_name, serialized_subgraph);
-      TVMRetValue rv;
-      TVMArgs targs(arg_ptr->arg_values.data(),
-                    arg_ptr->arg_tcodes.data(),
-                    static_cast<int>(arg_ptr->arg_values.size()));
-      pf.CallPacked(targs, &rv);
-    };
-    return {fexec, arg_ptr};
-#else
-    LOG(FATAL) << "Not built with TensorRT support.";
-#endif
   }
 
   // Get compiled function from the module that contains both host and device

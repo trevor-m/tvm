@@ -35,6 +35,9 @@ if(USE_TENSORRT)
     # Relay TRT sources
     file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/*.cc)
     list(APPEND COMPILER_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
+    # Relay TRT runtime sources
+    file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/runtime/contrib/tensorrt/*.cc)
+    list(APPEND RUNTIME_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
 
     # Set defines
     set_source_files_properties(${RUNTIME_GRAPH_SRCS}

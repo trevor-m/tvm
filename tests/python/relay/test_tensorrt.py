@@ -42,7 +42,7 @@ def test_tensorrt_simple():
 
     mod = relay.Module()
     mod['main'] = f
-    mod = relay.transform.EnableTrt()(mod)
+    mod = relay.transform.EnableTrt(mod)
 
     ref_mod = relay.Module()
     ref_mod['main'] = f
@@ -74,7 +74,7 @@ def test_tensorrt_not_compatible():
     f = relay.Function([x], out)
     mod = relay.Module()
     mod['main'] = f
-    mod = relay.transform.EnableTrt()(mod)
+    mod = relay.transform.EnableTrt(mod)
     assert not mod['main'].attrs
 
 @pytest.mark.skip("skip because CI doesn't have TensorRT")
@@ -86,8 +86,8 @@ def test_tensorrt_ops():
         # Run TRT 
         mod = relay.Module()
         mod['main'] = f
-        mod = relay.transform.EnableTrt()(mod)
-        assert mod['main'].attrs and mod['main'].attrs.External == 'tensorrt'
+        mod = relay.transform.EnableTrt(mod)
+        assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
         if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
             print("skip because cuda is not enabled.")
             exit(0)
@@ -410,15 +410,15 @@ def test_tensorrt_integration():
         def check_trt_used(graph):
             import json
             graph = json.loads(graph)
-            num_trt_subgraphs = sum([1 for n in graph['nodes'] if n.get('attrs', {}).get('func_name', '') == '__tensorrt_subgraph'])
+            num_trt_subgraphs = sum([1 for n in graph['nodes'] if n.get('attrs', {}).get('func_name', '') == 'tensorrt_0'])
             assert num_trt_subgraphs == 1
 
         block = get_model(model, pretrained=True)
         mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
         if use_trt:
-            mod = relay.transform.EnableTrt()(mod)
-            assert mod['main'].attrs and mod['main'].attrs.External == 'tensorrt'
+            mod = relay.transform.EnableTrt(mod, params)
+            assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
             with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
                 graph, lib, params = relay.build(mod, "cuda", params=params)
             check_trt_used(graph)
@@ -484,8 +484,6 @@ def test_tensorrt_integration():
         print(model, latency[model])
 
 if __name__ == '__main__':
-    # from tvm import module as _tvm_module
-    # x = _tvm_module.create_trt_module("hello")
     test_tensorrt_ops()
     test_tensorrt_simple()
     test_tensorrt_not_compatible()

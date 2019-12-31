@@ -19,17 +19,19 @@
 #include <memory>
 #include <string>
 
-#include "trt_builder.h"
-#include "trt_ops.h"
+#include "tensorrt_builder.h"
+#include "tensorrt_ops.h"
 #include "utils.h"
 
 namespace tvm {
 namespace relay {
 namespace contrib {
 
-const std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>
+const std::shared_ptr<
+    std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>
 GetOpConverters() {
-  static auto map = std::make_shared<std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>();
+  static auto map = std::make_shared<
+      std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>();
   if (!map->empty()) return map;
   map->emplace("nn.relu", std::make_shared<ActivationOpConverter>());
   map->emplace("sigmoid", std::make_shared<ActivationOpConverter>());
@@ -46,8 +48,10 @@ GetOpConverters() {
   map->emplace("power", std::make_shared<ElementWiseBinaryOpConverter>());
   map->emplace("nn.max_pool2d", std::make_shared<PoolingOpConverter>());
   map->emplace("nn.avg_pool2d", std::make_shared<PoolingOpConverter>());
-  map->emplace("nn.global_max_pool2d", std::make_shared<GlobalPoolingOpConverter>());
-  map->emplace("nn.global_avg_pool2d", std::make_shared<GlobalPoolingOpConverter>());
+  map->emplace("nn.global_max_pool2d",
+               std::make_shared<GlobalPoolingOpConverter>());
+  map->emplace("nn.global_avg_pool2d",
+               std::make_shared<GlobalPoolingOpConverter>());
   map->emplace("exp", std::make_shared<UnaryOpConverter>());
   map->emplace("log", std::make_shared<UnaryOpConverter>());
   map->emplace("sqrt", std::make_shared<UnaryOpConverter>());
@@ -57,7 +61,8 @@ GetOpConverters() {
   map->emplace("expand_dims", std::make_shared<ExpandDimsOpConverter>());
   map->emplace("squeeze", std::make_shared<SqueezeOpConverter>());
   map->emplace("concatenate", std::make_shared<ConcatOpConverter>());
-  map->emplace("nn.conv2d_transpose", std::make_shared<Conv2DTransposeOpConverter>());
+  map->emplace("nn.conv2d_transpose",
+               std::make_shared<Conv2DTransposeOpConverter>());
   map->emplace("transpose", std::make_shared<TransposeOpConverter>());
   map->emplace("reshape", std::make_shared<ReshapeOpConverter>());
   map->emplace("nn.pad", std::make_shared<PadOpConverter>());
@@ -66,8 +71,10 @@ GetOpConverters() {
   map->emplace("max", std::make_shared<ReduceOpConverter>());
   map->emplace("min", std::make_shared<ReduceOpConverter>());
   map->emplace("mean", std::make_shared<ReduceOpConverter>());
-  map->emplace("contrib.adaptive_max_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
-  map->emplace("contrib.adaptive_avg_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
+  map->emplace("contrib.adaptive_max_pool2d",
+               std::make_shared<AdaptivePoolingOpConverter>());
+  map->emplace("contrib.adaptive_avg_pool2d",
+               std::make_shared<AdaptivePoolingOpConverter>());
 #if TRT_VERSION_GE(5, 1, 5)
   map->emplace("clip", std::make_shared<ActivationOpConverter>());
   map->emplace("nn.leaky_relu", std::make_shared<ActivationOpConverter>());
@@ -84,7 +91,7 @@ GetOpConverters() {
   return map;
 }
 
-TrtBuilder::TrtBuilder(const std::vector<DLTensor*>& args)
+TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
     : execution_args_(args) {
   // Create TRT builder and network.
   builder_ = nvinfer1::createInferBuilder(logger_);
@@ -98,7 +105,7 @@ TrtBuilder::TrtBuilder(const std::vector<DLTensor*>& args)
   network_ = builder_->createNetwork();
 }
 
-TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
+runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(const Expr& expr) {
   // Process graph and create INetworkDefinition.
   VisitExpr(expr);
   // Mark outputs.
@@ -124,8 +131,8 @@ TrtEngineAndContext TrtBuilder::BuildEngine(const Expr& expr) {
   return {engine, context, network_input_map_, network_output_names};
 }
 
-nvinfer1::Weights TrtBuilder::GetDLTensorAsWeights(DLTensor* dptr,
-                                                   DLDeviceType src_device) {
+nvinfer1::Weights TensorRTBuilder::GetDLTensorAsWeights(
+    DLTensor* dptr, DLDeviceType src_device) {
   CHECK_EQ(dptr->ctx.device_type, src_device);
   CHECK_EQ(static_cast<int>(dptr->dtype.code), kDLFloat);
   const size_t weight_bytes = runtime::GetDataSize(*dptr);
@@ -145,28 +152,28 @@ nvinfer1::Weights TrtBuilder::GetDLTensorAsWeights(DLTensor* dptr,
   return weight;
 }
 
-nvinfer1::Weights TrtBuilder::GetNdArrayAsWeights(const runtime::NDArray& array,
-                                                  DLDeviceType src_device) {
+nvinfer1::Weights TensorRTBuilder::GetNdArrayAsWeights(
+    const runtime::NDArray& array, DLDeviceType src_device) {
   DLTensor* dptr = const_cast<DLTensor*>(array.operator->());
   return GetDLTensorAsWeights(dptr, src_device);
 }
 
-void TrtBuilder::GetInputAsWeights(const VarNode* node) {
+void TensorRTBuilder::GetInputAsWeights(const VarNode* node) {
   const int var_node_idx = TrackVarNode(node);
   nvinfer1::Weights weight =
       GetDLTensorAsWeights(execution_args_[var_node_idx], kDLGPU);
   node_output_map_[node] = {TrtOpInput(weight, GetShape(node->checked_type()))};
 }
 
-void TrtBuilder::GetConstantAsWeights(const ConstantNode* node) {
+void TensorRTBuilder::GetConstantAsWeights(const ConstantNode* node) {
   auto weight = GetNdArrayAsWeights(node->data, kDLCPU);
   auto shape_long = node->data.Shape();
   std::vector<int> shape(shape_long.begin(), shape_long.end());
   node_output_map_[node] = {TrtOpInput(weight, shape)};
 }
 
-void TrtBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
-                                             const VarNode* node) {
+void TensorRTBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
+                                                  const VarNode* node) {
   GetInputAsWeights(node);
   CHECK_EQ(node_output_map_[node].size(), 1);
   const nvinfer1::Weights& original_weight = node_output_map_[node][0].weight;
@@ -206,7 +213,7 @@ void TrtBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
   node_output_map_[transpose] = {TrtOpInput(transposed_weight, new_shape)};
 }
 
-void TrtBuilder::VisitExpr_(const TupleGetItemNode* op) {
+void TensorRTBuilder::VisitExpr_(const TupleGetItemNode* op) {
   if (const auto* tuple = op->tuple.as<TupleNode>()) {
     Expr item = tuple->fields[op->index];
     VisitExpr(item);
@@ -219,7 +226,7 @@ void TrtBuilder::VisitExpr_(const TupleGetItemNode* op) {
   }
 }
 
-void TrtBuilder::VisitExpr_(const TupleNode* op) {
+void TensorRTBuilder::VisitExpr_(const TupleNode* op) {
   std::vector<TrtOpInput> outputs;
   for (auto item : op->fields) {
     VisitExpr(item);
@@ -230,7 +237,7 @@ void TrtBuilder::VisitExpr_(const TupleNode* op) {
   node_output_map_[op] = outputs;
 }
 
-void TrtBuilder::VisitExpr_(const VarNode* node) {
+void TensorRTBuilder::VisitExpr_(const VarNode* node) {
   const int id = TrackVarNode(node);
 
   const std::string& tensor_name = node->name_hint();
@@ -246,16 +253,19 @@ void TrtBuilder::VisitExpr_(const VarNode* node) {
   node_output_map_[node] = {TrtOpInput(input)};
 }
 
-void TrtBuilder::VisitExpr_(const ConstantNode* node) {
+void TensorRTBuilder::VisitExpr_(const ConstantNode* node) {
   nvinfer1::Weights weight = GetNdArrayAsWeights(node->data, kDLCPU);
-  nvinfer1::Dims dims = VectorToTrtDims(node->data.Shape());
+  auto shape = node->data.Shape();
+  // Remove batch dim.
+  if (shape[0] == 1) shape.erase(shape.begin());
+  nvinfer1::Dims dims = VectorToTrtDims(shape);
   auto const_layer = network_->addConstant(dims, weight);
   CHECK(const_layer != nullptr);
   node_output_map_[node] = {TrtOpInput(const_layer->getOutput(0))};
 }
 
-void TrtBuilder::VisitExpr_(const CallNode* call) {
-  AddTrtLayerParams params(network_, call);
+void TensorRTBuilder::VisitExpr_(const CallNode* call) {
+  AddTrtLayerParams params(network_, call, trt_weights_);
   // Look up converter.
   auto it = GetOpConverters()->find(params.op_name);
   CHECK(it != GetOpConverters()->end())
@@ -320,7 +330,7 @@ void TrtBuilder::VisitExpr_(const CallNode* call) {
   }
 }
 
-int TrtBuilder::TrackVarNode(const VarNode* node) {
+int TensorRTBuilder::TrackVarNode(const VarNode* node) {
   // TODO(trevmorr): make more robust
   const int trim_length = std::string("tensorrt_input").length();
   int var_node_idx =
@@ -328,8 +338,9 @@ int TrtBuilder::TrackVarNode(const VarNode* node) {
   return var_node_idx;
 }
 
-void TrtBuilder::CleanUp() {
+void TensorRTBuilder::CleanUp() {
   network_->destroy();
+  builder_->destroy();
   for (auto weight : trt_weights_) {
     if (weight.type == nvinfer1::DataType::kFLOAT) {
       delete[] static_cast<const float*>(weight.values);

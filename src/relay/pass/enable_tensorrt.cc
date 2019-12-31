@@ -505,13 +505,15 @@ class TrtEnabler : public ExprMutator {
     }
     auto subgraph_func =
         FunctionNode::make(params, body, body->checked_type_, {}, Attrs());
-    std::string name = "subgraph_0";
-    subgraph_func = FunctionSetAttr(subgraph_func, "func_name",
-                                    tvm::ir::StringImm::make(name));
+    // std::string name = "subgraph_0";
+    // subgraph_func = FunctionSetAttr(subgraph_func, "func_name",
+    //                                 tvm::ir::StringImm::make(name));
     subgraph_func =
         FunctionSetAttr(subgraph_func, "Primitive", tvm::Integer(1));
-    subgraph_func = FunctionSetAttr(subgraph_func, "External",
+    subgraph_func = FunctionSetAttr(subgraph_func, "Compiler",
                                     tvm::ir::StringImm::make("tensorrt"));
+    subgraph_func = FunctionSetAttr(subgraph_func, "ExternalSymbol",
+                                    tvm::ir::StringImm::make("tensorrt_0"));
     auto call = CallNode::make(subgraph_func, args);
 
     // Build outer func
@@ -570,7 +572,7 @@ Pass EnableTrt(int trt_ver_major, int trt_ver_minor, int trt_ver_patch) {
       tvm::runtime::Registry::Get("relay._transform.RemoveUnusedFunctions");
   Array<tvm::Expr> entry_functions{tvm::Expr{"main"}};
   // auto pass = "relay._transform.RemoveUnusedFunctions"
-  return Sequential({(*remove_unused)(entry_functions), FixPyTorchAddmm(),
+  return Sequential({(*remove_unused)(entry_functions), FoldConstant(), FixPyTorchAddmm(),
                      enable_trt, InferType()});
 }
 

@@ -1,68 +1,88 @@
-/* * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
-#ifndef TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_EXECUTOR_H_
-#define TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_EXECUTOR_H_
-
 #include <stdlib.h>
 #include <tvm/node/serialization.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/type.h>
 #include <tvm/runtime/ndarray.h>
 
+#include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "trt_builder.h"
+#include "../../file_util.h"
+#include "tensorrt_builder.h"
+#include "tensorrt_module.h"
 
 #include "NvInfer.h"
 
 namespace tvm {
-namespace relay {
-namespace contrib {
+namespace runtime {
 
-// Logger for TensorRT info/warning/errors
-class TrtExecutor {
+class TensorRTModule : public runtime::ModuleNode {
  public:
-  runtime::PackedFunc GetFunction(const std::string& id,
-                                  const std::string& serialized_subgraph) {
+  explicit TensorRTModule(const std::string& serialized_subgraph)
+      : serialized_subgraph_(serialized_subgraph) {}
+
+  ~TensorRTModule() {
+    for (auto& it : trt_engine_cache_) {
+      it.second.context->destroy();
+      it.second.engine->destroy();
+    }
+  }
+
+  PackedFunc GetFunction(const std::string& name,
+                         const ObjectPtr<Object>& sptr_to_self) final {
     // Generate an external packed function
-    return PackedFunc([this, id, &serialized_subgraph](tvm::TVMArgs args,
-                                                       tvm::TVMRetValue* rv) {
-      auto it = trt_engine_cache_.find(id);
+    return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+      auto it = trt_engine_cache_.find(name);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
-        LOG(INFO) << "Building new TensorRT engine for subgraph " << id;
-        auto expr = Downcast<Expr>(LoadJSON(serialized_subgraph));
+        LOG(INFO) << "Building new TensorRT engine for subgraph " << name;
+        auto expr = Downcast<relay::Expr>(LoadJSON(this->serialized_subgraph_));
 
         auto inputs = ConvertInputs(args);
-        auto builder = TrtBuilder(inputs);
+        auto builder = relay::contrib::TensorRTBuilder(inputs);
         auto engine_and_context = builder.BuildEngine(expr);
         LOG(INFO) << "Finished building engine";
-        this->trt_engine_cache_[id] = engine_and_context;
+        this->trt_engine_cache_[name] = engine_and_context;
       }
 
-      auto engine_and_context = this->trt_engine_cache_[id];
+      auto engine_and_context = this->trt_engine_cache_[name];
       this->ExecuteEngine(engine_and_context, args, rv);
     });
   }
 
+  const char* type_key() const { return "tensorrt"; }
+
+  void SaveToFile(const std::string& file_name,
+                  const std::string& format) final {
+    std::string fmt = runtime::GetFileFormat(file_name, format);
+    CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
+    SaveBinaryToFile(file_name, serialized_subgraph_);
+  }
+
+  void SaveToBinary(dmlc::Stream* stream) final {
+    stream->Write(serialized_subgraph_);
+  }
+
+  static Module LoadFromFile(const std::string& path) {
+    std::ifstream filep(path);
+    filep.seekg(0, std::ios::end);
+    size_t size = filep.tellg();
+    std::string serialized_subgraph(size, ' ');
+    filep.seekg(0);
+    filep.read(&serialized_subgraph[0], size);
+    return TensorRTModuleCreate(serialized_subgraph);
+  }
+
+  static Module LoadFromBinary(void* strm) {
+    dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
+    std::string serialized_subgraph;
+    stream->Read(&serialized_subgraph);
+    return TensorRTModuleCreate(serialized_subgraph);
+  }
+
  private:
+  std::string serialized_subgraph_;
   std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
 
   // Convert TVMArgs to make compatible with VM or graph runtime.
@@ -127,8 +147,18 @@ class TrtExecutor {
   }
 };
 
-}  // namespace contrib
-}  // namespace relay
-}  // namespace tvm
+Module TensorRTModuleCreate(const std::string& serialized_subgraph) {
+  auto n = make_object<TensorRTModule>(serialized_subgraph);
+  return Module(n);
+}
 
-#endif  // TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_EXECUTOR_H_
+TVM_REGISTER_GLOBAL("module.loadfile_tensorrt")
+.set_body([](TVMArgs args, TVMRetValue* rv) {
+  *rv = TensorRTModule::LoadFromFile(args[0]);
+});
+
+TVM_REGISTER_GLOBAL("module.loadbinary_tensorrt")
+.set_body_typed(TensorRTModule::LoadFromBinary);
+
+}  // namespace runtime
+}  // namespace tvm

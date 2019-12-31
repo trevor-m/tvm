@@ -1044,14 +1044,21 @@ def GetTrtVersion():
     """
     return tuple(map(int, _transform.GetTrtVersion()))
 
-def EnableTrt(trt_version=None):
+def EnableTrt(mod, params=None, trt_version=None):
     """Converts the entire relay program into one that can be executed using
     TensorRT. If any of the operators are not supported by the TensorRT
     conversion, the unmodified program will be returned instead.
 
     Parameters
     ----------
-    passes : Optional[Tuple[int]]
+    mod: Module
+        The original module.
+
+    params : dict of str to NDArray
+        Input parameters to the graph that do not change
+        during inference time. Used for constant folding.
+
+    trt_version : Optional[Tuple[int]]
         Which version of TensorRT to target for partitioning as a tuple of
         (major, minor, patch). If not specified, will attempt to get using
         GetTrtVersion.
@@ -1061,6 +1068,43 @@ def EnableTrt(trt_version=None):
     ret: tvm.relay.Pass
         The registered pass that partitions the Relay program.
     """
+    def _bind_params(func, params):
+        """Bind the params to the expression.
+        """
+        name_dict = {}
+        for arg in func.params:
+            name = arg.name_hint
+            if name in name_dict:
+                name_dict[name] = None
+            else:
+                name_dict[name] = arg
+        bind_dict = {}
+        for k, v in params.items():
+            if k not in name_dict:
+                continue
+            arg = name_dict[k]
+            if arg is None:
+                raise ValueError("Multiple args in the function have name %s" % k)
+            bind_dict[arg] = relay.expr.const(v)
+        return relay.expr.bind(func, bind_dict)
+
+    def legalize_layout_transform(attrs, inputs, types):
+        data = inputs[0]
+        src_layout = attrs['src_layout']
+        dst_layout = attrs['dst_layout']
+        if src_layout == "NCHW" and dst_layout == "NHWC":
+            return relay.transpose(data, axes=[0, 2, 3, 1])
+        elif src_layout == "NHWC" and dst_layout == "NCHW":
+            return relay.transpose(data, axes=[0, 3, 1, 2])
+        elif src_layout == "HWIO" and dst_layout == "OIHW":
+            return relay.transpose(data, axes=[3, 2, 0, 1])
+        elif src_layout == "HWOI" and dst_layout == "OIHW":
+            return relay.transpose(data, axes=[2, 3, 0, 1])
+        # may be uneeded
+        elif src_layout == "HWIO" and dst_layout == "IOHW":
+            return relay.transpose(data, axes=[2, 3, 0, 1])
+        return None
+
     if not trt_version:
         trt_version = GetTrtVersion()
         # If TVM wasn't built against TRT, default to TRT 6.
@@ -1071,4 +1115,16 @@ def EnableTrt(trt_version=None):
                         "list/tuple.")
     if len(trt_version) != 3:
         raise TypeError("trt_version is expected to contain 3 elements.")
-    return _transform.EnableTrt(*trt_version)
+
+    # Apply Layout transform
+    mod = relay.transform.RemoveUnusedFunctions()(mod)
+    mod = relay.transform.InferType()(mod)
+    mod = relay.transform.ConvertLayout('NCHW')(mod)
+    from tvm.relay.testing.temp_op_attr import TempOpAttr
+    with TempOpAttr("layout_transform", "FTVMLegalize", legalize_layout_transform):
+        mod = relay.transform.Legalize()(mod)
+
+    if params:
+        # Bind params so that we can use FoldConstant.
+        mod['main'] = _bind_params(mod['main'], params)
+    return _transform.EnableTrt(*trt_version)(mod)

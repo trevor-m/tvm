@@ -16,8 +16,8 @@
  * under the License.
  */
 
-#ifndef TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_BUILDER_H_
-#define TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_BUILDER_H_
+#ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
+#define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
 
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/type.h>
@@ -34,11 +34,10 @@
   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
   NV_TENSORRT_PATCH >= patch))
 
-#include "trt_logger.h"
+#include "tensorrt_logger.h"
 
 namespace tvm {
-namespace relay {
-namespace contrib {
+namespace runtime {
 
 struct TrtEngineAndContext {
   nvinfer1::ICudaEngine* engine;
@@ -46,6 +45,11 @@ struct TrtEngineAndContext {
   std::unordered_map<int, std::string> network_input_map;
   std::vector<std::string> network_outputs;
 };
+
+}  // namespace runtime
+
+namespace relay {
+namespace contrib {
 
 enum TrtInputType {
   kTensor,
@@ -69,9 +73,9 @@ struct TrtOpInput {
 
 // An ExprVisitor to convert a relay expression into a TensorRT engine and
 // execution context.
-class TrtBuilder : public ExprVisitor {
+class TensorRTBuilder : public ExprVisitor {
  public:
-  explicit TrtBuilder(const std::vector<DLTensor*>& args);
+  explicit TensorRTBuilder(const std::vector<DLTensor*>& args);
 
   void VisitExpr_(const VarNode* node) final;
 
@@ -84,7 +88,7 @@ class TrtBuilder : public ExprVisitor {
   void VisitExpr_(const CallNode* call) final;
 
   // Convert Expr into TensorRT.
-  TrtEngineAndContext BuildEngine(const Expr& expr);
+  runtime::TrtEngineAndContext BuildEngine(const Expr& expr);
 
  private:
   nvinfer1::Weights GetNdArrayAsWeights(const runtime::NDArray& array,
@@ -115,7 +119,7 @@ class TrtBuilder : public ExprVisitor {
   std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
 
   // TensorRT builder and network definition.
-  TrtLogger logger_;
+  runtime::TensorRTLogger logger_;
   nvinfer1::IBuilder* builder_;
   nvinfer1::INetworkDefinition* network_;
 
@@ -143,4 +147,4 @@ void TransposeCKtoKC(const std::vector<int>& original_shape,
 }  // namespace relay
 }  // namespace tvm
 
-#endif  // TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_BUILDER_H_
+#endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_

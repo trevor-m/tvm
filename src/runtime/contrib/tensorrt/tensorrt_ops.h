@@ -16,13 +16,13 @@
  * under the License.
  */
 
-#ifndef TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_OPS_H_
-#define TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_OPS_H_
+#ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
+#define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
 
+#include <tvm/relay/attrs/image.h>
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/attrs/transform.h>
-#include <tvm/relay/attrs/image.h>
 
 #include <string>
 #include <unordered_map>
@@ -41,9 +41,12 @@ struct AddTrtLayerParams {
   std::string op_name;
   std::vector<TrtOpInput> inputs;
   std::vector<nvinfer1::ITensor*> outputs;
+  // Any newly allocated weights should be stored here also.
+  std::vector<nvinfer1::Weights>& trt_weights;
 
-  AddTrtLayerParams(nvinfer1::INetworkDefinition* network, const CallNode* call)
-      : network(network), call(call) {
+  AddTrtLayerParams(nvinfer1::INetworkDefinition* network, const CallNode* call,
+                    std::vector<nvinfer1::Weights>& trt_weights)
+      : network(network), call(call), trt_weights(trt_weights) {
     op_name = (call->op.as<OpNode>())->name;
   }
 };
@@ -270,13 +273,14 @@ class BatchNormOpConverter : public TrtOpConverter {
     CHECK(bn_attr->axis == 1 || bn_attr->axis == 3);
     const bool need_transpose = bn_attr->axis == 3;
 
-    // TODO(trevmorr): Track these weights in trt_weights_
-    void* weight_scale_ptr = malloc(sizeof(float) * gamma.count);
+    void* weight_scale_ptr = new float[gamma.count];
     nvinfer1::Weights weight_scale{nvinfer1::DataType::kFLOAT, weight_scale_ptr,
                                    gamma.count};
-    void* weight_shift_ptr = malloc(sizeof(float) * gamma.count);
+    params->trt_weights.push_back(weight_scale);
+    void* weight_shift_ptr = new float[gamma.count];
     nvinfer1::Weights weight_shift{nvinfer1::DataType::kFLOAT, weight_shift_ptr,
                                    gamma.count};
+    params->trt_weights.push_back(weight_shift);
     nvinfer1::Weights power{nvinfer1::DataType::kFLOAT, nullptr, 0};
 
     // fill in the content of weights for the Scale layer
@@ -832,10 +836,10 @@ class ResizeOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<ResizeAttrs>();
-    static const std::unordered_map<std::string, nvinfer1::ResizeMode>
-        op_map = {
-          {"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
-          {"bilinear", nvinfer1::ResizeMode::kLINEAR},
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode> op_map =
+        {
+            {"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
+            {"bilinear", nvinfer1::ResizeMode::kLINEAR},
         };
     auto it = op_map.find(attrs->method);
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
@@ -865,4 +869,4 @@ class ResizeOpConverter : public TrtOpConverter {
 }  // namespace relay
 }  // namespace tvm
 
-#endif  // TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_OPS_H_
+#endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_

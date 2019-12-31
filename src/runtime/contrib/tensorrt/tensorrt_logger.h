@@ -16,20 +16,19 @@
  * under the License.
  */
 
-#ifndef TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_LOGGER_H_
-#define TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_LOGGER_H_
+#ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
+#define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
 
 #include "NvInfer.h"
 
 namespace tvm {
-namespace relay {
-namespace contrib {
+namespace runtime {
 
 // Logger for TensorRT info/warning/errors
-class TrtLogger : public nvinfer1::ILogger {
+class TensorRTLogger : public nvinfer1::ILogger {
  public:
-  TrtLogger() : TrtLogger(Severity::kWARNING) {}
-  explicit TrtLogger(Severity severity) : reportable_severity(severity) {}
+  TensorRTLogger() : TensorRTLogger(Severity::kWARNING) {}
+  explicit TensorRTLogger(Severity severity) : reportable_severity(severity) {}
   void log(Severity severity, const char* msg) override {
     // suppress messages with severity enum value greater than the reportable
     if (severity > reportable_severity) return;
@@ -62,8 +61,7 @@ class TrtLogger : public nvinfer1::ILogger {
   Severity reportable_severity{Severity::kWARNING};
 };
 
-}  // namespace contrib
-}  // namespace relay
+}  // namespace runtime
 }  // namespace tvm
 
-#endif  // TVM_RELAY_BACKEND_CONTRIB_TENSORRT_TRT_LOGGER_H_
+#endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
