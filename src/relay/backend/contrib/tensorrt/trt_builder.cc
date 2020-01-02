@@ -83,6 +83,9 @@ GetOpConverters() {
             {"floor", std::make_shared<UnaryOpConverter>()},
             {"strided_slice", std::make_shared<StridedSliceOpConverter>()},
 #endif
+#if TRT_VERSION_GE(6, 0, 1)
+            {"image.resize", std::make_shared<ResizeOpConverter>()},
+#endif
       });
   return map;
 }

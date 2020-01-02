@@ -21,6 +21,7 @@
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/attrs/transform.h>
+#include <tvm/relay/attrs/image.h>
 #include <tvm/relay/expr.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
@@ -114,10 +115,14 @@ static const std::unordered_set<std::string> trt_base_compatible_ops = {
     {"contrib.adaptive_max_pool2d"},
     {"contrib.adaptive_avg_pool2d"}};
 
-// Ops which are supported by TRT 5.1.5+
+// Ops which require TRT 5.1.5+
 static const std::unordered_set<std::string> trt_5_1_5_compatible_ops = {
     {"clip"}, {"nn.leaky_relu"}, {"sin"},   {"cos"},
     {"atan"}, {"ceil"},          {"floor"}, {"strided_slice"}};
+
+// Ops which require TRT 6.0.1+
+static const std::unordered_set<std::string> trt_6_0_1_compatible_ops = {
+    {"image.resize"}};
 
 bool TrtVersionGe(const std::tuple<int, int, int>& curr_version, int major,
                   int minor, int patch) {
@@ -125,7 +130,7 @@ bool TrtVersionGe(const std::tuple<int, int, int>& curr_version, int major,
   if (std::get<0>(curr_version) == major && std::get<1>(curr_version) > minor)
     return true;
   if (std::get<0>(curr_version) == major &&
-      std::get<1>(curr_version) == minor && std::get<2>(curr_version) > patch)
+      std::get<1>(curr_version) == minor && std::get<2>(curr_version) >= patch)
     return true;
   return false;
 }
@@ -153,6 +158,11 @@ class TrtChecker : public ExprVisitor {
       // Add TRT 5.1.5 ops to whitelist.
       trt_compatible_ops.insert(trt_5_1_5_compatible_ops.begin(),
                                 trt_5_1_5_compatible_ops.end());
+    }
+    if (TrtVersionGe(trt_version_, 6, 0, 1)) {
+      // Add TRT 6.0.1 ops to whitelist.
+      trt_compatible_ops.insert(trt_6_0_1_compatible_ops.begin(),
+                                trt_6_0_1_compatible_ops.end());
     }
   }
 
@@ -424,6 +434,14 @@ class TrtChecker : public ExprVisitor {
               attrs->output_size[1].as<IntImm>()->value != 1))) {
           compatible_ = false;
           LOG(INFO) << op_name << " not supported: output size must be (1, 1).";
+        }
+      }
+    }
+    if (op_name == "resize") {
+      if (const auto* attrs = call->attrs.as<ResizeAttrs>()) {
+        if (attrs->method != "nearest_neighbor" && attrs->method != "bilinear") {
+          compatible_ = false;
+          LOG(INFO) << op_name << " not supported: method must be nearest_neighor or bilinear";
         }
       }
     }

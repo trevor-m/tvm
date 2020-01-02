@@ -68,7 +68,7 @@ class TrtExecutor {
   // Convert TVMArgs to make compatible with VM or graph runtime.
   std::vector<DLTensor*> ConvertInputs(tvm::TVMArgs args) {
     std::vector<DLTensor*> inputs(args.size(), nullptr);
-    for (int i = 0; i < args.size(); i++) {
+    for (size_t i = 0; i < args.size(); i++) {
       if (args[i].type_code() == kNDArrayContainer) {
         // Relay Debug/VM uses NDArray
         runtime::NDArray array = args[i];
@@ -108,7 +108,7 @@ class TrtExecutor {
     }
     // Set outputs.
     // TODO(trevmorr): Allow multiple outputs.
-    for (int i = 0; i < num_outputs; ++i) {
+    for (size_t i = 0; i < num_outputs; ++i) {
       const int index_in_inputs = inputs.size() - num_outputs + i;
       DLTensor* out_arg = inputs[index_in_inputs];
       int binding_index = engine->getBindingIndex(

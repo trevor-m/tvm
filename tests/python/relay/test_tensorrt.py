@@ -308,6 +308,12 @@ def test_tensorrt_ops():
         f = relay.Function([x], out)
         return f, {'x': x_shape}
 
+    def test_resize(x_shape=(1, 3, 16, 16), out_size=(32, 32), layout='NCHW', method='nearest_neighbor', align_corners=True):
+        x = relay.var('x', shape=(x_shape), dtype='float32')
+        out = relay.image.resize(x, out_size, layout=layout, method=method, align_corners=align_corners)
+        f = relay.Function([x], out)
+        return f, {'x': x_shape}
+
     run_and_verify(test_clip())
     run_and_verify(test_leaky_relu())
     run_and_verify(test_batch_norm((1, 64, 56, 56), (64,)))
@@ -385,6 +391,12 @@ def test_tensorrt_ops():
     for op in [relay.contrib.adaptive_max_pool2d, relay.contrib.adaptive_avg_pool2d]:
         run_and_verify(test_adaptive_pool2d(op))
         # run_and_verify(test_adaptive_pool2d(op, out_size=(6, 6)))
+    for x_shape, layout in [((1, 3, 16, 16), 'NCHW'), ((1, 16, 16, 3), 'NHWC')]:
+        for out_size in [(32, 32), (40, 40), (5, 21)]:
+            for method in ['nearest_neighbor', 'bilinear']:
+                for align_corners in [False]:
+                    # TODO(trevmorr): align_corners True gives incorrect results.
+                    run_and_verify(test_resize(x_shape, out_size, layout, method, align_corners))
 
 @pytest.mark.skip("skip because CI doesn't have mxnet")
 def test_tensorrt_integration():

@@ -22,6 +22,7 @@
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/attrs/transform.h>
+#include <tvm/relay/attrs/image.h>
 
 #include <string>
 #include <unordered_map>
@@ -814,6 +815,43 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
     params->outputs.push_back(pool_layer->getOutput(0));
   }
 };
+
+#if TRT_VERSION_GE(6, 0, 1)
+class ResizeOpConverter : public TrtOpConverter {
+ public:
+  ResizeOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    const auto* attrs = params->call->attrs.as<ResizeAttrs>();
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode>
+        op_map = {
+          {"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
+          {"bilinear", nvinfer1::ResizeMode::kLINEAR},
+        };
+    auto it = op_map.find(attrs->method);
+    CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
+    CHECK_EQ(attrs->size.size(), 2);
+    auto output_dims = TrtDimsToVector(input->getDimensions());
+    CHECK_EQ(output_dims.size(), 3);
+    CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
+    if (attrs->layout == "NCHW") {
+      output_dims[1] = attrs->size[0].as<IntImm>()->value;
+      output_dims[2] = attrs->size[1].as<IntImm>()->value;
+    } else if (attrs->layout == "NHWC") {
+      output_dims[0] = attrs->size[0].as<IntImm>()->value;
+      output_dims[1] = attrs->size[1].as<IntImm>()->value;
+    }
+
+    nvinfer1::IResizeLayer* resize_layer = params->network->addResize(*input);
+    CHECK(resize_layer != nullptr);
+    resize_layer->setResizeMode(it->second);
+    resize_layer->setOutputDimensions(VectorToTrtDims(output_dims));
+    resize_layer->setAlignCorners(attrs->align_corners);
+    params->outputs.push_back(resize_layer->getOutput(0));
+  }
+};
+#endif  // TRT_VERSION_GE(6, 0, 1)
 
 }  // namespace contrib
 }  // namespace relay
