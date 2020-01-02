@@ -16,6 +16,7 @@
  * under the License.
  */
 
+#include <memory>
 #include <string>
 
 #include "trt_builder.h"
@@ -26,55 +27,61 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-const std::unordered_map<std::string, TrtOpConverter*>* GetOpConverters() {
+const std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>*
+GetOpConverters() {
   static auto* const map =
-      new std::unordered_map<std::string, TrtOpConverter*>({
-        {"nn.relu", new ActivationOpConverter()},
-            {"sigmoid", new ActivationOpConverter()},
-            {"tanh", new ActivationOpConverter()},
-            {"nn.batch_norm", new BatchNormOpConverter()},
-            {"nn.softmax", new SoftmaxOpConverter()},
-            {"nn.conv2d", new Conv2DOpConverter()},
-            {"nn.dense", new DenseOpConverter()},
-            {"nn.bias_add", new BiasAddOpConverter()},
-            {"add", new ElementWiseBinaryOpConverter()},
-            {"subtract", new ElementWiseBinaryOpConverter()},
-            {"multiply", new ElementWiseBinaryOpConverter()},
-            {"divide", new ElementWiseBinaryOpConverter()},
-            {"power", new ElementWiseBinaryOpConverter()},
-            {"nn.max_pool2d", new PoolingOpConverter()},
-            {"nn.avg_pool2d", new PoolingOpConverter()},
-            {"nn.global_max_pool2d", new GlobalPoolingOpConverter()},
-            {"nn.global_avg_pool2d", new GlobalPoolingOpConverter()},
-            {"exp", new UnaryOpConverter()},
-            {"log", new UnaryOpConverter()},
-            {"sqrt", new UnaryOpConverter()},
-            {"abs", new UnaryOpConverter()},
-            {"negative", new UnaryOpConverter()},
-            {"nn.batch_flatten", new BatchFlattenOpConverter()},
-            {"expand_dims", new ExpandDimsOpConverter()},
-            {"squeeze", new SqueezeOpConverter()},
-            {"concatenate", new ConcatOpConverter()},
-            {"nn.conv2d_transpose", new Conv2DTransposeOpConverter()},
-            {"transpose", new TransposeOpConverter()},
-            {"reshape", new ReshapeOpConverter()},
-            {"nn.pad", new PadOpConverter()},
-            {"sum", new ReduceOpConverter()},
-            {"prod", new ReduceOpConverter()},
-            {"max", new ReduceOpConverter()},
-            {"min", new ReduceOpConverter()},
-            {"mean", new ReduceOpConverter()},
-            {"contrib.adaptive_max_pool2d", new AdaptivePoolingOpConverter()},
-            {"contrib.adaptive_avg_pool2d", new AdaptivePoolingOpConverter()},
+      new std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>({
+        {"nn.relu", std::make_shared<ActivationOpConverter>()},
+            {"sigmoid", std::make_shared<ActivationOpConverter>()},
+            {"tanh", std::make_shared<ActivationOpConverter>()},
+            {"nn.batch_norm", std::make_shared<BatchNormOpConverter>()},
+            {"nn.softmax", std::make_shared<SoftmaxOpConverter>()},
+            {"nn.conv2d", std::make_shared<Conv2DOpConverter>()},
+            {"nn.dense", std::make_shared<DenseOpConverter>()},
+            {"nn.bias_add", std::make_shared<BiasAddOpConverter>()},
+            {"add", std::make_shared<ElementWiseBinaryOpConverter>()},
+            {"subtract", std::make_shared<ElementWiseBinaryOpConverter>()},
+            {"multiply", std::make_shared<ElementWiseBinaryOpConverter>()},
+            {"divide", std::make_shared<ElementWiseBinaryOpConverter>()},
+            {"power", std::make_shared<ElementWiseBinaryOpConverter>()},
+            {"nn.max_pool2d", std::make_shared<PoolingOpConverter>()},
+            {"nn.avg_pool2d", std::make_shared<PoolingOpConverter>()},
+            {"nn.global_max_pool2d",
+             std::make_shared<GlobalPoolingOpConverter>()},
+            {"nn.global_avg_pool2d",
+             std::make_shared<GlobalPoolingOpConverter>()},
+            {"exp", std::make_shared<UnaryOpConverter>()},
+            {"log", std::make_shared<UnaryOpConverter>()},
+            {"sqrt", std::make_shared<UnaryOpConverter>()},
+            {"abs", std::make_shared<UnaryOpConverter>()},
+            {"negative", std::make_shared<UnaryOpConverter>()},
+            {"nn.batch_flatten", std::make_shared<BatchFlattenOpConverter>()},
+            {"expand_dims", std::make_shared<ExpandDimsOpConverter>()},
+            {"squeeze", std::make_shared<SqueezeOpConverter>()},
+            {"concatenate", std::make_shared<ConcatOpConverter>()},
+            {"nn.conv2d_transpose",
+             std::make_shared<Conv2DTransposeOpConverter>()},
+            {"transpose", std::make_shared<TransposeOpConverter>()},
+            {"reshape", std::make_shared<ReshapeOpConverter>()},
+            {"nn.pad", std::make_shared<PadOpConverter>()},
+            {"sum", std::make_shared<ReduceOpConverter>()},
+            {"prod", std::make_shared<ReduceOpConverter>()},
+            {"max", std::make_shared<ReduceOpConverter>()},
+            {"min", std::make_shared<ReduceOpConverter>()},
+            {"mean", std::make_shared<ReduceOpConverter>()},
+            {"contrib.adaptive_max_pool2d",
+             std::make_shared<AdaptivePoolingOpConverter>()},
+            {"contrib.adaptive_avg_pool2d",
+             std::make_shared<AdaptivePoolingOpConverter>()},
 #if TRT_VERSION_GE(5, 1, 5)
-            {"clip", new ActivationOpConverter()},
-            {"nn.leaky_relu", new ActivationOpConverter()},
-            {"sin", new UnaryOpConverter()},
-            {"cos", new UnaryOpConverter()},
-            {"atan", new UnaryOpConverter()},
-            {"ceil", new UnaryOpConverter()},
-            {"floor", new UnaryOpConverter()},
-            {"strided_slice", new StridedSliceOpConverter()},
+            {"clip", std::make_shared<ActivationOpConverter>()},
+            {"nn.leaky_relu", std::make_shared<ActivationOpConverter>()},
+            {"sin", std::make_shared<UnaryOpConverter>()},
+            {"cos", std::make_shared<UnaryOpConverter>()},
+            {"atan", std::make_shared<UnaryOpConverter>()},
+            {"ceil", std::make_shared<UnaryOpConverter>()},
+            {"floor", std::make_shared<UnaryOpConverter>()},
+            {"strided_slice", std::make_shared<StridedSliceOpConverter>()},
 #endif
       });
   return map;
@@ -256,7 +263,7 @@ void TrtBuilder::VisitExpr_(const CallNode* call) {
   auto it = GetOpConverters()->find(params.op_name);
   CHECK(it != GetOpConverters()->end())
       << "Unsupported operator conversion to TRT, op name: " << params.op_name;
-  const TrtOpConverter* converter = it->second;
+  const auto converter = it->second;
 
   // Ensure that nodes are processed in topological order by visiting their
   // inputs first.

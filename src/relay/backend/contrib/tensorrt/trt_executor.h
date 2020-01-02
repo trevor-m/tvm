@@ -91,9 +91,10 @@ class TrtExecutor {
     std::vector<void*> bindings(num_bindings, nullptr);
     // Set inputs.
     auto inputs = ConvertInputs(args);
-    const int num_outputs = engine_and_context.network_outputs.size();
+    const size_t num_outputs = engine_and_context.network_outputs.size();
+    CHECK_GT(inputs.size(), num_outputs);
     // TODO(trevmorr): Assumes output is at the end - is this true?
-    for (int i = 0; i < inputs.size() - num_outputs; ++i) {
+    for (size_t i = 0; i < inputs.size() - num_outputs; ++i) {
       auto it = engine_and_context.network_input_map.find(i);
       if (it != engine_and_context.network_input_map.end()) {
         DLTensor* arg = inputs[i];

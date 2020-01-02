@@ -101,8 +101,8 @@ def test_tensorrt_ops():
         mod = relay.Module()
         mod['main'] = f
         with relay.build_config(opt_level=1):
-            graph, lib, params = relay.build(mod, "llvm")
-        mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+            graph, lib, params = relay.build(mod, "cuda")
+        mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
         mod.run(**input_dict)
         ref_results = [mod.get_output(i) for i in range(mod.get_num_outputs())]
         
@@ -472,6 +472,8 @@ def test_tensorrt_integration():
         print(model, latency[model])
 
 if __name__ == '__main__':
+    # from tvm import module as _tvm_module
+    # x = _tvm_module.create_trt_module("hello")
     test_tensorrt_ops()
     test_tensorrt_simple()
     test_tensorrt_not_compatible()
