@@ -27,66 +27,60 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-const std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>*
+const std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>
 GetOpConverters() {
-  static auto* const map =
-      new std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>({
-        {"nn.relu", std::make_shared<ActivationOpConverter>()},
-            {"sigmoid", std::make_shared<ActivationOpConverter>()},
-            {"tanh", std::make_shared<ActivationOpConverter>()},
-            {"nn.batch_norm", std::make_shared<BatchNormOpConverter>()},
-            {"nn.softmax", std::make_shared<SoftmaxOpConverter>()},
-            {"nn.conv2d", std::make_shared<Conv2DOpConverter>()},
-            {"nn.dense", std::make_shared<DenseOpConverter>()},
-            {"nn.bias_add", std::make_shared<BiasAddOpConverter>()},
-            {"add", std::make_shared<ElementWiseBinaryOpConverter>()},
-            {"subtract", std::make_shared<ElementWiseBinaryOpConverter>()},
-            {"multiply", std::make_shared<ElementWiseBinaryOpConverter>()},
-            {"divide", std::make_shared<ElementWiseBinaryOpConverter>()},
-            {"power", std::make_shared<ElementWiseBinaryOpConverter>()},
-            {"nn.max_pool2d", std::make_shared<PoolingOpConverter>()},
-            {"nn.avg_pool2d", std::make_shared<PoolingOpConverter>()},
-            {"nn.global_max_pool2d",
-             std::make_shared<GlobalPoolingOpConverter>()},
-            {"nn.global_avg_pool2d",
-             std::make_shared<GlobalPoolingOpConverter>()},
-            {"exp", std::make_shared<UnaryOpConverter>()},
-            {"log", std::make_shared<UnaryOpConverter>()},
-            {"sqrt", std::make_shared<UnaryOpConverter>()},
-            {"abs", std::make_shared<UnaryOpConverter>()},
-            {"negative", std::make_shared<UnaryOpConverter>()},
-            {"nn.batch_flatten", std::make_shared<BatchFlattenOpConverter>()},
-            {"expand_dims", std::make_shared<ExpandDimsOpConverter>()},
-            {"squeeze", std::make_shared<SqueezeOpConverter>()},
-            {"concatenate", std::make_shared<ConcatOpConverter>()},
-            {"nn.conv2d_transpose",
-             std::make_shared<Conv2DTransposeOpConverter>()},
-            {"transpose", std::make_shared<TransposeOpConverter>()},
-            {"reshape", std::make_shared<ReshapeOpConverter>()},
-            {"nn.pad", std::make_shared<PadOpConverter>()},
-            {"sum", std::make_shared<ReduceOpConverter>()},
-            {"prod", std::make_shared<ReduceOpConverter>()},
-            {"max", std::make_shared<ReduceOpConverter>()},
-            {"min", std::make_shared<ReduceOpConverter>()},
-            {"mean", std::make_shared<ReduceOpConverter>()},
-            {"contrib.adaptive_max_pool2d",
-             std::make_shared<AdaptivePoolingOpConverter>()},
-            {"contrib.adaptive_avg_pool2d",
-             std::make_shared<AdaptivePoolingOpConverter>()},
+  static auto map = std::make_shared<std::unordered_map<std::string, std::shared_ptr<TrtOpConverter>>>();
+  if (!map->empty()) return map;
+  map->emplace("nn.relu", std::make_shared<ActivationOpConverter>());
+  map->emplace("sigmoid", std::make_shared<ActivationOpConverter>());
+  map->emplace("tanh", std::make_shared<ActivationOpConverter>());
+  map->emplace("nn.batch_norm", std::make_shared<BatchNormOpConverter>());
+  map->emplace("nn.softmax", std::make_shared<SoftmaxOpConverter>());
+  map->emplace("nn.conv2d", std::make_shared<Conv2DOpConverter>());
+  map->emplace("nn.dense", std::make_shared<DenseOpConverter>());
+  map->emplace("nn.bias_add", std::make_shared<BiasAddOpConverter>());
+  map->emplace("add", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("subtract", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("multiply", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("divide", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("power", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("nn.max_pool2d", std::make_shared<PoolingOpConverter>());
+  map->emplace("nn.avg_pool2d", std::make_shared<PoolingOpConverter>());
+  map->emplace("nn.global_max_pool2d", std::make_shared<GlobalPoolingOpConverter>());
+  map->emplace("nn.global_avg_pool2d", std::make_shared<GlobalPoolingOpConverter>());
+  map->emplace("exp", std::make_shared<UnaryOpConverter>());
+  map->emplace("log", std::make_shared<UnaryOpConverter>());
+  map->emplace("sqrt", std::make_shared<UnaryOpConverter>());
+  map->emplace("abs", std::make_shared<UnaryOpConverter>());
+  map->emplace("negative", std::make_shared<UnaryOpConverter>());
+  map->emplace("nn.batch_flatten", std::make_shared<BatchFlattenOpConverter>());
+  map->emplace("expand_dims", std::make_shared<ExpandDimsOpConverter>());
+  map->emplace("squeeze", std::make_shared<SqueezeOpConverter>());
+  map->emplace("concatenate", std::make_shared<ConcatOpConverter>());
+  map->emplace("nn.conv2d_transpose", std::make_shared<Conv2DTransposeOpConverter>());
+  map->emplace("transpose", std::make_shared<TransposeOpConverter>());
+  map->emplace("reshape", std::make_shared<ReshapeOpConverter>());
+  map->emplace("nn.pad", std::make_shared<PadOpConverter>());
+  map->emplace("sum", std::make_shared<ReduceOpConverter>());
+  map->emplace("prod", std::make_shared<ReduceOpConverter>());
+  map->emplace("max", std::make_shared<ReduceOpConverter>());
+  map->emplace("min", std::make_shared<ReduceOpConverter>());
+  map->emplace("mean", std::make_shared<ReduceOpConverter>());
+  map->emplace("contrib.adaptive_max_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
+  map->emplace("contrib.adaptive_avg_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
 #if TRT_VERSION_GE(5, 1, 5)
-            {"clip", std::make_shared<ActivationOpConverter>()},
-            {"nn.leaky_relu", std::make_shared<ActivationOpConverter>()},
-            {"sin", std::make_shared<UnaryOpConverter>()},
-            {"cos", std::make_shared<UnaryOpConverter>()},
-            {"atan", std::make_shared<UnaryOpConverter>()},
-            {"ceil", std::make_shared<UnaryOpConverter>()},
-            {"floor", std::make_shared<UnaryOpConverter>()},
-            {"strided_slice", std::make_shared<StridedSliceOpConverter>()},
+  map->emplace("clip", std::make_shared<ActivationOpConverter>());
+  map->emplace("nn.leaky_relu", std::make_shared<ActivationOpConverter>());
+  map->emplace("sin", std::make_shared<UnaryOpConverter>());
+  map->emplace("cos", std::make_shared<UnaryOpConverter>());
+  map->emplace("atan", std::make_shared<UnaryOpConverter>());
+  map->emplace("ceil", std::make_shared<UnaryOpConverter>());
+  map->emplace("floor", std::make_shared<UnaryOpConverter>());
+  map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
 #endif
 #if TRT_VERSION_GE(6, 0, 1)
-            {"image.resize", std::make_shared<ResizeOpConverter>()},
+  map->emplace("image.resize", std::make_shared<ResizeOpConverter>());
 #endif
-      });
   return map;
 }
 
