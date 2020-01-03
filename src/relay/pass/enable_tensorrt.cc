@@ -262,15 +262,12 @@ class TrtChecker : public ExprVisitor {
           LOG(INFO) << op_name << " not supported: must be NCHW.";
         }
         if (attrs->count_include_pad) {
-          if (attrs->padding.size() == 4 ||
-              (attrs->strides.size() == 2 &&
-               (attrs->strides[0].as<IntImm>()->value != 1 ||
-                attrs->strides[1].as<IntImm>()->value != 1))) {
+          if (attrs->padding.size() == 4) {
             compatible_ = false;
             LOG(INFO) << op_name
                       << " not supported: inclusive-counted blended or average "
                          "pooling is not supported in combination with "
-                         "asymmetric padding or with strides.";
+                         "asymmetric padding.";
           }
         }
         if (attrs->ceil_mode && !TrtVersionGe(trt_version_, 5, 1, 5)) {

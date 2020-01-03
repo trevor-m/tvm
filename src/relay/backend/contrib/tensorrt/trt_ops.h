@@ -428,6 +428,14 @@ class PoolingOpConverter : public TrtOpConverter {
       pool_layer->setPadding(prepadding);
     }
     if (params->op_name == "nn.avg_pool2d") {
+      // count_include_pad=True is useless if there is no padding. TRT doesn't
+      // like count_include_pad in combination with strides even when there is
+      // no padding or assymetric padding even, so turn off inclusive to avoid
+      // error message. Note: Padding will always be symmetric with
+      // count_include_pad since partitioner will prevent unsupported case.
+      if (prepadding.h() == 0 && prepadding.w() == 0) {
+        count_include_pad = false;
+      }
       pool_layer->setAverageCountExcludesPadding(!count_include_pad);
     }
 #if TRT_VERSION_GE(5, 1, 5)
