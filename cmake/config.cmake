@@ -173,8 +173,7 @@ set(USE_ROCBLAS OFF)
 set(USE_SORT ON)
 
 # Whether use TensorRT
-# /path/to/tensorrt that contains include and lib dirs or ON to find
-# automatically
+# /path/to/tensorrt that contains include and lib dirs
 set(USE_TENSORRT OFF)
 
 # Whether use MKL-DNN (DNNL) codegen
