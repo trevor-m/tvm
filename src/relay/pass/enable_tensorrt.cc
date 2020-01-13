@@ -438,11 +438,12 @@ class TrtChecker : public ExprVisitor {
         if (transpose && transpose->op.as<OpNode>()->name == "transpose") {
           if (!transpose->args[0].as<VarNode>()) {
             compatible_ = false;
-            LOG(INFO) << op_name << " not supported: most have constant weight.";
+            LOG(INFO) << op_name << " not supported: must have constant weight.";
           }
-        } else {
+        } else if (!call->args[i].as<VarNode>() &&
+                   !call->args[i].as<ConstantNode>()) {
           compatible_ = false;
-          LOG(INFO) << op_name << " not supported: most have constant weight.";
+          LOG(INFO) << op_name << " not supported: must have constant weight.";
         }
       } else {
         VisitExpr(call->args[i]);
