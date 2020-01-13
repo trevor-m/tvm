@@ -45,21 +45,16 @@ std::vector<int> TrtDimsToVector(const nvinfer1::Dims& dims) {
   return std::vector<int>(dims.d, dims.d + dims.nbDims);
 }
 
-std::vector<int> GetShape(const Type& type, bool remove_batch_dim = false) {
+std::vector<int> GetShape(const Type& type) {
   const auto* ttype = type.as<TensorTypeNode>();
-  CHECK(ttype);
-  std::vector<int> _shape;
-  // Hack to allow 1D inputs without INetworkV2.
-  if (ttype->shape.size() == 1 && remove_batch_dim) {
-    remove_batch_dim = false;
-  }
-  const int start_index = remove_batch_dim ? 1 : 0;
-  for (size_t i = start_index; i < ttype->shape.size(); ++i) {
+  CHECK(ttype) << "Expect TensorTypeNode";
+  std::vector<int> shape;
+  for (size_t i = 0; i < ttype->shape.size(); ++i) {
     auto* val = ttype->shape[i].as<IntImm>();
     CHECK(val);
-    _shape.push_back(val->value);
+    shape.push_back(val->value);
   }
-  return _shape;
+  return shape;
 }
 
 std::string DebugString(const std::vector<int>& vec) {
@@ -71,12 +66,6 @@ std::string DebugString(const std::vector<int>& vec) {
   }
   ss << ")";
   return ss.str();
-}
-
-DataType GetType(const Type& type) {
-  const auto* ttype = type.as<TensorTypeNode>();
-  CHECK(ttype);
-  return ttype->dtype;
 }
 
 }  // namespace contrib

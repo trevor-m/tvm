@@ -243,12 +243,15 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
   const int id = TrackVarNode(node);
 
   const std::string& tensor_name = node->name_hint();
-  auto shape = GetShape(node->checked_type(), /*remove_batch_dim=*/true);
+  auto shape = GetShape(node->checked_type());
+  // Remove batch dim
+  if (shape.size() > 1) shape.erase(shape.begin());
   DLOG(INFO) << "Added TRT network input: " << node->name_hint() << " "
              << DebugString(shape);
   nvinfer1::Dims dims = VectorToTrtDims(shape);
-  auto type = GetType(node->checked_type());
-  CHECK(type.is_float()) << "Only FP32 inputs are supported.";
+  auto type_node = node->checked_type().as<TensorTypeNode>();
+  CHECK(type_node != nullptr && runtime::TypeMatch(type_node->dtype, kDLFloat, 32))
+      << "Only FP32 inputs are supported.";
   auto input =
       network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
   network_input_map_[id] = tensor_name;

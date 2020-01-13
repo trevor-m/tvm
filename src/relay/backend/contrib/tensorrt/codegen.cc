@@ -33,7 +33,6 @@
 #include <fstream>
 #include <sstream>
 
-#include "../../../../runtime/contrib/tensorrt/tensorrt_module.h"
 #include "../codegen_c/codegen_c.h"
 
 namespace tvm {
@@ -57,7 +56,8 @@ class TrtModuleCodegen : public CSourceModuleCodegenBase {
       LOG(FATAL) << "The input ref is expected to be a Relay function or module"
                  << "\n";
     }
-    return runtime::TensorRTModuleCreate(serialized_subgraph);
+    const PackedFunc* pf = runtime::Registry::Get("tvm.contrib.tensorrt.create");
+    return (*pf)(serialized_subgraph);
   }
 };
 

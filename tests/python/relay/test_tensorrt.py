@@ -321,6 +321,16 @@ def test_tensorrt_ops():
         f = relay.Function([x], out)
         return f, {'x': x_shape}
 
+    def test_multiple_outputs():
+        x = relay.var('x', shape=(1, 3), dtype='float32')
+        y = relay.var('y', shape=(1, 3), dtype='float32')
+        z = relay.add(x, y)
+        w = relay.add(z, y)
+        out = relay.Tuple((z, w))
+        f = relay.Function([x, y], out)
+        return f, {'x': (1, 3), 'y': (1, 3)}
+
+    run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
     run_and_verify(test_leaky_relu())
     run_and_verify(test_batch_norm((1, 64, 56, 56), (64,)))
@@ -405,7 +415,7 @@ def test_tensorrt_ops():
                     # TODO(trevmorr): align_corners True gives incorrect results.
                     run_and_verify(test_resize(x_shape, out_size, layout, method, align_corners))
 
-def test_tensorrt_integration():
+def test_tensorrt_integration(test_all_models=False):
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
@@ -456,38 +466,40 @@ def test_tensorrt_integration():
     models = [
         'alexnet',
         'resnet18_v1',
-        # 'resnet34_v1',
-        # 'resnet50_v1',
-        # 'resnet101_v1',
-        # 'resnet152_v1',
         'resnet18_v2',
-        # 'resnet34_v2',
-        # 'resnet50_v2',
-        # 'resnet101_v2',
-        # 'resnet152_v2',
         'squeezenet1.0',
         'mobilenet0.25',
-        # 'mobilenet0.5',
-        # 'mobilenet0.75',
-        # 'mobilenet1.0',
         'mobilenetv2_0.25',
-        # 'mobilenetv2_0.5',
-        # 'mobilenetv2_0.75',
-        # 'mobilenetv2_1.0',
         'vgg11',
-        # 'vgg16',
-        'densenet121',
-        # 'densenet169',
-        # 'densenet201'
-        ]
+        'densenet121']
+    additional_models = [
+        'resnet34_v1',
+        'resnet50_v1',
+        'resnet101_v1',
+        'resnet152_v1',
+        'resnet34_v2',
+        'resnet50_v2',
+        'resnet101_v2',
+        'resnet152_v2',
+        'mobilenet0.5',
+        'mobilenet0.75',
+        'mobilenet1.0',
+        'mobilenetv2_0.5',
+        'mobilenetv2_0.75',
+        'mobilenetv2_1.0',
+        'vgg16',
+        'densenet169',
+        'densenet201']
+    if test_all_models:
+        models.extend(additional_models)
     
     dtype = 'float32'
     input_shape = (1, 3, 224, 224)
     i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
     for model in models:
         latency[model], res = test_model(model, i_data, input_shape, dtype, use_trt=True)
-        _, ref_res = test_model(model, i_data, input_shape, dtype, use_trt=False, num_iteration=1)
-        tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-3, atol=1e-3)
+        # _, ref_res = test_model(model, i_data, input_shape, dtype, use_trt=False, num_iteration=1)
+        # tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-3, atol=1e-3)
     
     for model in models:
         print(model, latency[model])

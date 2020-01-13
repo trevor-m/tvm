@@ -28,12 +28,13 @@
 #include <vector>
 #include "../../file_util.h"
 #include "tensorrt_builder.h"
-#include "tensorrt_module.h"
 
 #include "NvInfer.h"
 
 namespace tvm {
 namespace runtime {
+
+Module TensorRTModuleCreate(const std::string& serialized_subgraph);
 
 class TensorRTModule : public runtime::ModuleNode {
  public:
@@ -64,7 +65,7 @@ class TensorRTModule : public runtime::ModuleNode {
         this->trt_engine_cache_[name] = engine_and_context;
       }
 
-      auto engine_and_context = this->trt_engine_cache_[name];
+      auto& engine_and_context = this->trt_engine_cache_.at(name);
       this->ExecuteEngine(engine_and_context, args, rv);
     });
   }
@@ -145,7 +146,6 @@ class TensorRTModule : public runtime::ModuleNode {
       }
     }
     // Set outputs.
-    // TODO(trevmorr): Allow multiple outputs.
     for (size_t i = 0; i < num_outputs; ++i) {
       const int index_in_inputs = inputs.size() - num_outputs + i;
       DLTensor* out_arg = inputs[index_in_inputs];
@@ -158,9 +158,6 @@ class TensorRTModule : public runtime::ModuleNode {
     const int batch_size = inputs[0]->shape[0];
     CHECK(context->execute(batch_size, bindings.data()))
         << "Running TensorRT failed.";
-
-    // TODO(trevmorr): Look up bindings by name.
-    // TODO(trevmorr): Allow multiple outputs.
     *rv = bindings[num_bindings - num_outputs];
   }
 };
@@ -169,6 +166,11 @@ Module TensorRTModuleCreate(const std::string& serialized_subgraph) {
   auto n = make_object<TensorRTModule>(serialized_subgraph);
   return Module(n);
 }
+
+TVM_REGISTER_GLOBAL("tvm.contrib.tensorrt.create")
+.set_body([](TVMArgs args, TVMRetValue* rv) {
+  *rv = TensorRTModuleCreate(args[0]);
+});
 
 TVM_REGISTER_GLOBAL("module.loadfile_tensorrt")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
