@@ -17,6 +17,11 @@
  * under the License.
  */
 
+/*!
+ * \file runtime/contrib/tensorrt/utils.h
+ * \brief Helper functions used by TensorRTBuilder or TrtOpConverters.
+ */
+
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_UTILS_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_UTILS_H_
 
@@ -29,6 +34,11 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
+/*!
+ * \brief Helper function to convert an vector to TRT Dims.
+ * \param vec Vector.
+ * \return TRT Dims.
+ */
 template <typename T>
 nvinfer1::Dims VectorToTrtDims(const std::vector<T>& vec) {
   nvinfer1::Dims dims;
@@ -41,22 +51,20 @@ nvinfer1::Dims VectorToTrtDims(const std::vector<T>& vec) {
   return dims;
 }
 
+/*!
+ * \brief Helper function to convert TRT Dims to vector.
+ * \param vec TRT Dims.
+ * \return Vector.
+ */
 std::vector<int> TrtDimsToVector(const nvinfer1::Dims& dims) {
   return std::vector<int>(dims.d, dims.d + dims.nbDims);
 }
 
-std::vector<int> GetShape(const Type& type) {
-  const auto* ttype = type.as<TensorTypeNode>();
-  CHECK(ttype) << "Expect TensorTypeNode";
-  std::vector<int> shape;
-  for (size_t i = 0; i < ttype->shape.size(); ++i) {
-    auto* val = ttype->shape[i].as<IntImm>();
-    CHECK(val);
-    shape.push_back(val->value);
-  }
-  return shape;
-}
-
+/*!
+ * \brief Helper function to convert vector to string.
+ * \param vec Vector.
+ * \return Vector as a string.
+ */
 std::string DebugString(const std::vector<int>& vec) {
   std::ostringstream ss;
   ss << "(";

@@ -20,7 +20,7 @@ import time
 import tvm
 from tvm import relay
 import tvm.relay.testing
-import tvm.relay.transform
+import tvm.relay.tensorrt
 import pytest
 from tvm.contrib import graph_runtime
 
@@ -44,7 +44,7 @@ def test_tensorrt_simple():
 
     mod = relay.Module()
     mod['main'] = f
-    mod = relay.transform.EnableTrt(mod)
+    mod = relay.tensorrt.EnableTrt(mod)
 
     ref_mod = relay.Module()
     ref_mod['main'] = f
@@ -76,7 +76,7 @@ def test_tensorrt_not_compatible():
     f = relay.Function([x], out)
     mod = relay.Module()
     mod['main'] = f
-    mod = relay.transform.EnableTrt(mod)
+    mod = relay.tensorrt.EnableTrt(mod)
     assert not mod['main'].attrs
 
 def test_tensorrt_ops():
@@ -93,7 +93,7 @@ def test_tensorrt_ops():
         # Run TRT 
         mod = relay.Module()
         mod['main'] = f
-        mod = relay.transform.EnableTrt(mod)
+        mod = relay.tensorrt.EnableTrt(mod)
         assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
         if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
             print("skip because cuda is not enabled.")
@@ -329,7 +329,7 @@ def test_tensorrt_ops():
         out = relay.Tuple((z, w))
         f = relay.Function([x, y], out)
         return f, {'x': (1, 3), 'y': (1, 3)}
-
+    
     run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
     run_and_verify(test_leaky_relu())
@@ -436,7 +436,7 @@ def test_tensorrt_integration(test_all_models=False):
         mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
         if use_trt:
-            mod = relay.transform.EnableTrt(mod, params)
+            mod = relay.tensorrt.EnableTrt(mod, params)
             assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
             with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
                 graph, lib, params = relay.build(mod, "cuda")
@@ -516,7 +516,7 @@ def test_tensorrt_serialize():
     block = get_model('resnet18_v1', pretrained=True)
     mod, params = relay.frontend.from_mxnet(block, shape={'data': (1, 3, 224, 224)}, dtype='float32')
     # Compile
-    mod = relay.transform.EnableTrt(mod, params)
+    mod = relay.tensorrt.EnableTrt(mod, params)
     assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
     with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
         graph, lib, params = relay.build(mod, "cuda")

@@ -18,8 +18,8 @@
  */
 
 /*!
- * \file src/relay/backend/contrib/dnnl/codegen.cc
- * \brief Implementation of DNNL codegen APIs.
+ * \file src/relay/backend/contrib/tensorrt/codegen_tensorrt.cc
+ * \brief Implementation of TensorRT codegen APIs.
  */
 
 #include <tvm/node/serialization.h>
@@ -39,7 +39,13 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-class TrtModuleCodegen : public CSourceModuleCodegenBase {
+/*!
+ * \brief Generates a TensorRTModule from a relay expression. This "compilation"
+ * does not require TensorRT since the actual conversion using TensorRT APIs is
+ * deferred until runtime. This step simply serializes the relay program into a
+ * string.
+ */
+class TensorRTModuleCodegen : public CSourceModuleCodegenBase {
  public:
   runtime::Module CreateCSourceModule(const NodeRef& ref) override {
     std::string serialized_subgraph;
@@ -56,7 +62,10 @@ class TrtModuleCodegen : public CSourceModuleCodegenBase {
       LOG(FATAL) << "The input ref is expected to be a Relay function or module"
                  << "\n";
     }
-    const PackedFunc* pf = runtime::Registry::Get("tvm.contrib.tensorrt.create");
+    const PackedFunc* pf =
+        runtime::Registry::Get("tvm.contrib.tensorrt.create");
+    CHECK(pf != nullptr)
+        << "tvm.contrib.tensorrt.create was not found in the registry";
     return (*pf)(serialized_subgraph);
   }
 };
@@ -66,7 +75,7 @@ class TrtModuleCodegen : public CSourceModuleCodegenBase {
  * and compiles it into a runtime module.
  */
 runtime::Module TrtCompiler(const NodeRef& ref) {
-  TrtModuleCodegen tensorrt;
+  TensorRTModuleCodegen tensorrt;
   return tensorrt.CreateCSourceModule(ref);
 }
 

@@ -16,6 +16,11 @@
  * under the License.
  */
 
+/*!
+ * \file runtime/contrib/tensorrt/tensorrt_module.cc
+ * \brief TensorRTModule is the runtime module for tensorrt backend.
+ */
+
 #include <stdlib.h>
 #include <tvm/node/serialization.h>
 #include <tvm/relay/expr_functor.h>
@@ -34,8 +39,14 @@
 namespace tvm {
 namespace runtime {
 
+/*!
+ * \brief Create a TensorRTModule.
+ * \param serialized_subgraph Relay expr serialized with SaveJSON.
+ * \return TensorRTModule created from subgraph.
+ */
 Module TensorRTModuleCreate(const std::string& serialized_subgraph);
 
+/*! \brief A module for TensorRT runtime. */
 class TensorRTModule : public runtime::ModuleNode {
  public:
   explicit TensorRTModule(const std::string& serialized_subgraph)
@@ -63,10 +74,10 @@ class TensorRTModule : public runtime::ModuleNode {
         auto engine_and_context = builder.BuildEngine(expr);
         LOG(INFO) << "Finished building engine";
         this->trt_engine_cache_[name] = engine_and_context;
+        this->ExecuteEngine(engine_and_context, args, rv);
+      } else {
+        this->ExecuteEngine(it->second, args, rv);
       }
-
-      auto& engine_and_context = this->trt_engine_cache_.at(name);
-      this->ExecuteEngine(engine_and_context, args, rv);
     });
   }
 
@@ -101,10 +112,17 @@ class TensorRTModule : public runtime::ModuleNode {
   }
 
  private:
+  /*! \brief Relay program serialized using SaveJSON */
   std::string serialized_subgraph_;
+
+  /*! \brief Map of function name to TRT engine if built already. */
   std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
 
-  // Convert TVMArgs to make compatible with VM or graph runtime.
+  /*!
+   * \brief Convert TVMArgs to make compatible with VM or graph runtime.
+   * \param args Inputs to the PackedFunc.
+   * \return Inputs converted to vector of DLTensor*
+   */
   std::vector<DLTensor*> ConvertInputs(tvm::TVMArgs args) {
     std::vector<DLTensor*> inputs(args.size(), nullptr);
     for (size_t i = 0; i < args.size(); i++) {
@@ -122,6 +140,13 @@ class TensorRTModule : public runtime::ModuleNode {
     return inputs;
   }
 
+  /*!
+   * \brief Perform inference using TensorRT.
+   * \param engine_and_context TRT engine from TrtBuilder::BuildEngine()
+   * \param args Inputs to the PackedFunc.
+   * \param rv Return value pointer for the PackedFunc.
+   * \return Inputs converted to vector of DLTensor*
+   */
   void ExecuteEngine(const TrtEngineAndContext& engine_and_context,
                      tvm::TVMArgs args, tvm::TVMRetValue* rv) {
     auto engine = engine_and_context.engine;

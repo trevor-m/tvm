@@ -16,6 +16,12 @@
  * under the License.
  */
 
+/*!
+* \file runtime/contrib/tensorrt/tensorrt_builder.h
+* \brief Contains TensorRTBuilder class which can be used to convert a relay
+* program into a TRT engine which can be used for inference.
+*/
+
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
 
@@ -37,6 +43,10 @@
 namespace tvm {
 namespace runtime {
 
+/*!
+ * \brief The product of TensorRTBuilder which provides everything needed to
+ * perform inference.
+ */
 struct TrtEngineAndContext {
   nvinfer1::ICudaEngine* engine;
   nvinfer1::IExecutionContext* context;
@@ -49,14 +59,20 @@ struct TrtEngineAndContext {
 namespace relay {
 namespace contrib {
 
+/*!
+ * \brief An input to a op may be either kTensor in the case of nvifner::ITensor
+ * or kWeight for nvinfer1::Weights.
+ */
 enum TrtInputType {
   kTensor,
   kWeight,
 };
 
-// An input to a TrtOpConverter. The type of the input is either kTensor or
-// kWeight. For kTensor, "tensor" contains the input tensor. For kWeight,
-// "weight" contains the input weight and "weight_shape" contains the shape.
+/*!
+ * \brief An input to a TrtOpConverter. The type of the input is either kTensor
+ * or kWeight. For kTensor, "tensor" contains the input tensor. For kWeight,
+ * "weight" contains the input weight and "weight_shape" contains the shape.
+ */
 struct TrtOpInput {
   TrtInputType type;
   nvinfer1::ITensor* tensor;
@@ -69,10 +85,16 @@ struct TrtOpInput {
       : weight(weight), type(kWeight), weight_shape(shape) {}
 };
 
-// An ExprVisitor to convert a relay expression into a TensorRT engine and
-// execution context.
+/*!
+ * \brief An ExprVisitor to convert a relay expression into a TensorRT engine
+ * and execution context.
+ */
 class TensorRTBuilder : public ExprVisitor {
  public:
+  /*!
+   * \brief Create TensorRT builder.
+   * \param args Inputs to this execution.
+   */
   explicit TensorRTBuilder(const std::vector<DLTensor*>& args);
 
   void VisitExpr_(const VarNode* node) final;
@@ -85,58 +107,99 @@ class TensorRTBuilder : public ExprVisitor {
 
   void VisitExpr_(const CallNode* call) final;
 
-  // Convert Expr into TensorRT.
+  /*!
+   * \brief Convert Expr into TensorRT.
+   * \param expr The relay expression.
+   * \return TRT engine, context, and input/output information.
+   */
   runtime::TrtEngineAndContext BuildEngine(const Expr& expr);
 
  private:
+  /*!
+   * \brief Helper function fto convert NDArray to TRT Weights.
+   * \param array NDArray containing data.
+   * \param src_device Which device the data is expected to be on.
+   * \return Newly created weights
+   */
   nvinfer1::Weights GetNdArrayAsWeights(const runtime::NDArray& array,
                                         DLDeviceType src_device);
 
+  /*!
+   * \brief Helper function fto convert DLTensor to TRT Weights.
+   * \param dptr Pointer to DLTensor containing data.
+   * \param src_device Which device the data is expected to be on.
+   * \return Newly created weights
+   */
   nvinfer1::Weights GetDLTensorAsWeights(DLTensor* dptr,
                                          DLDeviceType src_device);
 
-  // Gets value from execution args and converts to constant weight stored in
-  // node_output_map_ with node as the key.
+  /*! \brief Gets value from execution args and converts to constant weight
+   * stored in node_output_map_ with node as the key. */
   void GetInputAsWeights(const VarNode* node);
 
-  // Gets value from ConstantNode data and converts to constant weight stored in
-  // node_output_map_ with node as the key.
+  /*! \brief Gets value from ConstantNode data and converts to constant weight
+   * stored in node_output_map_ with node as the key. */
   void GetConstantAsWeights(const ConstantNode* node);
 
-  // Temporary workaround for transposed weights.
+  /*! \brief Temporary workaround for transposed weights. */
   void GetInputAsTransposedWeights(const CallNode* transpose,
                                    const VarNode* node);
 
-  // Deallocates weights and destroys network definition.
+  /*! \brief Deallocates weights and destroys network definition. */
   void CleanUp();
 
-  // Get corresponding index for VarNode in execution_args_.
+  /*! \brief Get corresponding index for VarNode in execution_args_. */
   int TrackVarNode(const VarNode* node);
 
-  // Maps a node to its outputs.
+  /*! \brief Maps a node to its outputs. */
   std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
 
-  // TensorRT builder and network definition.
+  /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
+
+  /*! \brief TensorRT network definition. */
   nvinfer1::INetworkDefinition* network_;
 
-  // List of all weights held in memory.
+  /*! \brief List of all weights held in memory. */
   std::vector<nvinfer1::Weights> trt_weights_;
 
-  // Execution inputs from this invocation.
+  /*! \brief Execution inputs from this invocation. */
   const std::vector<DLTensor*>& execution_args_;
+
+  /*! \brief Batch size of inputs from this invocation. */
   int batch_size_;
 
-  // Maps execution_args_ input index -> TRT input tensor name / VarNode
-  // name_hint.
+  /*! \brief Maps execution_args_ input index -> TRT input tensor name / VarNode
+   * name_hint. */
   std::unordered_map<int, std::string> network_input_map_;
 };
 
-// Helper functions for GetInputAsTransposedWeights.
+/*!
+ * \brief Helper function for GetInputAsTransposedWeights to transpose RSCK to
+ * KCRS.
+ * \param original_shape Shape of weight before transpose.
+ * \param input_values The original weight values
+ * \param output_values Buffer where transposed values will be placed.
+ */
 void TransposeRSCKtoKCRS(const std::vector<int>& original_shape,
                          const float* input_values, float* output_values);
+
+/*!
+ * \brief Helper function for GetInputAsTransposedWeights to transpose RSCK to
+ * CKRS.
+ * \param original_shape Shape of weight before transpose.
+ * \param input_values The original weight values
+ * \param output_values Buffer where transposed values will be placed.
+ */
 void TransposeRSCKtoCKRS(const std::vector<int>& original_shape,
                          const float* input_values, float* output_values);
+
+/*!
+ * \brief Helper function for GetInputAsTransposedWeights to transpose CK to KC.
+ * \param original_shape Shape of weight before transpose.
+ * \param input_values The original weight values
+ * \param output_values Buffer where transposed values will be placed.
+ */
 void TransposeCKtoKC(const std::vector<int>& original_shape,
                      const float* input_values, float* output_values);
 

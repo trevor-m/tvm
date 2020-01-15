@@ -16,6 +16,12 @@
  * under the License.
  */
 
+/*!
+ * \file runtime/contrib/tensorrt/tensorrt_ops.h
+ * \brief Converters from Relay ops into TensorRT layers. Converters should
+ * inherit from TrtOpConverter and implement the Convert() method.
+ */
+
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
 
@@ -34,14 +40,19 @@ namespace tvm {
 namespace relay {
 namespace contrib {
 
-// Parameters to convert an Op from relay to TensorRT
+/*! \brief Parameters to convert an Op from relay to TensorRT. */
 struct AddTrtLayerParams {
+  /*! \brief The corresponding relay Call node. */
   const CallNode* call;
+  /*! \brief The TRT network that the new layer should be added to. */
   nvinfer1::INetworkDefinition* network;
+  /*! \brief The type of op. */
   std::string op_name;
+  /*! \brief Inputs to the op. */
   std::vector<TrtOpInput> inputs;
+  /*! \brief Outputs of the op should be populated here during Convert(). */
   std::vector<nvinfer1::ITensor*> outputs;
-  // Any newly allocated weights should be stored here also.
+  /*! \brief Any newly allocated weights should be stored here also. */
   std::vector<nvinfer1::Weights>* trt_weights;
 
   AddTrtLayerParams(nvinfer1::INetworkDefinition* network, const CallNode* call,
@@ -51,23 +62,45 @@ struct AddTrtLayerParams {
   }
 };
 
+/*! \brief Base class for an op converter from Relay to TRT. */
 class TrtOpConverter {
  public:
-  // Used to specify whether each input is tensor or weight.
+  /*! \brief Used to specify whether each input is tensor or weight. */
   const std::vector<TrtInputType> input_types;
-  // If set to true, any number of tensor inputs can be used for the op.
+  /*! \brief If set to true, any number of tensor inputs can be used for the op.
+   */
   const bool variable_input_count;
 
+  /*!
+   * \brief Converter subclasses should call this constructor to set
+   * input_types or variable_input_count.
+   * \param input_types For each input to the op, there should be a
+   * corresponding entry in input_types to determine whether that input should
+   * be a tensor or a weight. TrtBuilder will prepare inputs in
+   * AddTrtLayerParams according to this.
+   * \param variable_input_count If the op can have multiple inputs, set this to
+   * true. input_types vector will be ignored and any number of input tensors
+   * can be used for this op. All inputs will be tensors and not weights.
+   */
   TrtOpConverter(const std::vector<TrtInputType>& input_types,
                  bool variable_input_count = false)
       : input_types(input_types), variable_input_count(variable_input_count) {}
 
-  // Convert to TRT. Implementation should use inputs and attributes from the
-  // CallNode to add the corresponding TRT layers to network. Outputs should be
-  // pushed to outputs vector.
+  /*!
+   * \brief Convert to TRT. Implementation should use inputs and attributes
+   * from the CallNode to add the corresponding TRT layers to network. Outputs
+   * should be pushed to outputs vector.
+   * \param params Parameters for this op.
+   */
   virtual void Convert(AddTrtLayerParams* params) const = 0;
 
-  // Helper functions.
+  /*!
+   * \brief Helper function to reshape a tensor.
+   * \param params Parameters for this op.
+   * \param input Tensor to reshape.
+   * \param new_shape New shape, does not include batch dim.
+   * \return Reshaped tensor
+   */
   nvinfer1::ITensor* Reshape(AddTrtLayerParams* params,
                              nvinfer1::ITensor* input,
                              const std::vector<int>& new_shape) const {
@@ -77,6 +110,13 @@ class TrtOpConverter {
     return layer->getOutput(0);
   }
 
+  /*!
+   * \brief Helper function to transpose a tensor.
+   * \param params Parameters for this op.
+   * \param input Tensor to transpose.
+   * \param order New order of axes, does include batch dim.
+   * \return Transposed tensor
+   */
   nvinfer1::ITensor* Transpose(AddTrtLayerParams* params,
                                nvinfer1::ITensor* input,
                                const std::vector<int>& order) const {
@@ -92,6 +132,12 @@ class TrtOpConverter {
     return layer->getOutput(0);
   }
 
+  /*!
+   * \brief Helper function to convert an axis to TRT format.
+   * \param axis Axis from TVM.
+   * \param input_rank Rank of input, does not include batch dim.
+   * \return Axis in TRT format.
+   */
   int ConvertAxis(int axis, int input_rank) const {
     // Add 1 for missing batch dim.
     input_rank += 1;
@@ -836,10 +882,10 @@ class ResizeOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<ResizeAttrs>();
-    static const std::unordered_map<std::string, nvinfer1::ResizeMode> op_map = {
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode>
+        op_map = {
             {"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
-            {"bilinear", nvinfer1::ResizeMode::kLINEAR},
-        };
+            {"bilinear", nvinfer1::ResizeMode::kLINEAR}};
     auto it = op_map.find(attrs->method);
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
     CHECK_EQ(attrs->size.size(), 2);

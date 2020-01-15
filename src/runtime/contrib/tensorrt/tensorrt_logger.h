@@ -16,6 +16,12 @@
  * under the License.
  */
 
+/*!
+ * \file runtime/contrib/tensorrt/tensorrt_logger.h
+ * \brief Contains TensorRTLogger class which is required by TRT and used to
+ * print info, warnings, and errors.
+ */
+
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
 
@@ -24,7 +30,7 @@
 namespace tvm {
 namespace runtime {
 
-// Logger for TensorRT info/warning/errors
+/*! \brief Logger for TensorRT info/warning/errors. */
 class TensorRTLogger : public nvinfer1::ILogger {
  public:
   TensorRTLogger() : TensorRTLogger(Severity::kWARNING) {}

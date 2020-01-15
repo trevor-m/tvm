@@ -16,9 +16,16 @@
  * under the License.
  */
 
+/*!
+* \file runtime/contrib/tensorrt/tensorrt_builder.cc
+* \brief Contains TensorRTBuilder class which can be used to convert a relay
+* program into a TRT engine which can be used for inference.
+*/
+
 #include <memory>
 #include <string>
 
+#include "../../../relay/backend/contrib/tensorrt/common_utils.h"
 #include "tensorrt_builder.h"
 #include "tensorrt_logger.h"
 #include "tensorrt_ops.h"
@@ -250,7 +257,8 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
              << DebugString(shape);
   nvinfer1::Dims dims = VectorToTrtDims(shape);
   auto type_node = node->checked_type().as<TensorTypeNode>();
-  CHECK(type_node != nullptr && runtime::TypeMatch(type_node->dtype, kDLFloat, 32))
+  CHECK(type_node != nullptr &&
+        runtime::TypeMatch(type_node->dtype, kDLFloat, 32))
       << "Only FP32 inputs are supported.";
   auto input =
       network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
