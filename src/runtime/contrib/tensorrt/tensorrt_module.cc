@@ -86,6 +86,7 @@ class TensorRTModule : public runtime::ModuleNode {
 #else
     LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
                 << "with USE_TENSORRT=ON.";
+    return PackedFunc();
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
   }
 
