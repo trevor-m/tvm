@@ -28,8 +28,8 @@ def test_tensorrt_simple():
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
-    if not tvm.get_global_func("relay.ext.tensorrt", True):
-        print("skip because tensorrt codegen is not available")
+    if not relay.tensorrt.IsTrtRuntimeAvailable():
+        print("skip because tensorrt runtime is not available")
         return
     dtype = 'float32'
     xshape = (1, 32, 14, 14)
@@ -70,8 +70,8 @@ def test_tensorrt_not_compatible():
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
-    if not tvm.get_global_func("relay.ext.tensorrt", True):
-        print("skip because tensorrt codegen is not available")
+    if not relay.tensorrt.IsTrtRuntimeAvailable():
+        print("skip because tensorrt runtime is not available")
         return
     dtype = 'float32'
     xshape = (1, 32, 14, 14)
@@ -89,8 +89,8 @@ def test_tensorrt_ops():
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
-    if not tvm.get_global_func("relay.ext.tensorrt", True):
-        print("skip because tensorrt codegen is not available")
+    if not relay.tensorrt.IsTrtRuntimeAvailable():
+        print("skip because tensorrt runtime is not available")
         return
     def run_and_verify(config):
         f, input_shapes = config
@@ -101,9 +101,6 @@ def test_tensorrt_ops():
         mod['main'] = f
         mod = relay.tensorrt.EnableTrt(mod)
         assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
-        if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
-            print("skip because cuda is not enabled.")
-            exit(0)
         with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
             graph, lib, params = relay.build(mod, "cuda")
         mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
@@ -425,8 +422,8 @@ def test_tensorrt_integration(test_all_models=False):
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
-    if not tvm.get_global_func("relay.ext.tensorrt", True):
-        print("skip because tensorrt codegen is not available")
+    if not relay.tensorrt.IsTrtRuntimeAvailable():
+        print("skip because tensorrt runtime is not available")
         return
     
     def test_model(model, i_data, input_shape, dtype, use_trt=True, num_iteration=1000):
@@ -514,8 +511,8 @@ def test_tensorrt_serialize():
     if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return
-    if not tvm.get_global_func("relay.ext.tensorrt", True):
-        print("skip because tensorrt codegen is not available")
+    if not relay.tensorrt.IsTrtRuntimeAvailable():
+        print("skip because tensorrt runtime is not available")
         return
     import mxnet
     from mxnet.gluon.model_zoo.vision import get_model

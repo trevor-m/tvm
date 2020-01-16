@@ -64,9 +64,9 @@ class TensorRTModule : public runtime::ModuleNode {
 
   PackedFunc GetFunction(const std::string& name,
                          const ObjectPtr<Object>& sptr_to_self) final {
+#if TVM_GRAPH_RUNTIME_TENSORRT
     // Generate an external packed function
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-#if TVM_GRAPH_RUNTIME_TENSORRT
       auto it = trt_engine_cache_.find(name);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
@@ -82,11 +82,11 @@ class TensorRTModule : public runtime::ModuleNode {
       } else {
         this->ExecuteEngine(it->second, args, rv);
       }
-#else
-      LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
-                 << "with USE_TENSORRT=ON.";
-#endif  // TVM_GRAPH_RUNTIME_TENSORRT
     });
+#else
+    LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
+                << "with USE_TENSORRT=ON.";
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
   }
 
   const char* type_key() const { return "tensorrt"; }
