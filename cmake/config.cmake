@@ -173,7 +173,7 @@ set(USE_ROCBLAS OFF)
 set(USE_SORT ON)
 
 # Whether use TensorRT compilation. Does not require TensorRT libray.
-set(USE_TENSORRT_CODEGEN OFF)
+set(USE_TENSORRT_CODEGEN ON)
 
 # Whether use TensorRT runtime.
 # /path/to/tensorrt that contains include and lib dirs

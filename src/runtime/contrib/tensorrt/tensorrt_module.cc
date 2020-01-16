@@ -32,9 +32,10 @@
 #include <unordered_map>
 #include <vector>
 #include "../../file_util.h"
+#ifdef TVM_GRAPH_RUNTIME_TENSORRT
 #include "tensorrt_builder.h"
-
 #include "NvInfer.h"
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
 namespace tvm {
 namespace runtime {
@@ -53,16 +54,19 @@ class TensorRTModule : public runtime::ModuleNode {
       : serialized_subgraph_(serialized_subgraph) {}
 
   ~TensorRTModule() {
+#if TVM_GRAPH_RUNTIME_TENSORRT
     for (auto& it : trt_engine_cache_) {
       it.second.context->destroy();
       it.second.engine->destroy();
     }
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
   }
 
   PackedFunc GetFunction(const std::string& name,
                          const ObjectPtr<Object>& sptr_to_self) final {
     // Generate an external packed function
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+#if TVM_GRAPH_RUNTIME_TENSORRT
       auto it = trt_engine_cache_.find(name);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
@@ -78,6 +82,10 @@ class TensorRTModule : public runtime::ModuleNode {
       } else {
         this->ExecuteEngine(it->second, args, rv);
       }
+#else
+      LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
+                 << "with USE_TENSORRT=ON.";
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
     });
   }
 
@@ -115,6 +123,7 @@ class TensorRTModule : public runtime::ModuleNode {
   /*! \brief Relay program serialized using SaveJSON */
   std::string serialized_subgraph_;
 
+#if TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Map of function name to TRT engine if built already. */
   std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
 
@@ -185,6 +194,7 @@ class TensorRTModule : public runtime::ModuleNode {
         << "Running TensorRT failed.";
     *rv = bindings[num_bindings - num_outputs];
   }
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
 };
 
 Module TensorRTModuleCreate(const std::string& serialized_subgraph) {

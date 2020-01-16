@@ -45,12 +45,17 @@ if(USE_TENSORRT)
     # Set defines
     set_source_files_properties(${RUNTIME_GRAPH_SRCS}
             PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
-    set_source_files_properties(${COMPILER_SRCS}
-            PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
 endif()
-# TensorRT Codegen
+# TensorRT Codegen only
 if(USE_TENSORRT_CODEGEN)
+    message(STATUS "Build with TensorRT codegen")
     # Relay TRT codegen sources
     file(GLOB TENSORRT_RELAY_CONTRIB_SRC src/relay/backend/contrib/tensorrt/*.cc)
     list(APPEND COMPILER_SRCS ${TENSORRT_RELAY_CONTRIB_SRC})
+    list(APPEND COMPILER_SRCS src/runtime/contrib/tensorrt/tensorrt_module.cc)
+    # If runtime is enabled also, set flag for compiler srcs
+    if(USE_TENSORRT)
+        set_source_files_properties(${COMPILER_SRCS}
+                PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
+    endif()
 endif()

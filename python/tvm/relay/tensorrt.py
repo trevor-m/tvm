@@ -126,6 +126,9 @@ def GetTrtVersion():
     """
     return tuple(map(int, _transform.GetTrtVersion()))
 
+def IsTrtRuntimeAvailable():
+    return GetTrtVersion() != ()
+
 def EnableTrt(mod, params=None, trt_version=None):
     """Converts the "main" function in the module into one that can be executed using
     TensorRT. If any of the operators are not supported by the TensorRT
