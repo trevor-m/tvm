@@ -67,6 +67,12 @@ def test_tensorrt_simple():
         tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
 
 def test_tensorrt_not_compatible():
+    if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
+        print("skip because cuda is not enabled.")
+        return
+    if not tvm.get_global_func("relay.ext.tensorrt", True):
+        print("skip because tensorrt codegen is not available")
+        return
     dtype = 'float32'
     xshape = (1, 32, 14, 14)
     x = relay.var('x', shape=(xshape), dtype=dtype)
