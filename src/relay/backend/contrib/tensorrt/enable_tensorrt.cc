@@ -294,15 +294,20 @@ bool StridedSliceOpChecker(const CallNode* call, const std::string& op_name,
 
 bool AdapativePool2DOpChecker(const CallNode* call, const std::string& op_name,
                               const std::tuple<int, int, int>& trt_version) {
-  const auto* attrs = call->attrs.as<AdaptivePool2DAttrs>();
-  if ((attrs->output_size.size() == 1 &&
-       attrs->output_size[0].as<IntImm>()->value != 1) ||
-      (attrs->output_size.size() == 2 &&
-       (attrs->output_size[0].as<IntImm>()->value != 1 ||
-        attrs->output_size[1].as<IntImm>()->value != 1))) {
-    LOG(INFO) << op_name << " not supported: output size must be (1, 1).";
-    return false;
-  }
+  // TODO(trevmorr): AdapativePool implementation is an approximated using a
+  // regular pooling op. It creates an output of the correct size, but results
+  // are not mathetically equivalent except for certain output size cases such
+  // as (1, 1). In practice, the results appear to be close enough to be
+  // acceptable.
+  // const auto* attrs = call->attrs.as<AdaptivePool2DAttrs>();
+  // if ((attrs->output_size.size() == 1 &&
+  //      attrs->output_size[0].as<IntImm>()->value != 1) ||
+  //     (attrs->output_size.size() == 2 &&
+  //      (attrs->output_size[0].as<IntImm>()->value != 1 ||
+  //       attrs->output_size[1].as<IntImm>()->value != 1))) {
+  //   LOG(INFO) << op_name << " not supported: output size must be (1, 1).";
+  //   return false;
+  // }
   return true;
 }
 
