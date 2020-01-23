@@ -479,12 +479,11 @@ class TrtEnabler : public ExprMutator {
       : trt_version_(trt_version) {}
 
   Expr VisitExpr_(const VarNode* op) {
-    // Rename inputs
+    // Rename inputs.
     auto var = VarNode::make("tensorrt_input" + std::to_string(var_id_++),
                              op->checked_type_);
-
     original_inputs_.push_back({var, GetRef<Expr>(op)});
-    return std::move(var);
+    return var;
   }
 
   Expr Enable(const Expr& expr) {
