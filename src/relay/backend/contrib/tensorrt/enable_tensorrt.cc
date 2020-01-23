@@ -58,9 +58,8 @@ namespace contrib {
  * \param trt_version The version of TensorRT that we are targeting.
  * \return True if op is supported.
  */
-typedef bool (*CheckCompatibleFn)(const CallNode* call,
-                                  const std::string& op_name,
-                                  const std::tuple<int, int, int>& trt_version);
+typedef bool (*IsCompatibleFn)(const CallNode* call, const std::string& op_name,
+                               const std::tuple<int, int, int>& trt_version);
 
 bool AlwaysChecker(const CallNode* call, const std::string& op_name,
                    const std::tuple<int, int, int>& trt_version) {
@@ -335,7 +334,7 @@ bool ReduceOpChecker(const CallNode* call, const std::string& op_name,
 }
 
 // TensorRT check compatible functions
-static const std::unordered_map<std::string, CheckCompatibleFn>
+static const std::unordered_map<std::string, IsCompatibleFn>
     trt_compatible_ops = {
         {"nn.relu", AlwaysChecker},
         {"sigmoid", AlwaysChecker},
