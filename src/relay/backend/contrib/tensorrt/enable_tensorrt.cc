@@ -299,15 +299,6 @@ bool AdapativePool2DOpChecker(const CallNode* call, const std::string& op_name,
   // are not mathetically equivalent except for certain output size cases such
   // as (1, 1). In practice, the results appear to be close enough to be
   // acceptable.
-  // const auto* attrs = call->attrs.as<AdaptivePool2DAttrs>();
-  // if ((attrs->output_size.size() == 1 &&
-  //      attrs->output_size[0].as<IntImm>()->value != 1) ||
-  //     (attrs->output_size.size() == 2 &&
-  //      (attrs->output_size[0].as<IntImm>()->value != 1 ||
-  //       attrs->output_size[1].as<IntImm>()->value != 1))) {
-  //   LOG(INFO) << op_name << " not supported: output size must be (1, 1).";
-  //   return false;
-  // }
   return true;
 }
 
@@ -416,7 +407,14 @@ class TrtChecker : public ExprVisitor {
   void VisitExpr_(const CallNode* call) final {
     const std::string op_name = (call->op.as<OpNode>())->name;
     for (size_t i = 0; i < call->args.size(); ++i) {
-      // Workaround for check for transpose of weight.
+      // Workaround for check for transpose of weight. This check allows weights
+      // to be either 1) VarNode 2) ConstantNode 3) VarNode or Constant Node
+      // with a transpose between. This transpose is allowed to have permuation
+      // which isn't allowed by TensorRT since we will process this transpose
+      // manually.
+      // This workaround isn't required anymore since ConstantFolding will take
+      // care of the transpose for us. However, in the case where the weights
+      // aren't marked as params it can still be useful.
       if ((op_name == "nn.conv2d" || op_name == "nn.dense") && i == 1) {
         auto* transpose = call->args[i].as<CallNode>();
         if (transpose && transpose->op.as<OpNode>()->name == "transpose") {
