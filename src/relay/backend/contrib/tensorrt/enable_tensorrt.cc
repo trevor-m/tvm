@@ -491,10 +491,7 @@ class TrtEnabler : public ExprMutator {
     // Get inputs to func.
     auto func = expr.as<FunctionNode>();
     CHECK(func != nullptr);
-    Array<Var> func_params;
-    for (auto param : func->params) {
-      func_params.push_back(param);
-    }
+    Array<Var> func_params(func->params.begin(), func->params.end());
 
     // Process body
     auto body = VisitExpr(func->body);
