@@ -329,12 +329,11 @@ bool ReduceOpChecker(const CallNode* call, const std::string& op_name,
   if (!attrs->axis.defined() || attrs->axis.size() == 0) {
     LOG(INFO) << op_name << " not supported: cannot reduce to scalar.";
     return false;
-  } else {
-    for (size_t i = 0; i < attrs->axis.size(); i++) {
-      if (attrs->axis[i].as<IntImm>()->value == 0) {
-        LOG(INFO) << op_name << " not supported: can't modify batch dimension.";
-        return false;
-      }
+  }
+  for (size_t i = 0; i < attrs->axis.size(); i++) {
+    if (attrs->axis[i].as<IntImm>()->value == 0) {
+      LOG(INFO) << op_name << " not supported: can't modify batch dimension.";
+      return false;
     }
   }
   if (attrs->exclude) {

@@ -190,12 +190,12 @@ void TensorRTBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
   float* values = new float[original_weight.count];
   // Get order and new shape.
   const auto* attrs = transpose->attrs.as<TransposeAttrs>();
-  std::vector<int> order;
-  std::vector<int> new_shape;
+  std::vector<int> order(attrs->axes.size(), 0);
+  std::vector<int> new_shape(attrs->axes.size(), 0);
   for (size_t i = 0; i < attrs->axes.size(); i++) {
     const int axis = attrs->axes[i].as<IntImm>()->value;
-    order.push_back(axis);
-    new_shape.push_back(original_shape[axis]);
+    order[i] = axis;
+    new_shape[i] = original_shape[axis];
   }
   // Perform transpose.
   if (order.size() == 4 && order[0] == 3 && order[1] == 2 && order[2] == 0 &&
