@@ -46,9 +46,9 @@ def _bind_params(func, params):
         bind_dict[arg] = relay.expr.const(v)
     return relay.expr.bind(func, bind_dict)
 
-class ConvertLayoutTransform(ExprMutator):
+class LegalizeLayoutTranform(ExprMutator):
     """
-    Converts layout_transform to transpose to simplify TensorRT conversion.
+    Legalize Relay layout transforms to transpose ops to simplify TensorRT conversion.
     """
     def visit_call(self, expr):
         visit = super().visit_call(expr)
@@ -76,8 +76,7 @@ class RemoveDropout(ExprMutator):
         visit = super().visit_tuple_getitem(expr)
         if visit.index != 0:
             return visit
-        elif isinstance(visit.tuple_value, Call) and \
-             visit.tuple_value.op == tvm.relay.op.get("nn.dropout"):
+        elif isinstance(visit.tuple_value, Call) and visit.tuple_value.op.name == "nn.dropout":
             return visit.tuple_value.args[0]
         return visit
 
@@ -89,7 +88,7 @@ class RemoveMultiplyByOne(ExprMutator):
     PyTorch's addmm operator.
     """
     def visit_call(self, expr):
-        if expr.op == tvm.relay.op.get("multiply"):
+        if expr.op.name == "multiply":
             if isinstance(expr.args[1], Constant):
                 data = expr.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 1.0:
@@ -107,13 +106,31 @@ class RemoveRedundantTranspose(ExprMutator):
         return len(axes) == 2 and int(axes[0].value) == 1 and int(axes[1].value) == 0
 
     def visit_call(self, expr):
-        if expr.op == tvm.relay.op.get("transpose"):
+        if expr.op.name == "transpose":
             if self.check_axes(expr.attrs['axes']):
-                if isinstance(expr.args[0], Call) and \
-                   expr.args[0].op == tvm.relay.op.get("transpose"):
+                if isinstance(expr.args[0], Call) and expr.args[0].op.name == "transpose":
                     if self.check_axes(expr.args[0].attrs['axes']):
                         return expr.args[0].args[0]
         return super().visit_call(expr)
+
+def PreprocessForTrt(mod):
+    """Applies passes to prepare main function for TensorRT conversion.
+
+    Parameters
+    ----------
+    mod: Module
+        The original module.
+
+    Returns
+    -------
+    mod: Module
+        The module modified for TensorRT.
+    """
+    mod['main'] = LegalizeLayoutTranform().visit(mod['main'])
+    mod['main'] = RemoveDropout().visit(mod['main'])
+    mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+    mod['main'] = RemoveRedundantTranspose().visit(mod['main'])
+    return mod
 
 def GetTrtVersion():
     """Gets the version of TensorRT that TVM is built against.
@@ -127,6 +144,8 @@ def GetTrtVersion():
     return tuple(map(int, _transform.GetTrtVersion()))
 
 def IsTrtRuntimeAvailable():
+    if not tvm.get_global_func("relay._transform.GetTrtVersion", True):
+        return False
     return GetTrtVersion() != ()
 
 def EnableTrt(mod, params=None, trt_version=None):
@@ -150,8 +169,8 @@ def EnableTrt(mod, params=None, trt_version=None):
 
     Returns
     -------
-    ret: tvm.relay.Pass
-        The registered pass that partitions the Relay program.
+    mod: Module
+        The modified module which will use the TensorRT runtime if compatible.
     """
     if not trt_version:
         trt_version = GetTrtVersion()
@@ -167,10 +186,7 @@ def EnableTrt(mod, params=None, trt_version=None):
     mod = relay.transform.RemoveUnusedFunctions()(mod)
     mod = relay.transform.InferType()(mod)
     mod = relay.transform.ConvertLayout('NCHW')(mod)
-    mod['main'] = ConvertLayoutTransform().visit(mod['main'])
-    mod['main'] = RemoveDropout().visit(mod['main'])
-    mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
-    mod['main'] = RemoveRedundantTranspose().visit(mod['main'])
+    mod = PreprocessForTrt(mod)
     if params:
         # Bind params so that we can use FoldConstant.
         mod['main'] = _bind_params(mod['main'], params)
