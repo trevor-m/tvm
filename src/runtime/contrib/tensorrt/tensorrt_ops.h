@@ -125,7 +125,7 @@ class TrtOpConverter {
     CHECK_EQ(input->getDimensions().nbDims, order.size() - 1);
     CHECK_EQ(order[0], 0);
     nvinfer1::Permutation perm;
-    for (int i = 0; i < order.size(); i++) {
+    for (int i = 0; i < order.size(); ++i) {
       perm.order[i] = order[i + 1] - 1;
     }
     layer->setFirstTranspose(perm);
@@ -695,7 +695,7 @@ class TransposeOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<TransposeAttrs>();
     std::vector<int> order;
-    for (size_t i = 0; i < attrs->axes.size(); i++) {
+    for (size_t i = 0; i < attrs->axes.size(); ++i) {
       order.push_back(attrs->axes[i].as<IntImm>()->value);
     }
     params->outputs.push_back(Transpose(params, input, order));
@@ -713,7 +713,7 @@ class ReshapeOpConverter : public TrtOpConverter {
     // CHECK(attrs->newshape[0].as<IntImm>()->value) == 0 ||
     //       attrs->newshape[0].as<IntImm>()->value) == max_);
     std::vector<int> new_shape;
-    for (size_t i = 1; i < attrs->newshape.size(); i++) {
+    for (size_t i = 1; i < attrs->newshape.size(); ++i) {
       const int value = attrs->newshape[i].as<IntImm>()->value;
       CHECK_GE(value, -1);
       new_shape.push_back(value);
@@ -785,7 +785,7 @@ class ReduceOpConverter : public TrtOpConverter {
     // TODO(trevmorr): Support reduce to scalar.
     CHECK(attrs->axis.defined() && attrs->axis.size() > 0);
     uint32_t reduce_axes = 0;
-    for (size_t i = 0; i < attrs->axis.size(); i++) {
+    for (size_t i = 0; i < attrs->axis.size(); ++i) {
       const int axis = ConvertAxis(attrs->axis[i].as<IntImm>()->value,
                                    input->getDimensions().nbDims);
       reduce_axes |= 1 << axis;
@@ -816,7 +816,7 @@ class StridedSliceOpConverter : public TrtOpConverter {
     CHECK(default_strides || attrs->strides[0].as<IntImm>()->value == 1);
 
     std::vector<int> start, size, strides;
-    for (size_t i = 1; i < attrs->begin.size(); i++) {
+    for (size_t i = 1; i < attrs->begin.size(); ++i) {
       const int begin_value = attrs->begin[i].as<IntImm>()->value;
       const int end_value = attrs->end[i].as<IntImm>()->value;
       const int stride_value = (default_strides || i >= attrs->strides.size())

@@ -135,7 +135,7 @@ class TensorRTModule : public runtime::ModuleNode {
    */
   std::vector<DLTensor*> ConvertInputs(tvm::TVMArgs args) {
     std::vector<DLTensor*> inputs(args.size(), nullptr);
-    for (size_t i = 0; i < args.size(); i++) {
+    for (size_t i = 0; i < args.size(); ++i) {
       if (args[i].type_code() == kNDArrayContainer) {
         // Relay Debug/VM uses NDArray
         runtime::NDArray array = args[i];
