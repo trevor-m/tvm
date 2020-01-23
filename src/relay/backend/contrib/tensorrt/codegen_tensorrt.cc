@@ -59,13 +59,13 @@ class TensorRTModuleCodegen : public CSourceModuleCodegenBase {
         serialized_subgraph = SaveJSON(Downcast<Function>(it.second)->body);
       }
     } else {
-      LOG(FATAL) << "The input ref is expected to be a Relay function or module"
-                 << "\n";
+      LOG(FATAL)
+          << "The input ref is expected to be a Relay function or module.";
     }
     const PackedFunc* pf =
         runtime::Registry::Get("tvm.contrib.tensorrt.create");
     CHECK(pf != nullptr)
-        << "tvm.contrib.tensorrt.create was not found in the registry";
+        << "tvm.contrib.tensorrt.create was not found in the registry.";
     return (*pf)(serialized_subgraph);
   }
 };

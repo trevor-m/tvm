@@ -69,19 +69,30 @@ bool AlwaysChecker(const CallNode* call, const std::string& op_name,
 template <int maj, int min, int patch>
 bool TrtVersionChecker(const CallNode* call, const std::string& op_name,
                        const std::tuple<int, int, int>& trt_version) {
-  return trt_version >= std::make_tuple<int>(maj, min, patch);
+  const bool compatible = trt_version >= std::make_tuple<int>(maj, min, patch);
+  if (!compatible) {
+    LOG(INFO) << op_name << " not supported: requires TensorRT version " << maj
+              << "." << min << "." << patch << " or greater.";
+  }
+  return compatible;
 }
 
 bool Conv2DOpChecker(const CallNode* call, const std::string& op_name,
                      const std::tuple<int, int, int>& trt_version) {
-  const auto* conv2d_attr = call->attrs.as<Conv2DAttrs>();
-  if (conv2d_attr->data_layout != "NCHW" ||
-      conv2d_attr->kernel_layout != "OIHW") {
-    LOG(INFO) << op_name << " not supported: must be NCHW.";
+  const auto* attrs = call->attrs.as<Conv2DAttrs>();
+  if (attrs->data_layout != "NCHW") {
+    LOG(INFO) << op_name << " not supported: data_layout is "
+              << attrs->data_layout << " but must be NCHW.";
     return false;
   }
-  if (conv2d_attr->out_layout != "" && conv2d_attr->out_layout != "NCHW") {
-    LOG(INFO) << op_name << " not supported: must be NCHW.";
+  if (attrs->kernel_layout != "OIHW") {
+    LOG(INFO) << op_name << " not supported: kernel_layout is "
+              << attrs->kernel_layout << " but must be OIHW.";
+    return false;
+  }
+  if (!attrs->out_layout.empty() && attrs->out_layout != "NCHW") {
+    LOG(INFO) << op_name << " not supported: out_layout is "
+              << attrs->out_layout << " but must be NCHW.";
     return false;
   }
   return true;
@@ -89,14 +100,16 @@ bool Conv2DOpChecker(const CallNode* call, const std::string& op_name,
 
 bool DenseOpChecker(const CallNode* call, const std::string& op_name,
                     const std::tuple<int, int, int>& trt_version) {
-  auto shape0 = GetShape(call->type_args[0]);
-  auto shape1 = GetShape(call->type_args[1]);
-  if (shape0.size() < 2 || shape0.size() > 4) {
-    LOG(INFO) << op_name << " not supported: input must be rank 2, 3, or 4.";
+  const int input_rank = GetShape(call->type_args[0]).size();
+  const int weight_rank = GetShape(call->type_args[1]).size();
+  if (input_rank < 2 || input_rank > 4) {
+    LOG(INFO) << op_name << " not supported: input  has rank " << input_rank
+              << " but must be 2, 3, or 4.";
     return false;
   }
-  if (shape1.size() != 2) {
-    LOG(INFO) << op_name << " not supported: weight must be rank 2.";
+  if (weight_rank != 2) {
+    LOG(INFO) << op_name << " not supported: weight has rank " << weight_rank
+              << " but must be 2.";
     return false;
   }
   return true;
@@ -106,8 +119,8 @@ bool BatchNormChecker(const CallNode* call, const std::string& op_name,
                       const std::tuple<int, int, int>& trt_version) {
   const auto* bn_attr = call->attrs.as<BatchNormAttrs>();
   if (bn_attr->axis != 1 && bn_attr->axis != 3) {
-    LOG(INFO) << op_name << " not supported: must be on axis 1 or 3."
-              << bn_attr->axis;
+    LOG(INFO) << op_name << " not supported: axis is " << bn_attr->axis
+              << " but must be 1 or 3.";
     return false;
   }
   return true;
@@ -125,9 +138,10 @@ bool SoftmaxOpChecker(const CallNode* call, const std::string& op_name,
 
 bool MaxPool2DOpChecker(const CallNode* call, const std::string& op_name,
                         const std::tuple<int, int, int>& trt_version) {
-  const auto* pool_attr = call->attrs.as<MaxPool2DAttrs>();
-  if (pool_attr->layout != "NCHW") {
-    LOG(INFO) << op_name << " not supported: must be NCHW.";
+  const auto* attrs = call->attrs.as<MaxPool2DAttrs>();
+  if (attrs->layout != "NCHW") {
+    LOG(INFO) << op_name << " not supported: layout is " << attrs->layout
+              << " but must be NCHW.";
     return false;
   }
   return true;
@@ -137,7 +151,8 @@ bool AvgPool2DOpChecker(const CallNode* call, const std::string& op_name,
                         const std::tuple<int, int, int>& trt_version) {
   const auto* attrs = call->attrs.as<AvgPool2DAttrs>();
   if (attrs->layout != "NCHW") {
-    LOG(INFO) << op_name << " not supported: must be NCHW.";
+    LOG(INFO) << op_name << " not supported: layout is " << attrs->layout
+              << " but must be NCHW.";
     return false;
   }
   if (attrs->count_include_pad && attrs->padding.size() == 4) {
@@ -157,9 +172,10 @@ bool AvgPool2DOpChecker(const CallNode* call, const std::string& op_name,
 
 bool GlobalPool2DOpChecker(const CallNode* call, const std::string& op_name,
                            const std::tuple<int, int, int>& trt_version) {
-  const auto* pool_attr = call->attrs.as<GlobalPool2DAttrs>();
-  if (pool_attr->layout != "NCHW") {
-    LOG(INFO) << op_name << " not supported: must be NCHW.";
+  const auto* attrs = call->attrs.as<GlobalPool2DAttrs>();
+  if (attrs->layout != "NCHW") {
+    LOG(INFO) << op_name << " not supported: layout is " << attrs->layout
+              << " but must be NCHW.";
     return false;
   }
   return true;
@@ -205,9 +221,10 @@ bool ConcatenateOpChecker(const CallNode* call, const std::string& op_name,
 
 bool BiasAddOpChecker(const CallNode* call, const std::string& op_name,
                       const std::tuple<int, int, int>& trt_version) {
-  auto shape0 = GetShape(call->type_args[0]);
-  if (shape0.size() < 2 || shape0.size() > 4) {
-    LOG(INFO) << op_name << " not supported: input must be rank 2, 3, or 4.";
+  const int input_rank = GetShape(call->type_args[0]).size();
+  if (input_rank < 2 || input_rank > 4) {
+    LOG(INFO) << op_name << " not supported: input rank is " << input_rank
+              << " but must be 2, 3, or 4.";
     return false;
   }
   return true;
@@ -221,7 +238,7 @@ bool Conv2DTransposeOpChecker(const CallNode* call, const std::string& op_name,
     LOG(INFO) << op_name << " not supported: must be NCHW.";
     return false;
   }
-  if (conv2d_attr->out_layout != "" && conv2d_attr->out_layout != "NCHW") {
+  if (!conv2d_attr->out_layout.empty() && conv2d_attr->out_layout != "NCHW") {
     LOG(INFO) << op_name << " not supported: must be NCHW.";
     return false;
   }
@@ -247,7 +264,7 @@ bool ReshapeOpChecker(const CallNode* call, const std::string& op_name,
                       const std::tuple<int, int, int>& trt_version) {
   const auto* attrs = call->attrs.as<ReshapeAttrs>();
   // TODO(trevmorr): check for modified batch dim.
-  for (size_t i = 0; i < attrs->newshape.size(); i++) {
+  for (size_t i = 0; i < attrs->newshape.size(); ++i) {
     if (attrs->newshape[i].as<IntImm>()->value < -1) {
       LOG(INFO) << op_name << " not supported: reshape dims must be explicit.";
       return false;
@@ -260,10 +277,12 @@ bool PadOpChecker(const CallNode* call, const std::string& op_name,
                   const std::tuple<int, int, int>& trt_version) {
   const auto* attrs = call->attrs.as<PadAttrs>();
   if (attrs->pad_mode != "constant") {
-    LOG(INFO) << op_name << " not supported: pad mode must be constant.";
+    LOG(INFO) << op_name << " not supported: pad mode is " << attrs->pad_mode
+              << " but must be constant.";
     return false;
   } else if (attrs->pad_value != 0.0) {
-    LOG(INFO) << op_name << " not supported: pad value must be zero.";
+    LOG(INFO) << op_name << " not supported: pad value is " << attrs->pad_value
+              << " but must be 0.0.";
     return false;
   }
   return true;
@@ -271,7 +290,7 @@ bool PadOpChecker(const CallNode* call, const std::string& op_name,
 
 bool StridedSliceOpChecker(const CallNode* call, const std::string& op_name,
                            const std::tuple<int, int, int>& trt_version) {
-  if (trt_version < std::make_tuple<int>(5, 1, 5)) return false;
+  if (!TrtVersionChecker<5, 1, 5>(call, op_name, trt_version)) return false;
   auto shape = GetShape(call->type_args[0]);
   const auto* attrs = call->attrs.as<StridedSliceAttrs>();
   if (attrs->begin[0].as<IntImm>()->value != 0 ||
@@ -280,7 +299,7 @@ bool StridedSliceOpChecker(const CallNode* call, const std::string& op_name,
     LOG(INFO) << op_name << " not supported: can't modify batch dimension.";
     return false;
   }
-  for (size_t i = 0; i < attrs->begin.size(); i++) {
+  for (size_t i = 0; i < attrs->begin.size(); ++i) {
     if (attrs->begin[i].as<IntImm>()->value < 0 ||
         attrs->end[i].as<IntImm>()->value < 0) {
       LOG(INFO) << op_name
@@ -303,11 +322,11 @@ bool AdapativePool2DOpChecker(const CallNode* call, const std::string& op_name,
 
 bool ResizeOpChecker(const CallNode* call, const std::string& op_name,
                      const std::tuple<int, int, int>& trt_version) {
-  if (trt_version < std::make_tuple<int>(6, 0, 1)) return false;
+  if (!TrtVersionChecker<6, 0, 1>(call, op_name, trt_version)) return false;
   const auto* attrs = call->attrs.as<ResizeAttrs>();
   if (attrs->method != "nearest_neighbor" && attrs->method != "bilinear") {
-    LOG(INFO) << op_name
-              << " not supported: method must be nearest_neighor or bilinear";
+    LOG(INFO) << op_name << " not supported: method is " << attrs->method
+              << " but must be nearest_neighor or bilinear.";
     return false;
   }
   return true;
@@ -320,7 +339,7 @@ bool ReduceOpChecker(const CallNode* call, const std::string& op_name,
     LOG(INFO) << op_name << " not supported: cannot reduce to scalar.";
     return false;
   }
-  for (size_t i = 0; i < attrs->axis.size(); i++) {
+  for (size_t i = 0; i < attrs->axis.size(); ++i) {
     if (attrs->axis[i].as<IntImm>()->value == 0) {
       LOG(INFO) << op_name << " not supported: can't modify batch dimension.";
       return false;
@@ -393,7 +412,7 @@ static const std::unordered_map<std::string, IsCompatibleFn>
 class TrtChecker : public ExprVisitor {
  public:
   explicit TrtChecker(const std::tuple<int, int, int>& trt_version)
-      : trt_version_(trt_version) {}
+      : compatible_(false), trt_version_(trt_version) {}
 
   void VisitExpr_(const VarNode* op) {
     const auto* ttype = op->checked_type().as<TensorTypeNode>();
@@ -414,7 +433,7 @@ class TrtChecker : public ExprVisitor {
       // This workaround isn't required anymore since ConstantFolding will take
       // care of the transpose for us. However, in the case where the weights
       // aren't marked as params it can still be useful.
-      if ((op_name == "nn.conv2d" || op_name == "nn.dense") && i == 1) {
+      if (i == 1 && (op_name == "nn.conv2d" || op_name == "nn.dense")) {
         auto* transpose = call->args[i].as<CallNode>();
         if (transpose && transpose->op.as<OpNode>()->name == "transpose") {
           if (!transpose->args[0].as<VarNode>() &&
