@@ -46,7 +46,10 @@ if(USE_TENSORRT)
     set_source_files_properties(${RUNTIME_GRAPH_SRCS}
             PROPERTIES COMPILE_DEFINITIONS "TVM_GRAPH_RUNTIME_TENSORRT")
 endif()
-# TensorRT Codegen only
+# TensorRT Codegen only. This can be enabled independently of USE_TENSORRT to
+# enable compilation of TensorRT modules without requiring TensorRT to be
+# installed. The compiled modules will only be able to be executed using a TVM
+# built with USE_TENSORRT=ON.
 if(USE_TENSORRT_CODEGEN)
     message(STATUS "Build with TensorRT codegen")
     # Relay TRT codegen sources
