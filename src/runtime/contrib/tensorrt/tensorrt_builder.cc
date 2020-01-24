@@ -289,34 +289,29 @@ void TensorRTBuilder::VisitExpr_(const CallNode* call) {
   // Ensure that nodes are processed in topological order by visiting their
   // inputs first.
   for (size_t i = 0; i < call->args.size(); ++i) {
-    // Handle special case where input must be constant array on CPU.
-    if (!converter->variable_input_count &&
-        converter->input_types[i] == kWeight) {
-      // Input must be a constant weight
-      if (auto* var = call->args[i].as<VarNode>()) {
-        GetInputAsWeights(var);
-      } else if (auto* node = call->args[i].as<ConstantNode>()) {
-        GetConstantAsWeights(node);
-      } else {
-        // Temporary workaround for transposed weights. Once partitioning is
-        // available, the transpose will be computed by tvm and the result will
-        // be a var input.
-        if (auto* transpose = call->args[i].as<CallNode>()) {
-          if (transpose->op.as<OpNode>()->name == "transpose") {
-            if (auto* weights = transpose->args[0].as<VarNode>()) {
-              GetInputAsTransposedWeights(transpose, weights);
-            } else {
-              LOG(FATAL) << "TRT requires a constant input here.";
-            }
-          } else {
-            LOG(FATAL) << "TRT requires a constant input here.";
-          }
-        } else {
-          LOG(FATAL) << "TRT requires a constant input here.";
-        }
-      }
-    } else {
+    if (converter->variable_input_count ||
+        converter->input_types[i] != kWeight) {
       VisitExpr(call->args[i]);
+      continue;
+    }
+    // Handle special case where input must be constant array on CPU.
+    if (auto* var = call->args[i].as<VarNode>()) {
+      GetInputAsWeights(var);
+    } else if (auto* node = call->args[i].as<ConstantNode>()) {
+      GetConstantAsWeights(node);
+    } else {
+      // Temporary workaround for transposed weights. Once partitioning is
+      // available, the transpose will be computed by tvm and the result will be
+      // a var input. Also not needed when params are bound to constants since
+      // FoldConstants will remove the transpose for us.
+      const CallNode* transpose = call->args[i].as<CallNode>();
+      const VarNode* weights = nullptr;
+      if (transpose && transpose->op.as<OpNode>()->name == "transpose" &&
+          (weights = transpose->args[0].as<VarNode>())) {
+        GetInputAsTransposedWeights(transpose, weights);
+      } else {
+        LOG(FATAL) << "TRT requires a constant input here.";
+      }
     }
   }
 
