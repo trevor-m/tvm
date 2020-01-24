@@ -186,7 +186,9 @@ void TensorRTBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
   GetInputAsWeights(node);
   CHECK_EQ(node_output_map_[node].size(), 1);
   const nvinfer1::Weights& original_weight = node_output_map_[node][0].weight;
-  const auto& original_shape = node_output_map_[node][0].weight_shape;
+  const auto& shape = node_output_map_[node][0].weight_shape;
+  const float* original_values =
+      static_cast<const float*>(original_weight.values);
   float* values = new float[original_weight.count];
   // Get order and new shape.
   const auto* attrs = transpose->attrs.as<TransposeAttrs>();
@@ -195,22 +197,21 @@ void TensorRTBuilder::GetInputAsTransposedWeights(const CallNode* transpose,
   for (size_t i = 0; i < attrs->axes.size(); ++i) {
     const int axis = attrs->axes[i].as<IntImm>()->value;
     order[i] = axis;
-    new_shape[i] = original_shape[axis];
+    new_shape[i] = shape[axis];
   }
   // Perform transpose.
   if (order.size() == 4 && order[0] == 3 && order[1] == 2 && order[2] == 0 &&
       order[3] == 1) {
-    TransposeRSCKtoKCRS(original_shape,
-                        static_cast<const float*>(original_weight.values),
-                        values);
+    const int output_strides[4] = {shape[1], 1, shape[0] * shape[1],
+                                   shape[0] * shape[1] * shape[2]};
+    TransposeWeights4D(shape, output_strides, original_values, values);
   } else if (order.size() == 4 && order[0] == 2 && order[1] == 3 &&
              order[2] == 0 && order[3] == 1) {
-    TransposeRSCKtoCKRS(original_shape,
-                        static_cast<const float*>(original_weight.values),
-                        values);
+    const int output_strides[4] = {shape[1], 1, shape[0] * shape[1] * shape[3],
+                                   shape[0] * shape[1]};
+    TransposeWeights4D(shape, output_strides, original_values, values);
   } else if (order.size() == 2 && order[0] == 1 && order[1] == 0) {
-    TransposeCKtoKC(original_shape,
-                    static_cast<const float*>(original_weight.values), values);
+    TransposeWeights2D(shape, original_values, values);
   } else {
     LOG(FATAL) << "Constant transpose " << DebugString(order)
                << " is not supported.";
@@ -363,19 +364,22 @@ void TensorRTBuilder::CleanUp() {
   }
 }
 
-void TransposeRSCKtoKCRS(const std::vector<int>& original_shape,
-                         const float* input_values, float* output_values) {
-  const int r = original_shape[0];
-  const int s = original_shape[1];
-  const int c = original_shape[2];
-  const int k = original_shape[3];
-  for (int x = 0; x < k; x++) {
-    for (int y = 0; y < c; y++) {
-      for (int z = 0; z < r; z++) {
-        for (int w = 0; w < s; w++) {
-          const int input_index = (x) + (y * k) + (z * s * c * k) + (w * c * k);
+void TransposeWeights4D(const std::vector<int>& original_shape,
+                        const int* output_strides, const float* input_values,
+                        float* output_values) {
+  const int input_strides[4] = {
+      original_shape[1] * original_shape[2] * original_shape[3],
+      original_shape[2] * original_shape[3], original_shape[3], 1};
+  for (int i = 0; i < original_shape[0]; i++) {
+    for (int j = 0; j < original_shape[1]; j++) {
+      for (int k = 0; k < original_shape[2]; k++) {
+        for (int l = 0; l < original_shape[3]; l++) {
+          const int input_index =
+              (i * input_strides[0]) + (j * input_strides[1]) +
+              (k * input_strides[2]) + (l * input_strides[3]);
           const int output_index =
-              (x * c * r * s) + (y * r * s) + (z * s) + (w);
+              (i * output_strides[0]) + (j * output_strides[1]) +
+              (k * output_strides[2]) + (l * output_strides[3]);
           output_values[output_index] = input_values[input_index];
         }
       }
@@ -383,28 +387,8 @@ void TransposeRSCKtoKCRS(const std::vector<int>& original_shape,
   }
 }
 
-void TransposeRSCKtoCKRS(const std::vector<int>& original_shape,
-                         const float* input_values, float* output_values) {
-  const int r = original_shape[0];
-  const int s = original_shape[1];
-  const int c = original_shape[2];
-  const int k = original_shape[3];
-  for (int x = 0; x < k; x++) {
-    for (int y = 0; y < c; y++) {
-      for (int z = 0; z < r; z++) {
-        for (int w = 0; w < s; w++) {
-          const int input_index = (x) + (y * k) + (z * s * c * k) + (w * c * k);
-          const int output_index =
-              (y * k * r * s) + (x * r * s) + (z * s) + (w);
-          output_values[output_index] = input_values[input_index];
-        }
-      }
-    }
-  }
-}
-
-void TransposeCKtoKC(const std::vector<int>& original_shape,
-                     const float* input_values, float* output_values) {
+void TransposeWeights2D(const std::vector<int>& original_shape,
+                        const float* input_values, float* output_values) {
   const int c = original_shape[0];
   const int k = original_shape[1];
   for (int i = 0; i < c; i++) {

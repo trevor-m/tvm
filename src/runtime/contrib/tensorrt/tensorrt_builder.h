@@ -175,33 +175,26 @@ class TensorRTBuilder : public ExprVisitor {
 };
 
 /*!
- * \brief Helper function for GetInputAsTransposedWeights to transpose RSCK to
- * KCRS.
+ * \brief Helper function for GetInputAsTransposedWeights to transpose 4-D
+ * weights.
  * \param original_shape Shape of weight before transpose.
- * \param input_values The original weight values
+ * \param output_strides Multipliers for each index to compute output index in
+ * flat buffer. Must be of length 4.
+ * \param input_values The original weight values.
  * \param output_values Buffer where transposed values will be placed.
  */
-void TransposeRSCKtoKCRS(const std::vector<int>& original_shape,
-                         const float* input_values, float* output_values);
-
-/*!
- * \brief Helper function for GetInputAsTransposedWeights to transpose RSCK to
- * CKRS.
- * \param original_shape Shape of weight before transpose.
- * \param input_values The original weight values
- * \param output_values Buffer where transposed values will be placed.
- */
-void TransposeRSCKtoCKRS(const std::vector<int>& original_shape,
-                         const float* input_values, float* output_values);
+void TransposeWeights4D(const std::vector<int>& original_shape,
+                        const int* output_strides, const float* input_values,
+                        float* output_values);
 
 /*!
  * \brief Helper function for GetInputAsTransposedWeights to transpose CK to KC.
  * \param original_shape Shape of weight before transpose.
- * \param input_values The original weight values
+ * \param input_values The original weight values.
  * \param output_values Buffer where transposed values will be placed.
  */
-void TransposeCKtoKC(const std::vector<int>& original_shape,
-                     const float* input_values, float* output_values);
+void TransposeWeights2D(const std::vector<int>& original_shape,
+                        const float* input_values, float* output_values);
 
 }  // namespace contrib
 }  // namespace relay
