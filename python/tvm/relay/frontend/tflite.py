@@ -975,6 +975,7 @@ class OperatorConverter(object):
                                                dtype=bias_tensor_type_str)
             channel_axis = 3
             out = _op.nn.bias_add(out, bias_expr, axis=channel_axis)
+            # out = _op.add(out, bias_expr)
 
         # If we have fused activations
         if fused_activation_fn != ActivationFunctionType.NONE:

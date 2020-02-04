@@ -99,7 +99,7 @@ GetOpConverters() {
   return map;
 }
 
-TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
+TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args, nvinfer1::IInt8Calibrator* calibrator)
     : execution_args_(args) {
   // Create TRT builder and network.
   static runtime::TensorRTLogger logger;
@@ -111,6 +111,11 @@ TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
   builder_->setMaxWorkspaceSize(workspace_size);
   const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
   builder_->setFp16Mode(use_fp16);
+  if (calibrator != nullptr) {
+    builder_->setFp16Mode(true);
+    builder_->setInt8Mode(true);
+    builder_->setInt8Calibrator(calibrator);
+  }
   network_ = builder_->createNetwork();
 }
 

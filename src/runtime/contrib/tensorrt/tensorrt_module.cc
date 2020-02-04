@@ -28,12 +28,14 @@
 #include <tvm/runtime/ndarray.h>
 
 #include <fstream>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "../../file_util.h"
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
 #include "tensorrt_builder.h"
+#include "tensorrt_calibrator.h"
 #include "NvInfer.h"
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
@@ -67,20 +69,22 @@ class TensorRTModule : public runtime::ModuleNode {
 #if TVM_GRAPH_RUNTIME_TENSORRT
     // Generate an external packed function
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+      auto inputs = ConvertInputs(args);
       auto it = trt_engine_cache_.find(name);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
         LOG(INFO) << "Building new TensorRT engine for subgraph " << name;
         auto expr = Downcast<relay::Expr>(LoadJSON(this->serialized_subgraph_));
-
-        auto inputs = ConvertInputs(args);
         relay::contrib::TensorRTBuilder builder(inputs);
         auto engine_and_context = builder.BuildEngine(expr);
-        LOG(INFO) << "Finished building engine";
         this->trt_engine_cache_[name] = engine_and_context;
-        this->ExecuteEngine(engine_and_context, args, rv);
+        LOG(INFO) << "Finished building engine";
+        this->CreateCalibratorIfUsingInt8(engine_and_context, inputs);
+
+        this->ExecuteEngine(engine_and_context, inputs);
       } else {
-        this->ExecuteEngine(it->second, args, rv);
+        RebuildEngineAfterCalibrationIfUsingInt8(name, inputs);
+        this->ExecuteEngine(it->second, inputs);
       }
     });
 #else
@@ -128,6 +132,11 @@ class TensorRTModule : public runtime::ModuleNode {
   /*! \brief Map of function name to TRT engine if built already. */
   std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
 
+  /*! \brief Calibrator for INT8 mode. */
+  std::unique_ptr<TensorRTCalibrator> calibrator_;
+  /*! \brief Number of calibration batches until we are done. */
+  int num_calibration_batches_remaining_;
+
   /*!
    * \brief Convert TVMArgs to make compatible with VM or graph runtime.
    * \param args Inputs to the PackedFunc.
@@ -135,7 +144,7 @@ class TensorRTModule : public runtime::ModuleNode {
    */
   std::vector<DLTensor*> ConvertInputs(tvm::TVMArgs args) {
     std::vector<DLTensor*> inputs(args.size(), nullptr);
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (int i = 0; i < args.size(); ++i) {
       if (args[i].type_code() == kNDArrayContainer) {
         // Relay Debug/VM uses NDArray
         runtime::NDArray array = args[i];
@@ -158,17 +167,17 @@ class TensorRTModule : public runtime::ModuleNode {
    * \return Inputs converted to vector of DLTensor*
    */
   void ExecuteEngine(const TrtEngineAndContext& engine_and_context,
-                     tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+                     std::vector<DLTensor*>& inputs) {
     auto engine = engine_and_context.engine;
     auto context = engine_and_context.context;
     const int num_bindings = engine->getNbBindings();
     std::vector<void*> bindings(num_bindings, nullptr);
+    std::vector<size_t> binding_sizes(num_bindings, 0);
     // Set inputs.
-    auto inputs = ConvertInputs(args);
     const size_t num_outputs = engine_and_context.network_outputs.size();
     CHECK_GT(inputs.size(), num_outputs);
-    // TODO(trevmorr): Assumes output is at the end - is this true?
-    for (size_t i = 0; i < inputs.size() - num_outputs; ++i) {
+    const size_t num_inputs = inputs.size() - num_outputs;
+    for (size_t i = 0; i < num_inputs; ++i) {
       auto it = engine_and_context.network_input_map.find(i);
       if (it != engine_and_context.network_input_map.end()) {
         DLTensor* arg = inputs[i];
@@ -178,11 +187,15 @@ class TensorRTModule : public runtime::ModuleNode {
           LOG(FATAL) << "Only float32 inputs are supported.";
         }
         bindings[binding_index] = reinterpret_cast<float*>(arg->data);
+        auto dims = engine->getBindingDimensions(binding_index);
+        int num_elements = 1;
+        for (int i = 0; i < dims.nbDims; ++i) num_elements *= dims.d[i];
+        binding_sizes[binding_index] = num_elements;
       }
     }
     // Set outputs.
     for (size_t i = 0; i < num_outputs; ++i) {
-      const int index_in_inputs = inputs.size() - num_outputs + i;
+      const int index_in_inputs = num_inputs + i;
       DLTensor* out_arg = inputs[index_in_inputs];
       int binding_index = engine->getBindingIndex(
           engine_and_context.network_outputs[i].c_str());
@@ -193,7 +206,43 @@ class TensorRTModule : public runtime::ModuleNode {
     const int batch_size = inputs[0]->shape[0];
     CHECK(context->execute(batch_size, bindings.data()))
         << "Running TensorRT failed.";
-    *rv = bindings[num_bindings - num_outputs];
+
+    if (calibrator_ != nullptr) {
+      std::vector<void*> input_bindings(bindings.begin(), bindings.begin() + num_inputs);
+      std::vector<size_t> input_sizes(binding_sizes.begin(), binding_sizes.begin() + num_inputs);
+      calibrator_->AddBatchData(input_bindings, input_sizes);
+      num_calibration_batches_remaining_--;
+    }
+  }
+
+  void CreateCalibratorIfUsingInt8(const TrtEngineAndContext& engine_and_context, std::vector<DLTensor*>& inputs) {
+    num_calibration_batches_remaining_ = dmlc::GetEnv("TVM_TENSORRT_USE_INT8", 0);
+    const bool use_int8 = num_calibration_batches_remaining_ != 0;
+    if (use_int8) {
+      LOG(INFO) << "Using INT8. Now in calibration mode, will create inference engine after " << num_calibration_batches_remaining_ << " input batches are provided.";
+      // Get input names in binding order.
+      const size_t num_outputs = engine_and_context.network_outputs.size();
+      std::vector<std::string> input_names(inputs.size() - num_outputs, "");
+      for (size_t i = 0; i < inputs.size() - num_outputs; ++i) {
+        auto it = engine_and_context.network_input_map.find(i);
+        int binding_index = engine_and_context.engine->getBindingIndex(it->second.c_str());
+        input_names[binding_index] = it->second;
+      }
+      const int batch_size = inputs[0]->shape[0];
+      calibrator_.reset(new TensorRTCalibrator(batch_size, input_names));
+    }
+  }
+
+  void RebuildEngineAfterCalibrationIfUsingInt8(const std::string& name, std::vector<DLTensor*>& inputs) {
+   if (calibrator_ != nullptr && num_calibration_batches_remaining_ == 0) {
+      // Rebuild engine, this time in INT8 mode.
+      trt_engine_cache_[name].context->destroy();
+      trt_engine_cache_[name].engine->destroy();
+      auto expr = Downcast<relay::Expr>(LoadJSON(this->serialized_subgraph_));
+      relay::contrib::TensorRTBuilder builder(inputs, calibrator_.get());
+      trt_engine_cache_[name] = builder.BuildEngine(expr);
+      calibrator_.reset(nullptr);
+    }
   }
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 };
