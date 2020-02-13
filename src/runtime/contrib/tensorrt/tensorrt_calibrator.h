@@ -43,6 +43,10 @@ class TensorRTCalibrator : public nvinfer1::IInt8EntropyCalibrator2 {
         delete [] inputs[i];
       }
     }
+    // Free buffers
+    for (size_t i = 0; i < buffers_.size(); ++i) {
+      CUDA_CALL(cudaFree(buffers_[i]));
+    }
   }
 
   /*
@@ -91,6 +95,7 @@ class TensorRTCalibrator : public nvinfer1::IInt8EntropyCalibrator2 {
 
   void writeCalibrationCache(const void* cache, size_t length) override {
     calibration_cache_.assign(static_cast<const char*>(cache), length);
+    LOG(INFO) << calibration_cache_;
   }
 
  private:
