@@ -34,9 +34,9 @@
 #include <vector>
 #include "../../file_util.h"
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
+#include "NvInfer.h"
 #include "tensorrt_builder.h"
 #include "tensorrt_calibrator.h"
-#include "NvInfer.h"
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
 namespace tvm {
@@ -80,16 +80,15 @@ class TensorRTModule : public runtime::ModuleNode {
         this->trt_engine_cache_[name] = engine_and_context;
         LOG(INFO) << "Finished building engine";
         this->CreateCalibratorIfUsingInt8(engine_and_context, inputs);
-
         this->ExecuteEngine(engine_and_context, inputs);
       } else {
-        RebuildEngineAfterCalibrationIfUsingInt8(name, inputs);
         this->ExecuteEngine(it->second, inputs);
+        this->RebuildEngineAfterCalibrationIfUsingInt8(name, inputs);
       }
     });
 #else
     LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
-                << "with USE_TENSORRT=ON.";
+               << "with USE_TENSORRT=ON.";
     return PackedFunc();
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
   }
@@ -193,6 +192,19 @@ class TensorRTModule : public runtime::ModuleNode {
         binding_sizes[binding_index] = num_elements;
       }
     }
+
+    // If we are in calibration mode, pass data to calibrator and return without
+    // performing inference.
+    if (calibrator_ != nullptr) {
+      std::vector<void*> input_bindings(bindings.begin(),
+                                        bindings.begin() + num_inputs);
+      std::vector<size_t> input_sizes(binding_sizes.begin(),
+                                      binding_sizes.begin() + num_inputs);
+      calibrator_->AddBatchData(input_bindings, input_sizes);
+      num_calibration_batches_remaining_--;
+      return;
+    }
+
     // Set outputs.
     for (size_t i = 0; i < num_outputs; ++i) {
       const int index_in_inputs = num_inputs + i;
@@ -202,30 +214,32 @@ class TensorRTModule : public runtime::ModuleNode {
       CHECK_NE(binding_index, -1);
       bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
     }
+
+    // Perform inference.
     // Use batch size from first input.
     const int batch_size = inputs[0]->shape[0];
     CHECK(context->execute(batch_size, bindings.data()))
         << "Running TensorRT failed.";
-
-    if (calibrator_ != nullptr) {
-      std::vector<void*> input_bindings(bindings.begin(), bindings.begin() + num_inputs);
-      std::vector<size_t> input_sizes(binding_sizes.begin(), binding_sizes.begin() + num_inputs);
-      calibrator_->AddBatchData(input_bindings, input_sizes);
-      num_calibration_batches_remaining_--;
-    }
   }
 
-  void CreateCalibratorIfUsingInt8(const TrtEngineAndContext& engine_and_context, std::vector<DLTensor*>& inputs) {
-    num_calibration_batches_remaining_ = dmlc::GetEnv("TVM_TENSORRT_USE_INT8", 0);
+  void CreateCalibratorIfUsingInt8(
+      const TrtEngineAndContext& engine_and_context,
+      const std::vector<DLTensor*>& inputs) {
+    num_calibration_batches_remaining_ =
+        dmlc::GetEnv("TVM_TENSORRT_USE_INT8", 0);
     const bool use_int8 = num_calibration_batches_remaining_ != 0;
     if (use_int8) {
-      LOG(INFO) << "Using INT8. Now in calibration mode, will create inference engine after " << num_calibration_batches_remaining_ << " input batches are provided.";
+      LOG(INFO) << "Entering INT8 calibration mode, will create inference "
+                   "engine after "
+                << num_calibration_batches_remaining_
+                << " input batches are provided.";
       // Get input names in binding order.
       const size_t num_outputs = engine_and_context.network_outputs.size();
       std::vector<std::string> input_names(inputs.size() - num_outputs, "");
       for (size_t i = 0; i < inputs.size() - num_outputs; ++i) {
         auto it = engine_and_context.network_input_map.find(i);
-        int binding_index = engine_and_context.engine->getBindingIndex(it->second.c_str());
+        int binding_index =
+            engine_and_context.engine->getBindingIndex(it->second.c_str());
         input_names[binding_index] = it->second;
       }
       const int batch_size = inputs[0]->shape[0];
@@ -233,8 +247,10 @@ class TensorRTModule : public runtime::ModuleNode {
     }
   }
 
-  void RebuildEngineAfterCalibrationIfUsingInt8(const std::string& name, std::vector<DLTensor*>& inputs) {
-   if (calibrator_ != nullptr && num_calibration_batches_remaining_ == 0) {
+  void RebuildEngineAfterCalibrationIfUsingInt8(
+      const std::string& name, const std::vector<DLTensor*>& inputs) {
+    if (calibrator_ != nullptr && num_calibration_batches_remaining_ == 0) {
+      LOG(INFO) << "Building new INT8 TensorRT engine for subgraph " << name;
       // Rebuild engine, this time in INT8 mode.
       trt_engine_cache_[name].context->destroy();
       trt_engine_cache_[name].engine->destroy();
@@ -242,6 +258,7 @@ class TensorRTModule : public runtime::ModuleNode {
       relay::contrib::TensorRTBuilder builder(inputs, calibrator_.get());
       trt_engine_cache_[name] = builder.BuildEngine(expr);
       calibrator_.reset(nullptr);
+      LOG(INFO) << "Finished building engine";
     }
   }
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
@@ -253,17 +270,17 @@ Module TensorRTModuleCreate(const std::string& serialized_subgraph) {
 }
 
 TVM_REGISTER_GLOBAL("tvm.contrib.tensorrt.create")
-.set_body([](TVMArgs args, TVMRetValue* rv) {
-  *rv = TensorRTModuleCreate(args[0]);
-});
+    .set_body([](TVMArgs args, TVMRetValue* rv) {
+      *rv = TensorRTModuleCreate(args[0]);
+    });
 
 TVM_REGISTER_GLOBAL("module.loadfile_tensorrt")
-.set_body([](TVMArgs args, TVMRetValue* rv) {
-  *rv = TensorRTModule::LoadFromFile(args[0]);
-});
+    .set_body([](TVMArgs args, TVMRetValue* rv) {
+      *rv = TensorRTModule::LoadFromFile(args[0]);
+    });
 
 TVM_REGISTER_GLOBAL("module.loadbinary_tensorrt")
-.set_body_typed(TensorRTModule::LoadFromBinary);
+    .set_body_typed(TensorRTModule::LoadFromBinary);
 
 }  // namespace runtime
 }  // namespace tvm

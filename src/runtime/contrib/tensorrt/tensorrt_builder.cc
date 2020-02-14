@@ -99,7 +99,8 @@ GetOpConverters() {
   return map;
 }
 
-TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args, nvinfer1::IInt8Calibrator* calibrator)
+TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args,
+                                 nvinfer1::IInt8Calibrator* calibrator)
     : execution_args_(args) {
   // Create TRT builder and network.
   static runtime::TensorRTLogger logger;

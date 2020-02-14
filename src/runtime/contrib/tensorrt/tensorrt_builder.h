@@ -95,7 +95,8 @@ class TensorRTBuilder : public ExprVisitor {
    * \brief Create TensorRT builder.
    * \param args Inputs to this execution.
    */
-  explicit TensorRTBuilder(const std::vector<DLTensor*>& args, nvinfer1::IInt8Calibrator* calibrator = nullptr);
+  explicit TensorRTBuilder(const std::vector<DLTensor*>& args,
+                           nvinfer1::IInt8Calibrator* calibrator = nullptr);
 
   void VisitExpr_(const VarNode* node) final;
 
