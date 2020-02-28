@@ -25,7 +25,7 @@ import pytest
 from tvm.contrib import graph_runtime
 
 def should_skip():
-    if not tvm.module.enabled("cuda") or not tvm.gpu(0).exist:
+    if not tvm.runtime.enabled("cuda") or not tvm.gpu(0).exist:
         print("skip because cuda is not enabled.")
         return True
     if not relay.tensorrt.IsTrtRuntimeAvailable():
@@ -47,11 +47,11 @@ def test_tensorrt_simple():
     out = relay.nn.relu(w)
     f = relay.Function([x, y, z], out)
 
-    mod = relay.Module()
+    mod = tvm.IRModule()
     mod['main'] = f
     mod = relay.tensorrt.EnableTrt(mod)
 
-    ref_mod = relay.Module()
+    ref_mod = tvm.IRModule()
     ref_mod['main'] = f
 
     x_data = np.random.uniform(-1, 1, xshape).astype(dtype)
@@ -81,7 +81,7 @@ def test_tensorrt_not_compatible():
     z = relay.erf(y)
     out = relay.nn.relu(z)
     f = relay.Function([x], out)
-    mod = relay.Module()
+    mod = tvm.IRModule()
     mod['main'] = f
     mod = relay.tensorrt.EnableTrt(mod)
     assert not mod['main'].attrs
@@ -94,7 +94,7 @@ def test_tensorrt_ops():
         input_dict = {k: np.random.uniform(-1, 1, v) for k, v in input_shapes.items()}
 
         # Run TRT 
-        mod = relay.Module()
+        mod = tvm.IRModule()
         mod['main'] = f
         mod = relay.tensorrt.EnableTrt(mod)
         assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
@@ -105,7 +105,7 @@ def test_tensorrt_ops():
         results = [mod.get_output(i) for i in range(mod.get_num_outputs())]
 
         # Run reference
-        mod = relay.Module()
+        mod = tvm.IRModule()
         mod['main'] = f
         with relay.build_config(opt_level=3):
             graph, lib, params = relay.build(mod, "cuda")
@@ -523,7 +523,7 @@ def test_tensorrt_serialize():
         graph = f_graph_json.read()
     with open('compiled.params', 'rb') as f_params:
         params = bytearray(f_params.read())
-    lib = tvm.module.load("compiled.tensorrt")
+    lib = tvm.IRModule._import("compiled.tensorrt")
     # Run
     mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
     mod.load_params(params)
