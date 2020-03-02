@@ -293,9 +293,12 @@ bool StridedSliceOpChecker(const CallNode* call, const std::string& op_name,
   if (!TrtVersionChecker<5, 1, 5>(call, op_name, trt_version)) return false;
   auto shape = GetShape(call->type_args[0]);
   const auto* attrs = call->attrs.as<StridedSliceAttrs>();
-  if (attrs->begin[0].as<IntImmNode>()->value != 0 ||
-      (attrs->end[0].as<IntImmNode>()->value != -1 &&
-       attrs->end[0].as<IntImmNode>()->value != shape[0])) {
+  const bool batch_begin_unmodified =
+      !attrs->begin[0].defined() || attrs->begin[0].as<IntImm>()->value == 0;
+  const bool batch_end_unmodified =
+      !attrs->end[0].defined() || attrs->end[0].as<IntImm>()->value == -1 ||
+      attrs->end[0].as<IntImm>()->value == shape[0];
+  if (batch_begin_unmodified && batch_end_unmodified) {
     LOG(INFO) << op_name << " not supported: can't modify batch dimension.";
     return false;
   }
