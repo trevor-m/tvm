@@ -32,7 +32,9 @@
 
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
+#include "../../../../runtime/contrib/tensorrt/tensorrt_module.h"
 #include "../codegen_c/codegen_c.h"
 
 namespace tvm {
@@ -42,32 +44,46 @@ namespace contrib {
 /*!
  * \brief Generates a TensorRTModule from a relay expression. This "compilation"
  * does not require TensorRT since the actual conversion using TensorRT APIs is
- * deferred until runtime. This step simply serializes the relay program into a
- * string.
+ * deferred until runtime. This step simply serializes the relay functions into
+ * strings.
  */
 class TensorRTModuleCodegen : public CSourceModuleCodegenBase {
  public:
+  /*!
+   * \brief Serializes a function and stores it in serialized_subgraphs_ so that
+   * it can be included in the TensorRT module.
+   * \param func A relay function to add to the TensorRT module.
+   */
+  void GenFunc(const Function& func) {
+    CHECK(func.defined()) << "Input error: expect a Relay function.";
+    // Record the external symbol for runtime lookup.
+    auto sid = GetExtSymbol(func);
+    serialized_subgraphs_[sid] = SaveJSON(func);
+  }
+
+  /*!
+   * \brief Creates the TensorRT module from the Relay function or IRModule.
+   * \param ref An object ref that could be either a Relay function or IRModule.
+   * \return The TensorRT runtime module.
+   */
   runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
-    std::string serialized_subgraph;
     if (ref->IsInstance<FunctionNode>()) {
-      serialized_subgraph = SaveJSON(Downcast<Function>(ref)->body);
+      GenFunc(Downcast<Function>(ref));
     } else if (ref->IsInstance<IRModuleNode>()) {
       IRModule mod = Downcast<IRModule>(ref);
-      // TODO(trevmorr): support multiple functions. It is currently not
-      // possible for there to be more than one TRT func, so not a problem yet.
       for (const auto& it : mod->functions) {
-        serialized_subgraph = SaveJSON(Downcast<Function>(it.second)->body);
+        GenFunc(Downcast<Function>(it.second));
       }
     } else {
       LOG(FATAL)
           << "The input ref is expected to be a Relay function or module.";
     }
-    const PackedFunc* pf =
-        runtime::Registry::Get("tvm.contrib.tensorrt.create");
-    CHECK(pf != nullptr)
-        << "tvm.contrib.tensorrt.create was not found in the registry.";
-    return (*pf)(serialized_subgraph);
+    return runtime::TensorRTModuleCreate(serialized_subgraphs_);
   }
+
+ private:
+  /*! \brief Map of external symbol to serialized Relay functions. */
+  std::unordered_map<std::string, std::string> serialized_subgraphs_;
 };
 
 /*!

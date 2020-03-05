@@ -116,30 +116,50 @@ TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
   network_ = builder_->createNetwork();
 }
 
-runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(const Expr& expr) {
-  // Process graph and create INetworkDefinition.
-  VisitExpr(expr);
+void TensorRTBuilder::ProcessInputs(const Function& func) {
+  // All input names in order. This order matches that of execution args.
+  for (size_t i = 0; i < func->params.size(); i++) {
+    network_input_names_.push_back(func->params[i]->name_hint());
+    network_input_map_[func->params[i]->name_hint()] = i;
+  }
+  // Assume all inputs are real to start. If an input is baked into the TRT
+  // engine, we will set the entry in this array to true.
+  network_input_is_baked_.assign(func->params.size(), false);
+}
+
+void TensorRTBuilder::ProcessOutputs(const Expr& expr) {
   // Mark outputs.
   auto it = node_output_map_.find(expr.operator->());
   CHECK(it != node_output_map_.end()) << "Output was not found.";
   auto network_outputs = it->second;
-  std::vector<std::string> network_output_names;
   for (size_t i = 0; i < network_outputs.size(); ++i) {
     CHECK(network_outputs[i].type == kTensor);
     auto out_tensor = network_outputs[i].tensor;
     std::string output_name = "tensorrt_output" + std::to_string(i);
     out_tensor->setName(output_name.c_str());
-    network_output_names.push_back(output_name);
+    network_output_names_.push_back(output_name);
     network_->markOutput(*out_tensor);
     DLOG(INFO) << "Added TRT network output: " << out_tensor->getName()
                << " -> " << output_name;
   }
+}
+
+runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
+    const Function& func) {
+  // Process graph to create INetworkDefinition.
+  ProcessInputs(func);
+  VisitExpr(func->body);
+  ProcessOutputs(func->body);
+  // Build engine.
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
+  const int num_input_bindings = std::count(
+      network_input_is_baked_.begin(), network_input_is_baked_.end(), false);
   CHECK_EQ(engine->getNbBindings(),
-           network_input_map_.size() + network_outputs.size());
+           num_input_bindings + network_output_names_.size());
   CleanUp();
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
-  return {engine, context, network_input_map_, network_output_names};
+  return {engine, context, network_input_names_, network_input_is_baked_,
+          network_output_names_};
 }
 
 nvinfer1::Weights TensorRTBuilder::GetDLTensorAsWeights(
@@ -170,7 +190,10 @@ nvinfer1::Weights TensorRTBuilder::GetNdArrayAsWeights(
 }
 
 void TensorRTBuilder::GetInputAsWeights(const VarNode* node) {
-  const int var_node_idx = TrackVarNode(node);
+  const int var_node_idx = network_input_map_[node->name_hint()];
+  // This input will be baked into TensorRT engine using value from first
+  // invocation.
+  network_input_is_baked_[var_node_idx] = true;
   nvinfer1::Weights weight =
       GetDLTensorAsWeights(execution_args_[var_node_idx], kDLGPU);
   node_output_map_[node] = {TrtOpInput(weight, GetShape(node->checked_type()))};
@@ -250,8 +273,6 @@ void TensorRTBuilder::VisitExpr_(const TupleNode* op) {
 }
 
 void TensorRTBuilder::VisitExpr_(const VarNode* node) {
-  const int id = TrackVarNode(node);
-
   const std::string& tensor_name = node->name_hint();
   auto shape = GetShape(node->checked_type());
   // Remove batch dim
@@ -265,7 +286,6 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
       << "Only FP32 inputs are supported.";
   auto input =
       network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
-  network_input_map_[id] = tensor_name;
   node_output_map_[node] = {TrtOpInput(input)};
 }
 
@@ -339,14 +359,6 @@ void TensorRTBuilder::VisitExpr_(const CallNode* call) {
   for (auto out : params.outputs) {
     node_output_map_[call].push_back(TrtOpInput(out));
   }
-}
-
-int TensorRTBuilder::TrackVarNode(const VarNode* node) {
-  // TODO(trevmorr): make more robust
-  const int trim_length = std::string("tensorrt_input").length();
-  int var_node_idx =
-      std::stoi(node->name_hint().substr(trim_length, std::string::npos));
-  return var_node_idx;
 }
 
 void TensorRTBuilder::CleanUp() {

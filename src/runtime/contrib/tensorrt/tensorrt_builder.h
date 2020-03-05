@@ -50,8 +50,9 @@ namespace runtime {
 struct TrtEngineAndContext {
   nvinfer1::ICudaEngine* engine;
   nvinfer1::IExecutionContext* context;
-  std::unordered_map<int, std::string> network_input_map;
-  std::vector<std::string> network_outputs;
+  std::vector<std::string> inputs;
+  std::vector<bool> input_is_baked;
+  std::vector<std::string> outputs;
 };
 
 }  // namespace runtime
@@ -112,7 +113,7 @@ class TensorRTBuilder : public ExprVisitor {
    * \param expr The relay expression.
    * \return TRT engine, context, and input/output information.
    */
-  runtime::TrtEngineAndContext BuildEngine(const Expr& expr);
+  runtime::TrtEngineAndContext BuildEngine(const Function& func);
 
  private:
   /*!
@@ -148,8 +149,13 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief Deallocates weights and destroys network definition. */
   void CleanUp();
 
-  /*! \brief Get corresponding index for VarNode in execution_args_. */
-  int TrackVarNode(const VarNode* node);
+  /*! \brief Initializes network_input_names_, network_input_map_ and
+   * network_input_is_baked_ based on function parameters. */
+  void ProcessInputs(const Function& expr);
+
+  /*! \brief Populates network_output_names_ from the final outputs of the
+   * processed expr. */
+  void ProcessOutputs(const Expr& expr);
 
   /*! \brief Maps a node to its outputs. */
   std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
@@ -169,9 +175,21 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief Batch size of inputs from this invocation. */
   int batch_size_;
 
-  /*! \brief Maps execution_args_ input index -> TRT input tensor name / VarNode
-   * name_hint. */
-  std::unordered_map<int, std::string> network_input_map_;
+  /*! \brief Input names in same order as execution args during runtime. Some of
+   * these are not actual input bindings in the TRT engine - use
+   * network_input_is_baked_ to find out which. */
+  std::vector<std::string> network_input_names_;
+
+  /*! \brief Maps input name to execution args index. */
+  std::unordered_map<std::string, int> network_input_map_;
+
+  /*! \brief True if the corresponding input is baked into the TensorRT engine
+   * and therefore should not be included in the input bindings during
+   * execution. */
+  std::vector<bool> network_input_is_baked_;
+
+  /*! \brief Output names in same order as execution args during runtime. */
+  std::vector<std::string> network_output_names_;
 };
 
 /*!

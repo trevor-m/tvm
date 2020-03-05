@@ -32,26 +32,42 @@
 #include <unordered_map>
 #include <vector>
 #include "../../file_util.h"
+#include "tensorrt_module.h"
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
-#include "tensorrt_builder.h"
 #include "NvInfer.h"
+#include "tensorrt_builder.h"
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
+
+inline std::string ToJSON(
+    const std::unordered_map<std::string, std::string>& serialized_subgraphs) {
+  std::ostringstream os;
+  dmlc::JSONWriter writer(&os);
+  writer.BeginObject();
+  writer.WriteObjectKeyValue("subgraphs", serialized_subgraphs);
+  writer.EndObject();
+  return os.str();
+}
+
+inline std::unordered_map<std::string, std::string> FromJSON(
+    const std::string& str) {
+  std::unordered_map<std::string, std::string> serialized_subgraphs;
+  std::istringstream is(str);
+  dmlc::JSONReader reader(&is);
+  dmlc::JSONObjectReadHelper helper;
+  helper.DeclareField("subgraphs", &serialized_subgraphs);
+  helper.ReadAllFields(&reader);
+  return serialized_subgraphs;
+}
 
 namespace tvm {
 namespace runtime {
 
-/*!
- * \brief Create a TensorRTModule.
- * \param serialized_subgraph Relay expr serialized with SaveJSON.
- * \return TensorRTModule created from subgraph.
- */
-Module TensorRTModuleCreate(const std::string& serialized_subgraph);
-
 /*! \brief A module for TensorRT runtime. */
 class TensorRTModule : public runtime::ModuleNode {
  public:
-  explicit TensorRTModule(const std::string& serialized_subgraph)
-      : serialized_subgraph_(serialized_subgraph) {}
+  explicit TensorRTModule(
+      const std::unordered_map<std::string, std::string>& serialized_subgraphs)
+      : serialized_subgraphs_(serialized_subgraphs) {}
 
   ~TensorRTModule() {
 #if TVM_GRAPH_RUNTIME_TENSORRT
@@ -65,17 +81,27 @@ class TensorRTModule : public runtime::ModuleNode {
   PackedFunc GetFunction(const std::string& name,
                          const ObjectPtr<Object>& sptr_to_self) final {
 #if TVM_GRAPH_RUNTIME_TENSORRT
+    // Workaround for "__tvm_set_device".
+    // auto it_subgraph = serialized_subgraphs_.find(name);
+    // if (it_subgraph == serialized_subgraphs_.end()) {
+    //   return PackedFunc(nullptr);
+    // }
+    if (name == "__tvm_set_device") {
+      const PackedFunc* pf = runtime::Registry::Get("__tvm_set_device");
+      return *pf;
+    }
     // Generate an external packed function
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
       auto it = trt_engine_cache_.find(name);
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
         LOG(INFO) << "Building new TensorRT engine for subgraph " << name;
-        auto expr = Downcast<relay::Expr>(LoadJSON(this->serialized_subgraph_));
-
+        auto func = Downcast<relay::Function>(
+            LoadJSON(this->serialized_subgraphs_[name]));
+        LOG(INFO) << AsText(func);
         auto inputs = ConvertInputs(args);
         relay::contrib::TensorRTBuilder builder(inputs);
-        auto engine_and_context = builder.BuildEngine(expr);
+        auto engine_and_context = builder.BuildEngine(func);
         LOG(INFO) << "Finished building engine";
         this->trt_engine_cache_[name] = engine_and_context;
         this->ExecuteEngine(engine_and_context, args, rv);
@@ -85,7 +111,7 @@ class TensorRTModule : public runtime::ModuleNode {
     });
 #else
     LOG(FATAL) << "TVM was not built with TensorRT runtime enabled. Build "
-                << "with USE_TENSORRT=ON.";
+               << "with USE_TENSORRT=ON.";
     return PackedFunc();
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
   }
@@ -96,33 +122,33 @@ class TensorRTModule : public runtime::ModuleNode {
                   const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
-    SaveBinaryToFile(file_name, serialized_subgraph_);
+    SaveBinaryToFile(file_name, ToJSON(serialized_subgraphs_));
   }
 
   void SaveToBinary(dmlc::Stream* stream) final {
-    stream->Write(serialized_subgraph_);
+    stream->Write(ToJSON(serialized_subgraphs_));
   }
 
   static Module LoadFromFile(const std::string& path) {
     std::ifstream filep(path);
     filep.seekg(0, std::ios::end);
     size_t size = filep.tellg();
-    std::string serialized_subgraph(size, ' ');
+    std::string serialized_subgraphs(size, ' ');
     filep.seekg(0);
-    filep.read(&serialized_subgraph[0], size);
-    return TensorRTModuleCreate(serialized_subgraph);
+    filep.read(&serialized_subgraphs[0], size);
+    return TensorRTModuleCreate(FromJSON(serialized_subgraphs));
   }
 
   static Module LoadFromBinary(void* strm) {
     dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
-    std::string serialized_subgraph;
-    stream->Read(&serialized_subgraph);
-    return TensorRTModuleCreate(serialized_subgraph);
+    std::string serialized_subgraphs;
+    stream->Read(&serialized_subgraphs);
+    return TensorRTModuleCreate(FromJSON(serialized_subgraphs));
   }
 
  private:
   /*! \brief Relay program serialized using SaveJSON */
-  std::string serialized_subgraph_;
+  std::unordered_map<std::string, std::string> serialized_subgraphs_;
 
 #if TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Map of function name to TRT engine if built already. */
@@ -165,27 +191,26 @@ class TensorRTModule : public runtime::ModuleNode {
     std::vector<void*> bindings(num_bindings, nullptr);
     // Set inputs.
     auto inputs = ConvertInputs(args);
-    const size_t num_outputs = engine_and_context.network_outputs.size();
+    const size_t num_outputs = engine_and_context.outputs.size();
     CHECK_GT(inputs.size(), num_outputs);
-    // TODO(trevmorr): Assumes output is at the end - is this true?
-    for (size_t i = 0; i < inputs.size() - num_outputs; ++i) {
-      auto it = engine_and_context.network_input_map.find(i);
-      if (it != engine_and_context.network_input_map.end()) {
-        DLTensor* arg = inputs[i];
-        int binding_index = engine->getBindingIndex(it->second.c_str());
-        CHECK_NE(binding_index, -1);
-        if (!runtime::TypeMatch(arg->dtype, kDLFloat, 32)) {
-          LOG(FATAL) << "Only float32 inputs are supported.";
-        }
-        bindings[binding_index] = reinterpret_cast<float*>(arg->data);
+    for (size_t i = 0; i < engine_and_context.inputs.size(); ++i) {
+      // If an input was baked into the engine, skip.
+      if (engine_and_context.input_is_baked[i]) continue;
+      DLTensor* arg = inputs[i];
+      int binding_index =
+          engine->getBindingIndex(engine_and_context.inputs[i].c_str());
+      CHECK_NE(binding_index, -1);
+      if (!runtime::TypeMatch(arg->dtype, kDLFloat, 32)) {
+        LOG(FATAL) << "Only float32 inputs are supported.";
       }
+      bindings[binding_index] = reinterpret_cast<float*>(arg->data);
     }
     // Set outputs.
     for (size_t i = 0; i < num_outputs; ++i) {
       const int index_in_inputs = inputs.size() - num_outputs + i;
       DLTensor* out_arg = inputs[index_in_inputs];
-      int binding_index = engine->getBindingIndex(
-          engine_and_context.network_outputs[i].c_str());
+      int binding_index =
+          engine->getBindingIndex(engine_and_context.outputs[i].c_str());
       CHECK_NE(binding_index, -1);
       bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
     }
@@ -198,15 +223,11 @@ class TensorRTModule : public runtime::ModuleNode {
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 };
 
-Module TensorRTModuleCreate(const std::string& serialized_subgraph) {
-  auto n = make_object<TensorRTModule>(serialized_subgraph);
+Module TensorRTModuleCreate(
+    const std::unordered_map<std::string, std::string>& serialized_subgraphs) {
+  auto n = make_object<TensorRTModule>(serialized_subgraphs);
   return Module(n);
 }
-
-TVM_REGISTER_GLOBAL("tvm.contrib.tensorrt.create")
-.set_body([](TVMArgs args, TVMRetValue* rv) {
-  *rv = TensorRTModuleCreate(args[0]);
-});
 
 TVM_REGISTER_GLOBAL("module.loadfile_tensorrt")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
