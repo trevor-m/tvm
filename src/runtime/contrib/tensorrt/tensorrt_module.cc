@@ -204,6 +204,16 @@ class TensorRTModule : public runtime::ModuleNode {
         LOG(FATAL) << "Only float32 inputs are supported.";
       }
       bindings[binding_index] = reinterpret_cast<float*>(arg->data);
+#if TRT_VERSION_GE(6, 0, 1)
+      // Set binding dimensions for INetworkV2 explicit batch mode engines.
+      nvinfer1::Dims dims;
+      dims.d[0] = 1;
+      dims.nbDims = arg->ndim;
+      for (int i = 0; i < arg->ndim; ++i) {
+        dims.d[i] = arg->shape[i];
+      }
+      context->setBindingDimensions(binding_index, dims);
+#endif
     }
     // Set outputs.
     for (size_t i = 0; i < num_outputs; ++i) {
@@ -214,10 +224,14 @@ class TensorRTModule : public runtime::ModuleNode {
       CHECK_NE(binding_index, -1);
       bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
     }
+#if TRT_VERSION_GE(6, 0, 1)
+    CHECK(context->executeV2(bindings.data())) << "Running TensorRT failed.";
+#else
     // Use batch size from first input.
     const int batch_size = inputs[0]->shape[0];
     CHECK(context->execute(batch_size, bindings.data()))
         << "Running TensorRT failed.";
+#endif
     *rv = bindings[num_bindings - num_outputs];
   }
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT

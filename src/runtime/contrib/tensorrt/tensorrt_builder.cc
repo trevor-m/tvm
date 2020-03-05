@@ -105,7 +105,15 @@ TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
     : execution_args_(args) {
   // Create TRT builder and network.
   static runtime::TensorRTLogger logger;
+#if TRT_VERSION_GE(6, 0, 1)
+  // Use INetworkV2 with explicit batch.
   builder_ = nvinfer1::createInferBuilder(logger);
+  const auto flags =
+      1U << static_cast<uint32_t>(
+          nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+  network_ = builder_->createNetworkV2(flags);
+#else
+  // Use INetwork with implicit batch.
   batch_size_ = args[0]->shape[0];
   builder_->setMaxBatchSize(batch_size_);
   const size_t workspace_size =
@@ -114,6 +122,7 @@ TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
   const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
   builder_->setFp16Mode(use_fp16);
   network_ = builder_->createNetwork();
+#endif
 }
 
 void TensorRTBuilder::ProcessInputs(const Function& func) {
@@ -150,8 +159,30 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
   ProcessInputs(func);
   VisitExpr(func->body);
   ProcessOutputs(func->body);
-  // Build engine.
+// Build engine.
+#if TRT_VERSION_GE(6, 0, 1)
+  auto config = builder_->createBuilderConfig();
+  const size_t workspace_size =
+      dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
+  config->setMaxWorkspaceSize(workspace_size);
+  if (dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false)) {
+    config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  }
+  // Add profiles.
+  auto profile = builder_->createOptimizationProfile();
+  for (int i = 0; i < network_->getNbInputs(); ++i) {
+    auto name = network_->getInput(i)->getName();
+    auto dims = network_->getInput(i)->getDimensions();
+    profile->setDimensions(name, nvinfer1::OptProfileSelector::kMIN, dims);
+    profile->setDimensions(name, nvinfer1::OptProfileSelector::kOPT, dims);
+    profile->setDimensions(name, nvinfer1::OptProfileSelector::kMAX, dims);
+  }
+  config->addOptimizationProfile(profile);
+  nvinfer1::ICudaEngine* engine =
+      builder_->buildEngineWithConfig(*network_, *config);
+#else
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
+#endif
   const int num_input_bindings = std::count(
       network_input_is_baked_.begin(), network_input_is_baked_.end(), false);
   CHECK_EQ(engine->getNbBindings(),
@@ -275,8 +306,10 @@ void TensorRTBuilder::VisitExpr_(const TupleNode* op) {
 void TensorRTBuilder::VisitExpr_(const VarNode* node) {
   const std::string& tensor_name = node->name_hint();
   auto shape = GetShape(node->checked_type());
-  // Remove batch dim
-  if (shape.size() > 1) shape.erase(shape.begin());
+  // Remove batch dim when not in explicit batch mode.
+  if (network_->hasImplicitBatchDimension() && shape.size() > 1) {
+    shape.erase(shape.begin());
+  }
   DLOG(INFO) << "Added TRT network input: " << node->name_hint() << " "
              << DebugString(shape);
   nvinfer1::Dims dims = VectorToTrtDims(shape);
@@ -292,8 +325,11 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
 void TensorRTBuilder::VisitExpr_(const ConstantNode* node) {
   nvinfer1::Weights weight = GetNdArrayAsWeights(node->data, kDLCPU);
   auto shape = node->data.Shape();
-  // Remove batch dim.
-  if (shape.size() > 1 && shape[0] == 1) shape.erase(shape.begin());
+  // Remove batch dim when not in explicit batch mode.
+  if (network_->hasImplicitBatchDimension() && shape.size() > 1 &&
+      shape[0] == 1) {
+    shape.erase(shape.begin());
+  }
   nvinfer1::Dims dims = VectorToTrtDims(shape);
   auto const_layer = network_->addConstant(dims, weight);
   CHECK(const_layer != nullptr);
