@@ -29,11 +29,13 @@
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/attrs/transform.h>
+#include <tvm/relay/attrs/vision.h>
 
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "NvInfer.h"
+#include "NvInferPlugin.h"
 #include "utils.h"
 
 namespace tvm {
@@ -58,7 +60,18 @@ struct AddTrtLayerParams {
   AddTrtLayerParams(nvinfer1::INetworkDefinition* network, const CallNode* call,
                     std::vector<nvinfer1::Weights>* trt_weights)
       : network(network), call(call), trt_weights(trt_weights) {
-    op_name = (call->op.as<OpNode>())->name;
+    if (auto* op = call->op.as<OpNode>()) {
+      op_name = op->name;
+    } else if (call->op->IsInstance<FunctionNode>()) {
+      Function func = Downcast<Function>(call->op);
+      const auto name_node = func->GetAttr<String>(attr::kComposite);
+      if (!name_node.defined() || name_node.value() == "") {
+        LOG(FATAL) << "Only composite functions can be converted.";
+      }
+      op_name = name_node.value();
+    } else {
+      LOG(FATAL) << "Call must be Op or Function.";
+    }
   }
 };
 
@@ -122,11 +135,19 @@ class TrtOpConverter {
                                const std::vector<int>& order) const {
     auto layer = params->network->addShuffle(*input);
     CHECK(layer != nullptr);
-    CHECK_EQ(input->getDimensions().nbDims, order.size() - 1);
-    CHECK_EQ(order[0], 0);
     nvinfer1::Permutation perm;
-    for (int i = 0; i < order.size(); ++i) {
-      perm.order[i] = order[i + 1] - 1;
+    if (params->network->hasImplicitBatchDimension()) {
+      // Batch dimension cannot be modified.
+      CHECK_EQ(input->getDimensions().nbDims, order.size() - 1);
+      CHECK_EQ(order[0], 0);
+      for (int i = 0; i < order.size(); ++i) {
+        perm.order[i] = order[i + 1] - 1;
+      }
+    } else {
+      CHECK_EQ(input->getDimensions().nbDims, order.size());
+      for (int i = 0; i < order.size(); ++i) {
+        perm.order[i] = order[i];
+      }
     }
     layer->setFirstTranspose(perm);
     return layer->getOutput(0);
@@ -138,14 +159,20 @@ class TrtOpConverter {
    * \param input_rank Rank of input, does not include batch dim.
    * \return Axis in TRT format.
    */
-  int ConvertAxis(int axis, int input_rank) const {
+  int ConvertAxis(AddTrtLayerParams* params, int axis, int input_rank) const {
     // Add 1 for missing batch dim.
-    input_rank += 1;
+    if (params->network->hasImplicitBatchDimension()) {
+      input_rank += 1;
+    }
     CHECK(axis >= -input_rank && axis < input_rank);
     if (axis < 0) axis += input_rank;
-    CHECK_NE(axis, 0);
-    // Subtract 1 for implicit batch dim.
-    return axis - 1;
+    if (params->network->hasImplicitBatchDimension()) {
+      // Can't modify batch dimenson.
+      CHECK_NE(axis, 0);
+      // Subtract 1 for implicit batch dim.
+      axis -= 1;
+    }
+    return axis;
   }
 
   // Create constant that is broadcastable against input.
@@ -307,7 +334,7 @@ class Conv2DOpConverter : public TrtOpConverter {
     if (conv2d_attr->padding.size() == 2) {
       const auto padding =
           nvinfer1::DimsHW(conv2d_attr->padding[0].as<IntImmNode>()->value,
-                          conv2d_attr->padding[1].as<IntImmNode>()->value);
+                           conv2d_attr->padding[1].as<IntImmNode>()->value);
       conv_layer->setPadding(padding);
     } else if (conv2d_attr->padding.size() == 4) {
       // (top, left, bottom, right)
@@ -344,11 +371,14 @@ class DenseOpConverter : public TrtOpConverter {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     CHECK(input_dims.size() > 0 && input_dims.size() <= 3);
-    const bool need_reshape_on_input = input_dims.size() != 3;
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    const bool need_reshape_on_input = input_dims.size() != required_rank;
     if (need_reshape_on_input) {
-      // Add dims of size 1 until rank is 3.
+      // Add dims of size 1 until rank is required_rank.
       std::vector<int> new_shape(input_dims);
-      while (new_shape.size() < 3) new_shape.insert(new_shape.end(), 1);
+      while (new_shape.size() < required_rank)
+        new_shape.insert(new_shape.end(), 1);
       input_tensor = Reshape(params, input_tensor, new_shape);
     }
     // Weights are in KC format.
@@ -426,6 +456,9 @@ class BatchNormOpConverter : public TrtOpConverter {
       output = Transpose(params, output, {0, 2, 3, 1});
     }
     params->outputs.push_back(output);
+    // Create dummy outputs for new running mean and new running variance.
+    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
+    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
   }
 };
 
@@ -434,8 +467,13 @@ class BatchFlattenOpConverter : public TrtOpConverter {
   BatchFlattenOpConverter() : TrtOpConverter({kTensor}) {}
 
   void Convert(AddTrtLayerParams* params) const {
+    std::vector<int> new_shape{-1};
+    if (!params->network->hasImplicitBatchDimension()) {
+      new_shape.insert(new_shape.begin(),
+                       params->inputs.at(0).tensor->getDimensions().d[0]);
+    }
     params->outputs.push_back(
-        Reshape(params, params->inputs.at(0).tensor, {-1}));
+        Reshape(params, params->inputs.at(0).tensor, new_shape));
   }
 };
 
@@ -447,7 +485,7 @@ class SoftmaxOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     const int input_rank = input->getDimensions().nbDims;
     const auto* softmax_attr = params->call->attrs.as<SoftmaxAttrs>();
-    const int axis = ConvertAxis(softmax_attr->axis, input_rank);
+    const int axis = ConvertAxis(params, softmax_attr->axis, input_rank);
     nvinfer1::ISoftMaxLayer* softmax_layer =
         params->network->addSoftMax(*input);
     softmax_layer->setAxes(1 << axis);
@@ -489,8 +527,9 @@ class PoolingOpConverter : public TrtOpConverter {
     *window_size =
         nvinfer1::DimsHW(attrs->pool_size[0].template as<IntImmNode>()->value,
                          attrs->pool_size[1].template as<IntImmNode>()->value);
-    *strides = nvinfer1::DimsHW(attrs->strides[0].template as<IntImmNode>()->value,
-                                attrs->strides[1].template as<IntImmNode>()->value);
+    *strides =
+        nvinfer1::DimsHW(attrs->strides[0].template as<IntImmNode>()->value,
+                         attrs->strides[1].template as<IntImmNode>()->value);
     *ceil_mode = attrs->ceil_mode;
   }
 
@@ -582,9 +621,12 @@ class GlobalPoolingOpConverter : public TrtOpConverter {
                               << " in TensorRT";
     const auto* pool_attr = params->call->attrs.as<GlobalPool2DAttrs>();
     CHECK_EQ(pool_attr->layout, "NCHW");
-    const auto window_size = nvinfer1::DimsHW(input_dims[1], input_dims[2]);
-    auto pool_layer =
-        params->network->addPooling(*input_tensor, it->second, window_size);
+    const int h = params->network->hasImplicitBatchDimension() ? input_dims[1]
+                                                               : input_dims[2];
+    const int w = params->network->hasImplicitBatchDimension() ? input_dims[2]
+                                                               : input_dims[3];
+    auto pool_layer = params->network->addPooling(*input_tensor, it->second,
+                                                  nvinfer1::DimsHW(h, w));
     CHECK(pool_layer != nullptr);
     params->outputs.push_back(pool_layer->getOutput(0));
   }
@@ -598,7 +640,7 @@ class ExpandDimsOpConverter : public TrtOpConverter {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     const auto* attrs = params->call->attrs.as<ExpandDimsAttrs>();
-    const int axis = ConvertAxis(attrs->axis, input_dims.size() + 1);
+    const int axis = ConvertAxis(params, attrs->axis, input_dims.size() + 1);
     for (int i = 0; i < attrs->num_newaxis; ++i) {
       input_dims.insert(input_dims.begin() + axis, 1);
     }
@@ -618,8 +660,8 @@ class SqueezeOpConverter : public TrtOpConverter {
     // TODO(tmorris): if axis not defined, squeeze all dimensions with size 1.
     CHECK(attrs->axis.defined());
     for (size_t i = 0; i < attrs->axis.size(); ++i) {
-      const int axis =
-          ConvertAxis(attrs->axis[i].as<IntImmNode>()->value, input_dims.size());
+      const int axis = ConvertAxis(
+          params, attrs->axis[i].as<IntImmNode>()->value, input_dims.size());
       input_dims[axis] = 0;
     }
     input_dims.erase(std::remove(input_dims.begin(), input_dims.end(), 0),
@@ -676,7 +718,7 @@ class ConcatOpConverter : public TrtOpConverter {
     }
 
     const auto* concat_attr = params->call->attrs.as<ConcatenateAttrs>();
-    const int axis = ConvertAxis(concat_attr->axis, input_rank);
+    const int axis = ConvertAxis(params, concat_attr->axis, input_rank);
 
     nvinfer1::IConcatenationLayer* concat_layer =
         params->network->addConcatenation(input_tensors.data(),
@@ -694,12 +736,15 @@ class BiasAddOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
-    CHECK(input_dims.size() > 0 && input_dims.size() <= 3);
-    const bool need_reshape_on_input = input_dims.size() != 3;
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    CHECK(input_dims.size() > 0 && input_dims.size() <= required_rank);
+    const bool need_reshape_on_input = input_dims.size() != required_rank;
     if (need_reshape_on_input) {
-      // Add dims of size 1 until rank is 3.
+      // Add dims of size 1 until rank is required_rank.
       std::vector<int> new_shape(input_dims);
-      while (new_shape.size() < 3) new_shape.insert(new_shape.end(), 1);
+      while (new_shape.size() < required_rank)
+        new_shape.insert(new_shape.end(), 1);
       input_tensor = Reshape(params, input_tensor, new_shape);
     }
 
@@ -712,7 +757,6 @@ class BiasAddOpConverter : public TrtOpConverter {
     auto output_tensor = scale_layer->getOutput(0);
     if (need_reshape_on_input) {
       // Remove added dims.
-      // input_dims[input_dims.size() - 1] = num_units;
       output_tensor = Reshape(params, output_tensor, input_dims);
     }
     params->outputs.push_back(output_tensor);
@@ -725,7 +769,6 @@ class Conv2DTransposeOpConverter : public TrtOpConverter {
 
   void Convert(AddTrtLayerParams* params) const {
     auto input_tensor = params->inputs.at(0).tensor;
-    auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     auto weight_shape = params->inputs.at(1).weight_shape;
     const auto* conv2d_attr = params->call->attrs.as<Conv2DTransposeAttrs>();
     CHECK_EQ(conv2d_attr->data_layout, "NCHW");
@@ -778,10 +821,10 @@ class ReshapeOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<ReshapeAttrs>();
     CHECK_EQ(attrs->reverse, false);
-    // CHECK(attrs->newshape[0].as<IntImmNode>()->value) == 0 ||
-    //       attrs->newshape[0].as<IntImmNode>()->value) == max_);
     std::vector<int> new_shape;
-    for (size_t i = 1; i < attrs->newshape.size(); ++i) {
+    const int start_index =
+        params->network->hasImplicitBatchDimension() ? 1 : 0;
+    for (size_t i = start_index; i < attrs->newshape.size(); ++i) {
       const int value = attrs->newshape[i].as<IntImmNode>()->value;
       CHECK_GE(value, -1);
       new_shape.push_back(value);
@@ -797,7 +840,10 @@ class PadOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<PadAttrs>();
-    CHECK_EQ(input->getDimensions().nbDims, attrs->pad_width.size() - 1);
+    const int input_rank_with_batch =
+        input->getDimensions().nbDims +
+        (params->network->hasImplicitBatchDimension() ? 1 : 0);
+    CHECK_EQ(input_rank_with_batch, attrs->pad_width.size());
     CHECK(attrs->pad_width[0][0].as<IntImmNode>()->value == 0 &&
           attrs->pad_width[0][1].as<IntImmNode>()->value == 0)
         << "Cannot pad on batch dimension.";
@@ -809,14 +855,16 @@ class PadOpConverter : public TrtOpConverter {
         attrs->pad_width[1][1].as<IntImmNode>()->value != 0;
     if (need_transpose) {
       input = Transpose(params, input, {0, 3, 1, 2});
-      prepadding = nvinfer1::DimsHW(attrs->pad_width[1][0].as<IntImmNode>()->value,
-                                    attrs->pad_width[2][0].as<IntImmNode>()->value);
+      prepadding =
+          nvinfer1::DimsHW(attrs->pad_width[1][0].as<IntImmNode>()->value,
+                           attrs->pad_width[2][0].as<IntImmNode>()->value);
       postpadding =
           nvinfer1::DimsHW(attrs->pad_width[1][1].as<IntImmNode>()->value,
                            attrs->pad_width[2][1].as<IntImmNode>()->value);
     } else {
-      prepadding = nvinfer1::DimsHW(attrs->pad_width[2][0].as<IntImmNode>()->value,
-                                    attrs->pad_width[3][0].as<IntImmNode>()->value);
+      prepadding =
+          nvinfer1::DimsHW(attrs->pad_width[2][0].as<IntImmNode>()->value,
+                           attrs->pad_width[3][0].as<IntImmNode>()->value);
       postpadding =
           nvinfer1::DimsHW(attrs->pad_width[2][1].as<IntImmNode>()->value,
                            attrs->pad_width[3][1].as<IntImmNode>()->value);
@@ -854,8 +902,9 @@ class ReduceOpConverter : public TrtOpConverter {
     CHECK(attrs->axis.defined() && attrs->axis.size() > 0);
     uint32_t reduce_axes = 0;
     for (size_t i = 0; i < attrs->axis.size(); ++i) {
-      const int axis = ConvertAxis(attrs->axis[i].as<IntImmNode>()->value,
-                                   input->getDimensions().nbDims);
+      const int axis =
+          ConvertAxis(params, attrs->axis[i].as<IntImmNode>()->value,
+                      input->getDimensions().nbDims);
       reduce_axes |= 1 << axis;
     }
     auto reduce_layer = params->network->addReduce(
@@ -873,21 +922,31 @@ class StridedSliceOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input->getDimensions());
     const auto* attrs = params->call->attrs.as<StridedSliceAttrs>();
-    CHECK_EQ(input->getDimensions().nbDims, attrs->begin.size() - 1);
-    CHECK_EQ(input->getDimensions().nbDims, attrs->end.size() - 1);
+    const int input_rank_with_batch =
+        input->getDimensions().nbDims +
+        (params->network->hasImplicitBatchDimension() ? 1 : 0);
+    CHECK_EQ(input_rank_with_batch, attrs->begin.size());
+    CHECK_EQ(input_rank_with_batch, attrs->end.size());
     const bool default_strides =
         !attrs->strides.defined() || attrs->strides.size() == 0;
-    // CHECK(default_strides ||
-    //       input->getDimensions().nbDims == attrs->strides.size() - 1);
-    // CHECK(attrs->end[0].as<IntImmNode>()->value == batch_size ||
-    //       attrs->end[0].as<IntImmNode>()->value == -1);
-    CHECK(default_strides || attrs->strides[0].as<IntImmNode>()->value == 1);
+    if (params->network->hasImplicitBatchDimension()) {
+      CHECK(default_strides || !attrs->strides[0].defined() || attrs->strides[0].as<IntImmNode>()->value == 1);
+    }
 
+    auto process_slice_index = [](Integer x, int default_value, int dim_value) {
+      if (!x.defined()) return default_value;
+      int value = x.as<IntImmNode>()->value;
+      if (value < 0) value += dim_value;
+      return value;
+    };
+
+    const int start_index =
+        params->network->hasImplicitBatchDimension() ? 1 : 0;
     std::vector<int> start, size, strides;
-    for (size_t i = 1; i < attrs->begin.size(); ++i) {
-      const int begin_value = attrs->begin[i].as<IntImmNode>()->value;
-      const int end_value = attrs->end[i].as<IntImmNode>()->value;
-      const int stride_value = (default_strides || i >= attrs->strides.size())
+    for (size_t i = start_index; i < attrs->begin.size(); ++i) {
+      const int begin_value = process_slice_index(attrs->begin[i], 0, input_dims[i - start_index]);
+      const int end_value = process_slice_index(attrs->end[i], input_dims[i - start_index], input_dims[i - start_index]);
+      const int stride_value = (default_strides || i >= attrs->strides.size() || !attrs->strides[i].defined())
                                    ? 1
                                    : attrs->strides[i].as<IntImmNode>()->value;
       CHECK_GT(stride_value, 0);
@@ -929,11 +988,15 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
     const auto output_size =
         nvinfer1::DimsHW(attrs->output_size[0].as<IntImmNode>()->value,
                          attrs->output_size[1].as<IntImmNode>()->value);
-    const auto stride = nvinfer1::DimsHW(input_dims[1] / output_size.h(),
-                                         input_dims[2] / output_size.w());
+    const int h = params->network->hasImplicitBatchDimension() ? input_dims[1]
+                                                               : input_dims[2];
+    const int w = params->network->hasImplicitBatchDimension() ? input_dims[2]
+                                                               : input_dims[3];
+    const auto stride =
+        nvinfer1::DimsHW(h / output_size.h(), w / output_size.w());
     const auto window_size =
-        nvinfer1::DimsHW(input_dims[1] - (output_size.h() - 1) * stride.h(),
-                         input_dims[2] - (output_size.w() - 1) * stride.w());
+        nvinfer1::DimsHW(h - (output_size.h() - 1) * stride.h(),
+                         w - (output_size.w() - 1) * stride.w());
     auto pool_layer =
         params->network->addPooling(*input_tensor, it->second, window_size);
     CHECK(pool_layer != nullptr);
@@ -950,29 +1013,197 @@ class ResizeOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<ResizeAttrs>();
-    static const std::unordered_map<std::string, nvinfer1::ResizeMode>
-        op_map = {
-            {"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
-            {"bilinear", nvinfer1::ResizeMode::kLINEAR}};
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode> op_map =
+        {{"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
+         {"bilinear", nvinfer1::ResizeMode::kLINEAR}};
     auto it = op_map.find(attrs->method);
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
     CHECK_EQ(attrs->size.size(), 2);
     auto output_dims = TrtDimsToVector(input->getDimensions());
-    CHECK_EQ(output_dims.size(), 3);
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    CHECK_EQ(output_dims.size(), required_rank);
     CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
-    if (attrs->layout == "NCHW") {
-      output_dims[1] = attrs->size[0].as<IntImmNode>()->value;
-      output_dims[2] = attrs->size[1].as<IntImmNode>()->value;
-    } else if (attrs->layout == "NHWC") {
-      output_dims[0] = attrs->size[0].as<IntImmNode>()->value;
-      output_dims[1] = attrs->size[1].as<IntImmNode>()->value;
+    int h_index = attrs->layout == "NCHW" ? 2 : 1;
+    int w_index = attrs->layout == "NCHW" ? 3 : 2;
+    if (params->network->hasImplicitBatchDimension()) {
+      h_index -= 1;
+      w_index -= 1;
     }
+    output_dims[h_index] = attrs->size[0].as<IntImmNode>()->value;
+    output_dims[w_index] = attrs->size[1].as<IntImmNode>()->value;
 
     nvinfer1::IResizeLayer* resize_layer = params->network->addResize(*input);
     CHECK(resize_layer != nullptr);
     resize_layer->setResizeMode(it->second);
     resize_layer->setOutputDimensions(VectorToTrtDims(output_dims));
-    resize_layer->setAlignCorners(attrs->coordinate_transformation_mode == "align_corners");
+    resize_layer->setAlignCorners(attrs->coordinate_transformation_mode ==
+                                  "align_corners");
+    params->outputs.push_back(resize_layer->getOutput(0));
+  }
+};
+#endif  // TRT_VERSION_GE(6, 0, 1)
+
+class NmsOpConverter : public TrtOpConverter {
+ public:
+  NmsOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    // NMS is a composite function built from relay.vision.get_valid_counts and
+    // relay.vision.non_max_suppression. Get attributes from relay ops.
+    Function func = Downcast<Function>(params->call->op);
+    auto relay_nms = func->body.as<CallNode>();
+    CHECK(relay_nms != nullptr);
+    auto nms_attrs = relay_nms->attrs.as<NonMaximumSuppressionAttrs>();
+    auto relay_get_valid_counts = Downcast<TupleGetItem>(relay_nms->args[0])->tuple.as<CallNode>();
+    CHECK(relay_get_valid_counts != nullptr);
+    auto get_valid_counts_attrs = relay_get_valid_counts->attrs.as<GetValidCountsAttrs>();
+    CHECK(nms_attrs->score_index == get_valid_counts_attrs->score_index);
+    const int id_index = nms_attrs->id_index;
+
+    // Assumes score_index == 0, coord_start == 1, id_index = -1
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
+    const int num_boxes = input_dims[params->network->hasImplicitBatchDimension() ? 0 : 1];
+    // Slice input into boxes and scores
+    std::vector<int> scores_begin(input_dims.size(), 0);
+    std::vector<int> scores_size(input_dims.begin(), input_dims.end());
+    scores_begin[params_index] = nms_attrs->score_index;
+    scores_size[params_index] = 1;
+    std::vector<int> strides(input_dims.size(), 1);
+    auto scores = params->network->addSlice(*input, VectorToTrtDims(scores_begin), VectorToTrtDims(scores_size), VectorToTrtDims(strides))->getOutput(0);
+    std::vector<int> boxes_begin(input_dims.size(), 0);
+    std::vector<int> boxes_size(input_dims.begin(), input_dims.end());
+    boxes_begin[params_index] = nms_attrs->coord_start;
+    boxes_size[params_index] = 4;
+    auto boxes = params->network->addSlice(*input, VectorToTrtDims(boxes_begin), VectorToTrtDims(boxes_size), VectorToTrtDims(strides))->getOutput(0);
+    // Insert 1 for classes
+    boxes_size.insert(boxes_size.begin() + params_index, 1);
+    boxes = Reshape(params, boxes, boxes_size);
+
+    nvinfer1::plugin::NMSParameters nms_params;
+    nms_params.shareLocation = true; // if num_classes = 1
+    nms_params.backgroundLabelId = -1;
+    nms_params.numClasses = 1;
+    nms_params.topK = nms_attrs->top_k == -1 ? num_boxes : std::min(num_boxes, nms_attrs->top_k);
+    nms_params.keepTopK = nms_params.topK;
+    nms_params.scoreThreshold = get_valid_counts_attrs->score_threshold;
+    nms_params.iouThreshold = nms_attrs->iou_threshold;
+    nms_params.isNormalized = false;
+    nvinfer1::IPluginV2* nms_plugin = createBatchedNMSPlugin(nms_params);
+    std::vector<nvinfer1::ITensor*> nms_inputs = {boxes, scores};
+    nvinfer1::IPluginV2Layer* nms_layer = params->network->addPluginV2(
+        nms_inputs.data(), nms_inputs.size(), *nms_plugin);
+    //auto num_valid = nms_layers->getOutput(0);
+    auto output_boxes = nms_layer->getOutput(1);
+    auto output_scores = nms_layer->getOutput(2);
+    output_scores = Reshape(params, output_scores, {1, num_boxes, 1});
+    std::vector<nvinfer1::ITensor*> concat_inputs = {output_scores, output_boxes};
+     nvinfer1::IConcatenationLayer* concat_layer =
+        params->network->addConcatenation(concat_inputs.data(),
+                                          concat_inputs.size());
+    concat_layer->setAxis(2);
+    params->outputs.push_back(concat_layer->getOutput(0));
+  }
+};
+
+#if TRT_VERSION_GE(5, 1, 5)
+class SplitOpConverter : public TrtOpConverter {
+ public:
+  SplitOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const auto* attrs = params->call->attrs.as<SplitAttrs>();
+    const int input_rank = input->getDimensions().nbDims;
+    const int axis = ConvertAxis(params, attrs->axis, input_dims.size());
+    const int sections = attrs->indices_or_sections.as<IntImmNode>()->value;
+
+    std::vector<int> start(input_dims.size(), 0);
+    std::vector<int> size(input_dims.begin(), input_dims.end());
+    size[axis] = input_dims[axis] / sections;
+    std::vector<int> strides(input_dims.size(), 1);
+    for (int i = 0; i < sections; ++i) {
+      start[axis] = i * size[axis];
+      auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
+                                                  VectorToTrtDims(size),
+                                                  VectorToTrtDims(strides));
+
+      params->outputs.push_back(slice_layer->getOutput(0));
+    }
+  }
+};
+#endif
+
+#if TRT_VERSION_GE(5, 1, 5)
+// TODO(trevmorr): Not needed.
+class SliceLikeOpConverter : public TrtOpConverter {
+ public:
+  SliceLikeOpConverter() : TrtOpConverter({kTensor, kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto input_2 = params->inputs.at(1).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    auto new_dims = TrtDimsToVector(input_2->getDimensions());
+    const auto* attrs = params->call->attrs.as<SliceLikeAttrs>();
+    if (attrs->axes.defined()) {
+      for (int i = 0; i < attrs->axes.size(); i++) {
+        const int axis = ConvertAxis(params, attrs->axes[i].as<IntImmNode>()->value, input_dims.size());
+        input_dims[axis] = new_dims[axis];
+      }
+    } else {
+      // Use all dims when axes is not defined.
+      CHECK_EQ(input_dims.size(), new_dims.size());
+      input_dims = new_dims;
+    }
+
+    // slice_like always begins at 0.
+    std::vector<int> start(input_dims.size(), 0);
+    std::vector<int> strides(input_dims.size(), 1);
+    auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
+                                                 VectorToTrtDims(input_dims),
+                                                 VectorToTrtDims(strides));
+
+    params->outputs.push_back(slice_layer->getOutput(0));
+  }
+};
+#endif
+
+#if TRT_VERSION_GE(6, 0, 1)
+class UpsamplingOpConverter : public TrtOpConverter {
+ public:
+  UpsamplingOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    const auto* attrs = params->call->attrs.as<UpSamplingAttrs>();
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode> op_map =
+        {{"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
+         {"bilinear", nvinfer1::ResizeMode::kLINEAR}};
+    auto it = op_map.find(attrs->method);
+    CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
+    auto output_dims = TrtDimsToVector(input->getDimensions());
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    CHECK_EQ(output_dims.size(), required_rank);
+    CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
+    int h_index = attrs->layout == "NCHW" ? 2 : 1;
+    int w_index = attrs->layout == "NCHW" ? 3 : 2;
+    if (params->network->hasImplicitBatchDimension()) {
+      h_index -= 1;
+      w_index -= 1;
+    }
+    output_dims[h_index] *= attrs->scale_h;
+    output_dims[w_index] *= attrs->scale_w;
+
+    nvinfer1::IResizeLayer* resize_layer = params->network->addResize(*input);
+    CHECK(resize_layer != nullptr);
+    resize_layer->setResizeMode(it->second);
+    resize_layer->setOutputDimensions(VectorToTrtDims(output_dims));
+    resize_layer->setAlignCorners(attrs->align_corners);
     params->outputs.push_back(resize_layer->getOutput(0));
   }
 };
