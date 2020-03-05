@@ -259,6 +259,7 @@ include(cmake/modules/contrib/Sort.cmake)
 include(cmake/modules/contrib/NNPack.cmake)
 include(cmake/modules/contrib/HybridDump.cmake)
 include(cmake/modules/contrib/TFLite.cmake)
+include(cmake/modules/contrib/TensorRT.cmake)
 
 if(NOT MSVC)
   include(CheckCXXCompilerFlag)
