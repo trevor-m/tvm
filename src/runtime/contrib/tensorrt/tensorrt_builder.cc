@@ -183,11 +183,11 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
 #else
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
 #endif
+  CleanUp();
   const int num_input_bindings = std::count(
       network_input_is_baked_.begin(), network_input_is_baked_.end(), false);
   CHECK_EQ(engine->getNbBindings(),
            num_input_bindings + network_output_names_.size());
-  CleanUp();
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
   return {engine, context, network_input_names_, network_input_is_baked_,
           network_output_names_};
@@ -303,23 +303,55 @@ void TensorRTBuilder::VisitExpr_(const TupleNode* op) {
   node_output_map_[op] = outputs;
 }
 
-void TensorRTBuilder::VisitExpr_(const VarNode* node) {
-  const std::string& tensor_name = node->name_hint();
-  auto shape = GetShape(node->checked_type());
+nvinfer1::ITensor* TensorRTBuilder::AddInput(const std::string& tensor_name, const Type& type) {
+  auto shape = GetShape(type);
   // Remove batch dim when not in explicit batch mode.
   if (network_->hasImplicitBatchDimension() && shape.size() > 1) {
     shape.erase(shape.begin());
   }
-  DLOG(INFO) << "Added TRT network input: " << node->name_hint() << " "
+  LOG(INFO) << "Added TRT network input: " << tensor_name << " "
              << DebugString(shape);
   nvinfer1::Dims dims = VectorToTrtDims(shape);
-  auto type_node = node->checked_type().as<TensorTypeNode>();
+  auto type_node = type.as<TensorTypeNode>();
   CHECK(type_node != nullptr &&
         runtime::TypeMatch(type_node->dtype, kDLFloat, 32))
       << "Only FP32 inputs are supported.";
-  auto input =
-      network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
-  node_output_map_[node] = {TrtOpInput(input)};
+  return network_->addInput(tensor_name.c_str(), nvinfer1::DataType::kFLOAT, dims);
+}
+
+void TensorRTBuilder::VisitExpr_(const VarNode* node) {
+  if (node->checked_type().as<TupleTypeNode>()) {
+    // Handle TupleTypes by creating multiple TRT inputs from one.
+    auto* tuple_type = node->type_as<TupleTypeNode>();
+    std::vector<TrtOpInput> outputs;
+    const std::string& original_name = node->name_hint();
+    std::vector<std::string> new_names;
+    for (int i = 0; i < tuple_type->fields.size(); ++i) {
+      std::string tensor_name = original_name + "_" + std::to_string(i);
+      new_names.push_back(tensor_name);
+      outputs.push_back(TrtOpInput(AddInput(tensor_name, tuple_type->fields[i])));
+    }
+    node_output_map_[node] = outputs;
+    // Update network_input_map_
+    const int original_index = network_input_map_[original_name];
+    network_input_map_.erase(original_name);
+    for (size_t i = 0; i < new_names.size(); ++i) {
+      network_input_map_[new_names[i]] = original_index + i;
+    }
+    // Update network_input_names_
+    network_input_names_.insert(network_input_names_.begin() + original_index + 1, new_names.begin(), new_names.end());
+    network_input_names_.erase(network_input_names_.begin() + original_index);
+    // Update network_input_is_baked_
+    bool is_baked = network_input_is_baked_[original_index];
+    network_input_is_baked_.insert(network_input_is_baked_.begin() + original_index + 1, new_names.size(), is_baked);
+    network_input_is_baked_.erase(network_input_is_baked_.begin() + original_index);
+  } else if (node->checked_type().as<TensorTypeNode>()) {
+    // Standard TensorType case.
+    const std::string& tensor_name = node->name_hint();
+    node_output_map_[node] = {TrtOpInput(AddInput(tensor_name, node->checked_type()))};
+  } else {
+    LOG(FATAL) << "VarNode must be Tensor or Tuple type.";
+  }
 }
 
 void TensorRTBuilder::VisitExpr_(const ConstantNode* node) {

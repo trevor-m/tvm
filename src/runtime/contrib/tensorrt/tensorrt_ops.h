@@ -442,6 +442,9 @@ class BatchNormOpConverter : public TrtOpConverter {
       output = Transpose(params, output, {0, 2, 3, 1});
     }
     params->outputs.push_back(output);
+    // Create dummy outputs for new running mean and new running variance.
+    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
+    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
   }
 };
 
@@ -1000,7 +1003,9 @@ class ResizeOpConverter : public TrtOpConverter {
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
     CHECK_EQ(attrs->size.size(), 2);
     auto output_dims = TrtDimsToVector(input->getDimensions());
-    CHECK_EQ(output_dims.size(), 3);
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    CHECK_EQ(output_dims.size(), required_rank);
     CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
     int h_index = attrs->layout == "NCHW" ? 2 : 1;
     int w_index = attrs->layout == "NHWC" ? 3 : 2;

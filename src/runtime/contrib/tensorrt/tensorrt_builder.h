@@ -134,6 +134,8 @@ class TensorRTBuilder : public ExprVisitor {
   nvinfer1::Weights GetDLTensorAsWeights(DLTensor* dptr,
                                          DLDeviceType src_device);
 
+  nvinfer1::ITensor* AddInput(const std::string& tensor_name, const Type& type);
+
   /*! \brief Gets value from execution args and converts to constant weight
    * stored in node_output_map_ with node as the key. */
   void GetInputAsWeights(const VarNode* node);

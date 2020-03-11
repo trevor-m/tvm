@@ -235,8 +235,10 @@ def dense_whitelist_fn(call, trt_version):
     return True
 
 def bias_add_whitelist_fn(call, trt_version):
-    # TODO(trevmorr): Prevent expand dims thing
-    return False
+    # TODO(trevmorr): BiasAddSimplifier creates a pattern which cannot be
+    # converted to TRT without binding params and constant folding.
+    if trt_version < (6, 0, 1):
+        return False
     input_rank = len(call.type_args[0].shape)
     if input_rank < 2 or input_rank > 4:
         print("nn.bias_add: input rank is {} but must be 2, 3 or 4.".format(input_rank))
@@ -263,7 +265,7 @@ def global_pool_2d_whitelist_fn(call, trt_version):
     return True
 
 def expand_dims_whitelist_fn(call, trt_version):
-    if int(call.attrs.axis) == 0:
+    if trt_version < (6, 0, 1) and int(call.attrs.axis) == 0:
         print("{}: can't modify batch dimension.".format(call.op.name))
         return False
     return True
@@ -272,14 +274,14 @@ def squeeze_whitelist_fn(call, trt_version):
     if not call.attrs.axis:
         print("{}: must explicitly set axis.".format(call.op.name))
         return False
-    if any([axis == 0 for axis in map(int, call.attrs.axis)]):
+    if trt_version < (6, 0, 1) and any([axis == 0 for axis in map(int, call.attrs.axis)]):
             print("{}: can't modify batch dimension.".format(call.op.name))
             return False
     return True
 
 def concatenate_whitelist_fn(call, trt_version):
-    # TODO(trevmorr): expected tensortype, got tupletype?
-    return False
+    if trt_version >= (6, 0, 1):
+        return True
     if int(call.attrs.axis) == 0:
         print("{}: can't modify batch dimension.".format(call.op.name))
         return False
@@ -306,7 +308,7 @@ def conv2d_transpose_whitelist_fn(call, trt_version):
     return True
 
 def transpose_whitelist_fn(call, trt_version):
-    if int(call.attrs.axes[0]) != 0:
+    if trt_version < (6, 0, 1) and int(call.attrs.axes[0]) != 0:
         print("{}: can't modify batch dimension.".format(call.op.name))
         return False
     return True
@@ -330,10 +332,10 @@ def reduce_whitelist_fn(call, trt_version):
     if not call.attrs.axis or len(call.attrs.axis) == 0:
         print("{}: cannot reduce to scalar.".format(call.op.name))
         return False
-    if attrs.exclude:
+    if call.attrs.exclude:
         print("{}: exclude not supported.".format(call.op.name))
         return False
-    if any([x == 0 for x in map(int, call.attrs.axis)]):
+    if trt_version < (6, 0, 1) and any([x == 0 for x in map(int, call.attrs.axis)]):
         print("{}: can't modify batch dimension.".format(call.op.name))
         return False
     return True
@@ -350,11 +352,12 @@ def get_min_trt_version_whitelist_fn(min_trt_version):
 def strided_slice_whitelist_fn(call, trt_version):
     if not get_min_trt_version_whitelist_fn((5, 1, 5))(call, trt_version):
         return False
-    batch_dim_begin_modified = call.attrs.begin[0] is not None and int(call.attrs.begin[0]) != 0
-    batch_dim_end_modified = call.attrs.end[0] is not None and int(call.attrs.end[0]) != -1 and int(call.attrs.end[0]) != call.type_args[0].shape[0]
-    if batch_dim_begin_modified or batch_dim_end_modified:
-        print("{}: can't modify batch dimension.".format(call.op.name))
-        return False
+    if trt_version < (6, 0, 1):
+        batch_dim_begin_modified = call.attrs.begin[0] is not None and int(call.attrs.begin[0]) != 0
+        batch_dim_end_modified = call.attrs.end[0] is not None and int(call.attrs.end[0]) != -1 and int(call.attrs.end[0]) != int(call.type_args[0].shape[0])
+        if batch_dim_begin_modified or batch_dim_end_modified:
+            print("{}: can't modify batch dimension.".format(call.op.name))
+            return False
     if any([x < 0 for x in map(int, call.attrs.begin)]) or any([x < 0 for x in map(int, call.attrs.end)]):
         print("{}: start/end values must be positive".format(call.op.name))
         return False
@@ -363,8 +366,9 @@ def strided_slice_whitelist_fn(call, trt_version):
 def resize_whitelist_fn(call, trt_version):
     if not get_min_trt_version_whitelist_fn((6, 0, 1))(call, trt_version):
         return False
-    if call.attrs.method != "nearest_nighbor" and call.attrs.method != "bilinear":
+    if call.attrs.method != "nearest_neighbor" and call.attrs.method != "bilinear":
         return False
+    # TODO(trevmorr): coordinate transform method
     return True
 
 @transform.function_pass(opt_level=0)
@@ -452,12 +456,13 @@ def EnableTrt(mod, params=None, trt_version=None):
     assert isinstance(trt_version, (list, tuple))
     assert len(trt_version) == 3
 
-    if params:
-        # Bind params so that we can use FoldConstant.
-        mod['main'] = _bind_params(mod['main'], params)
+    # if params:
+    #     # Bind params so that we can use FoldConstant.
+    #     mod['main'] = _bind_params(mod['main'], params)
 
-    mod = relay.transform.FoldConstant()(mod)
+    # mod = relay.transform.FoldConstant()(mod)
 
+    mod['main'] = RemoveDropout().visit(mod['main'])
     mod = TensorRTWhiteListAnnotator(trt_version)(mod)
     mod = transform.PartitionGraph()(mod)
     mod = transform.InferType()(mod)
