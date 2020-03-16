@@ -99,7 +99,7 @@ def test_tensorrt_ops():
         mod['main'] = f
         mod = relay.tensorrt.EnableTrt(mod)
         #assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
-        with relay.build_config(opt_level=3):
+        with relay.build_config(opt_level=3, disabled_pass={"AlterOpLayout"}):
             graph, lib, params = relay.build(mod, "cuda")
         mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
         mod.run(**input_dict)
@@ -244,6 +244,13 @@ def test_tensorrt_ops():
         f = relay.Function([x, kernel], out)
         return f, {'x': x_shape, 'kernel': k_shape}
 
+    def test_float_const(x_shape=(1, 16)):
+        x = relay.var('x', shape=(x_shape), dtype='float32')
+        beta = relay.const(1, dtype='float32')
+        out = relay.multiply(x, beta)
+        f = relay.Function([x], out)
+        return f, {'x': x_shape}
+
     def test_pad(x_shape, pad_width):
         x = relay.var('x', shape=(x_shape), dtype='float32')
         out = relay.nn.pad(x, pad_width=pad_width)
@@ -262,9 +269,9 @@ def test_tensorrt_ops():
         gamma = relay.var("gamma",  shape=(param_shape), dtype='float32')
         moving_mean = relay.var("moving_mean", shape=(param_shape), dtype='float32')
         moving_var = relay.var("moving_var", shape=(param_shape), dtype='float32')
-        out, _, _ = relay.nn.batch_norm(x, gamma, beta, moving_mean, moving_var,
-                                        axis=axis, center=False, scale=False, epsilon=epsilon)
-        f = relay.Function([x, beta, gamma, moving_mean, moving_var], out)
+        out, _, _ = relay.nn.batch_norm(x, gamma=gamma, beta=beta, moving_mean=moving_mean, moving_var=moving_var,
+                                        axis=axis, center=True, scale=True, epsilon=epsilon)
+        f = relay.Function([x, gamma, beta, moving_mean, moving_var], out)
         return f, {'x': x_shape, 'beta': param_shape, 'beta': param_shape,
                    'gamma': param_shape, 'moving_mean': param_shape, 'moving_var': param_shape}
 
@@ -316,9 +323,9 @@ def test_tensorrt_ops():
         f = relay.Function([x], out)
         return f, {'x': x_shape}
 
-    def test_resize(x_shape=(1, 3, 16, 16), out_size=(32, 32), layout='NCHW', method='nearest_neighbor', align_corners=True):
+    def test_resize(x_shape=(1, 3, 16, 16), out_size=(32, 32), layout='NCHW', method='nearest_neighbor', coordinate_transformation_mode='align_corners'):
         x = relay.var('x', shape=(x_shape), dtype='float32')
-        out = relay.image.resize(x, out_size, layout=layout, method=method, align_corners=align_corners)
+        out = relay.image.resize(x, out_size, layout=layout, method=method, coordinate_transformation_mode=coordinate_transformation_mode)
         f = relay.Function([x], out)
         return f, {'x': x_shape}
 
@@ -331,11 +338,30 @@ def test_tensorrt_ops():
         f = relay.Function([x, y], out)
         return f, {'x': (1, 3), 'y': (1, 3)}
     
+    def test_nms():
+        x = relay.var('x', shape=(1, 3840, 5), dtype='float32')
+        ret = relay.vision.get_valid_counts(x, score_threshold=0,
+                                      id_index=-1, score_index=0)
+        nms_out = relay.vision.non_max_suppression(ret[1], ret[0],
+                                                iou_threshold=0.7,
+                                                force_suppress=True,
+                                                top_k=6000,
+                                                coord_start=1,
+                                                score_index=0,
+                                                id_index=-1,
+                                                return_indices=False,
+                                                invalid_to_bottom=True)
+        f = relay.Function([x], nms_out)
+        return f, {'x': (1, 3840, 5)}
+
+    run_and_verify(test_nms())
+    run_and_verify(test_float_const())
+    run_and_verify(test_dense_from_pytorch())
     run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
     run_and_verify(test_leaky_relu())
-    #run_and_verify(test_batch_norm((1, 64, 56, 56), (64,)))
-    #run_and_verify(test_batch_norm((1, 56, 56, 64), (64,), axis=3, epsilon=1.001e-05))
+    run_and_verify(test_batch_norm((1, 64, 56, 56), (64,)))
+    run_and_verify(test_batch_norm((1, 56, 56, 64), (64,), axis=3, epsilon=1.001e-05))
     run_and_verify(test_softmax((1, 1000), axis=1))
     run_and_verify(test_softmax((1, 1000), axis=-1))
     run_and_verify(test_softmax((1, 3, 4), axis=-2))
@@ -406,22 +432,22 @@ def test_tensorrt_ops():
     run_and_verify(test_strided_slice((1, 3, 6, 7), (0, 0, 0, 0), (1, 1, 6, 7)))
     run_and_verify(test_strided_slice((1, 3, 6, 7), (0, 1, 0, 0), (1, 2, 6, 6)))
     run_and_verify(test_strided_slice((1, 10), (0, 0), (1, 10), (1, 2)))
-    for op in [relay.contrib.adaptive_max_pool2d, relay.contrib.adaptive_avg_pool2d]:
+    for op in [relay.nn.adaptive_max_pool2d, relay.nn.adaptive_avg_pool2d]:
         run_and_verify(test_adaptive_pool2d(op))
         # run_and_verify(test_adaptive_pool2d(op, out_size=(6, 6)))
-    for x_shape, layout in [((1, 3, 16, 16), 'NCHW'), ((1, 16, 16, 3), 'NHWC')]:
-        for out_size in [(32, 32), (40, 40), (5, 21)]:
-            for method in ['nearest_neighbor', 'bilinear']:
-                for align_corners in [False]:
-                    # TODO(trevmorr): align_corners True gives incorrect results.
-                    run_and_verify(test_resize(x_shape, out_size, layout, method, align_corners))
+    # for x_shape, layout in [((1, 3, 16, 16), 'NCHW'), ((1, 16, 16, 3), 'NHWC')]:
+    #     for out_size in [(32, 32), (40, 40), (5, 21)]:
+    #         for method in ['nearest_neighbor', 'bilinear']:
+    #             for coordinate_transformation_mode in ['asymmetric']:
+    #                 # TODO(trevmorr): 'align_corners' gives incorrect results. 'half_pixel' not supported?
+    #                 run_and_verify(test_resize(x_shape, out_size, layout, method, coordinate_transformation_mode))
 
 def test_tensorrt_integration(test_all_models=False):
     if should_skip():
         return
     
-    def test_model(model, i_data, input_shape, dtype, use_trt=True, num_iteration=1000):
-        import mxnet
+    def test_model(model, i_data, input_shape, dtype, use_trt=True, num_iteration=1):
+        import mxnet as mx
         from mxnet.gluon.model_zoo.vision import get_model
         def check_trt_used(graph):
             import json
@@ -434,8 +460,7 @@ def test_tensorrt_integration(test_all_models=False):
 
         if use_trt:
             mod = relay.tensorrt.EnableTrt(mod, params)
-            assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tensorrt'
-            with relay.build_config(opt_level=2, disabled_pass={"SimplifyInference"}):
+            with relay.build_config(opt_level=3):
                 graph, lib, params = relay.build(mod, "cuda")
             check_trt_used(graph)
         else:
@@ -492,7 +517,7 @@ def test_tensorrt_integration(test_all_models=False):
     
     dtype = 'float32'
     input_shape = (1, 3, 224, 224)
-    i_data = np.random.uniform(0, 1, input_shape).astype(dtype)
+    i_data = np.random.uniform(-1, 1, input_shape).astype(dtype)
     for model in models:
         latency[model], res = test_model(model, i_data, input_shape, dtype, use_trt=True)
         _, ref_res = test_model(model, i_data, input_shape, dtype, use_trt=False, num_iteration=1)
@@ -534,7 +559,7 @@ def test_tensorrt_serialize():
 
 if __name__ == '__main__':
     test_tensorrt_ops()
-    test_tensorrt_simple()
-    test_tensorrt_not_compatible()
+    #test_tensorrt_simple()
+    #test_tensorrt_not_compatible()
     #test_tensorrt_integration()
     #test_tensorrt_serialize()

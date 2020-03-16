@@ -29,11 +29,13 @@
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
 #include <tvm/relay/attrs/transform.h>
+#include <tvm/relay/attrs/vision.h>
 
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "NvInfer.h"
+#include "NvInferPlugin.h"
 #include "utils.h"
 
 namespace tvm {
@@ -58,7 +60,19 @@ struct AddTrtLayerParams {
   AddTrtLayerParams(nvinfer1::INetworkDefinition* network, const CallNode* call,
                     std::vector<nvinfer1::Weights>* trt_weights)
       : network(network), call(call), trt_weights(trt_weights) {
-    op_name = (call->op.as<OpNode>())->name;
+    if (auto* op = call->op.as<OpNode>()) {
+      op_name = op->name;
+    } else if (call->op->IsInstance<FunctionNode>()) {
+      Function func = Downcast<Function>(call->op);
+      const auto name_node = FunctionGetAttr(func, attr::kComposite).as<tir::StringImmNode>();
+      // don't step into existing composite functions
+      if (!name_node || name_node->value == "") {
+        LOG(FATAL) << "Only composite functions can be converted.";
+      }
+      op_name = name_node->value;
+    } else {
+      LOG(FATAL) << "Call must be Op or Function.";
+    }
   }
 };
 
@@ -1026,6 +1040,69 @@ class ResizeOpConverter : public TrtOpConverter {
   }
 };
 #endif  // TRT_VERSION_GE(6, 0, 1)
+
+class NmsOpConverter : public TrtOpConverter {
+ public:
+  NmsOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    // NMS is a composite function built from relay.vision.get_valid_counts and
+    // relay.vision.non_max_suppression. Get attributes from relay ops.
+    Function func = Downcast<Function>(params->call->op);
+    auto relay_nms = func->body.as<CallNode>();
+    CHECK(relay_nms != nullptr);
+    auto nms_attrs = relay_nms->attrs.as<NonMaximumSuppressionAttrs>();
+    auto relay_get_valid_counts = Downcast<TupleGetItem>(relay_nms->args[0])->tuple.as<CallNode>();
+    CHECK(relay_get_valid_counts != nullptr);
+    auto get_valid_counts_attrs = relay_get_valid_counts->attrs.as<GetValidCountsAttrs>();
+    CHECK(nms_attrs->score_index == get_valid_counts_attrs->score_index);
+    const int id_index = nms_attrs->id_index;
+
+    // Assumes score_index == 0, coord_start == 1, id_index = -1
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
+    // Slice input into boxes and scores
+    std::vector<int> scores_begin(input_dims.size(), 0);
+    std::vector<int> scores_size(input_dims.begin(), input_dims.end());
+    scores_begin[params_index] = nms_attrs->score_index;
+    scores_size[params_index] = 1;
+    std::vector<int> strides(input_dims.size(), 1);
+    auto scores = params->network->addSlice(*input, VectorToTrtDims(scores_begin), VectorToTrtDims(scores_size), VectorToTrtDims(strides))->getOutput(0);
+    std::vector<int> boxes_begin(input_dims.size(), 0);
+    std::vector<int> boxes_size(input_dims.begin(), input_dims.end());
+    boxes_begin[params_index] = nms_attrs->coord_start;
+    boxes_size[params_index] = 4;
+    auto boxes = params->network->addSlice(*input, VectorToTrtDims(boxes_begin), VectorToTrtDims(boxes_size), VectorToTrtDims(strides))->getOutput(0);
+    // Insert 1 for classes
+    boxes_size.insert(boxes_size.begin() + params_index, 1);
+    boxes = Reshape(params, boxes, boxes_size);
+
+    nvinfer1::plugin::NMSParameters nms_params;
+    nms_params.shareLocation = true; // if num_classes = 1
+    nms_params.backgroundLabelId = -1;
+    nms_params.numClasses = 1;
+    nms_params.topK = 3840;
+    nms_params.keepTopK = 3840;
+    nms_params.scoreThreshold = get_valid_counts_attrs->score_threshold;
+    nms_params.iouThreshold = nms_attrs->iou_threshold;
+    nms_params.isNormalized = false;
+    nvinfer1::IPluginV2* nms_plugin = createBatchedNMSPlugin(nms_params);
+    std::vector<nvinfer1::ITensor*> nms_inputs = {boxes, scores};
+    nvinfer1::IPluginV2Layer* nms_layer = params->network->addPluginV2(
+        nms_inputs.data(), nms_inputs.size(), *nms_plugin);
+    //auto num_valid = nms_layers->getOutput(0);
+    auto output_boxes = nms_layer->getOutput(1);
+    auto output_scores = nms_layer->getOutput(2);
+    output_scores = Reshape(params, output_scores, {1, 3840, 1});
+    std::vector<nvinfer1::ITensor*> concat_inputs = {output_scores, output_boxes};
+     nvinfer1::IConcatenationLayer* concat_layer =
+        params->network->addConcatenation(concat_inputs.data(),
+                                          concat_inputs.size());
+    concat_layer->setAxis(2);
+    params->outputs.push_back(concat_layer->getOutput(0));
+  }
+};
 
 }  // namespace contrib
 }  // namespace relay

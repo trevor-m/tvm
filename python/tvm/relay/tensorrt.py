@@ -371,6 +371,9 @@ def resize_whitelist_fn(call, trt_version):
     # TODO(trevmorr): coordinate transform method
     return True
 
+def nms_whitelist_fn(call, trt_version):
+    return True
+
 @transform.function_pass(opt_level=0)
 class TensorRTWhiteListAnnotator:
     def __init__(self, trt_version):
@@ -415,6 +418,7 @@ class TensorRTWhiteListAnnotator:
             "contrib.adaptive_max_pool2d": adaptive_pool2d_whitelist_fn,
             "contrib.adaptive_avg_pool2d": adaptive_pool2d_whitelist_fn,
             "clip": always_whitelist_fn,
+            "tensorrt.nms": nms_whitelist_fn,
             # Ops which require TRT 5.1.5+
             "nn.leaky_relu": get_min_trt_version_whitelist_fn((5, 1, 5)),
             "sin": get_min_trt_version_whitelist_fn((5, 1, 5)),
@@ -431,7 +435,11 @@ class TensorRTWhiteListAnnotator:
         annotator = self
         class Annotator(tvm.relay.ExprMutator):
             def visit_call(self, call):
-                op_name = call.op.name
+                if isinstance(call.op, tvm.relay.expr.Function) and call.op.get_attribute('Composite') is not None:
+                    # Strip quotes from string.
+                    op_name = str(call.op.get_attribute('Composite'))[1:-1]
+                else:
+                    op_name = call.op.name
                 if op_name in annotator.op_list and annotator.op_list[op_name](call, annotator.trt_version):
                     new_args = []
                     for arg in call.args:
@@ -444,6 +452,21 @@ class TensorRTWhiteListAnnotator:
                 else:
                     return super().visit_call(call)
         return Annotator().visit(func)
+
+def ReconstructNms(mod):
+    """Fuse get_valid_count and non_max_suppression into a single composite
+    function which can be partitioned and converted to TRT.
+    """
+    def make_nms_pattern():
+        x = relay.var('x')
+        ret = relay.vision.get_valid_counts(x, score_threshold=0)
+        nms_out = relay.vision.non_max_suppression(ret[1], ret[0])
+        return nms_out
+
+    pattern_table = [
+        ('tensorrt.nms', make_nms_pattern())
+    ]
+    return relay.transform.MergeComposite(pattern_table)(mod)
 
 def EnableTrt(mod, params=None, trt_version=None):
     if not trt_version:
@@ -463,6 +486,7 @@ def EnableTrt(mod, params=None, trt_version=None):
     # mod = relay.transform.FoldConstant()(mod)
 
     mod['main'] = RemoveDropout().visit(mod['main'])
+    mod = ReconstructNms(mod)
     mod = TensorRTWhiteListAnnotator(trt_version)(mod)
     mod = transform.PartitionGraph()(mod)
     mod = transform.InferType()(mod)

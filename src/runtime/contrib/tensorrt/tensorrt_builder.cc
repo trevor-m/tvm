@@ -98,6 +98,7 @@ GetOpConverters() {
 #if TRT_VERSION_GE(6, 0, 1)
   map->emplace("image.resize", std::make_shared<ResizeOpConverter>());
 #endif
+  map->emplace("tensorrt.nms", std::make_shared<NmsOpConverter>());
   return map;
 }
 
