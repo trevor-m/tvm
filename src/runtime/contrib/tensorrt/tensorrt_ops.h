@@ -64,9 +64,9 @@ struct AddTrtLayerParams {
       op_name = op->name;
     } else if (call->op->IsInstance<FunctionNode>()) {
       Function func = Downcast<Function>(call->op);
-      const auto name_node = FunctionGetAttr(func, attr::kComposite).as<tir::StringImmNode>();
+      const auto name_node = func->GetAttr<tir::StringImm>(attr::kComposite);
       // don't step into existing composite functions
-      if (!name_node || name_node->value == "") {
+      if (!name_node.defined() || name_node->value == "") {
         LOG(FATAL) << "Only composite functions can be converted.";
       }
       op_name = name_node->value;

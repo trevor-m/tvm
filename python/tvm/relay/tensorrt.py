@@ -435,9 +435,9 @@ class TensorRTWhiteListAnnotator:
         annotator = self
         class Annotator(tvm.relay.ExprMutator):
             def visit_call(self, call):
-                if isinstance(call.op, tvm.relay.expr.Function) and call.op.get_attribute('Composite') is not None:
+                if isinstance(call.op, tvm.relay.expr.Function) and call.op.attrs['Composite'] is not None:
                     # Strip quotes from string.
-                    op_name = str(call.op.get_attribute('Composite'))[1:-1]
+                    op_name = str(call.op.attrs['Composite'])[1:-1]
                 else:
                     op_name = call.op.name
                 if op_name in annotator.op_list and annotator.op_list[op_name](call, annotator.trt_version):
@@ -468,6 +468,37 @@ def ReconstructNms(mod):
     ]
     return relay.transform.MergeComposite(pattern_table)(mod)
 
+from . import op as reg
+
+def _register_external_op_helper(op_name, supported=True):
+    """The helper function to indicate that a given operator can be supported
+    by DNNL.
+    Paramters
+    ---------
+    op_name : Str
+        The name of operator that will be registered.
+    Returns
+    -------
+    f : callable
+        A function that returns if the operator is supported by DNNL.
+    """
+    @reg.register(op_name, "target.tensorrt")
+    def _func_wrapper(attrs, args):
+        return supported
+
+    return _func_wrapper
+
+_register_external_op_helper("nn.conv2d")
+_register_external_op_helper("nn.dense")
+_register_external_op_helper("nn.relu")
+_register_external_op_helper("add")
+_register_external_op_helper("multiply")
+_register_external_op_helper("nn.bias_add")
+_register_external_op_helper("nn.batch_flatten")
+_register_external_op_helper("nn.max_pool2d")
+#_register_external_op_helper("nn.batch_norm")
+_register_external_op_helper("nn.global_avg_pool2d")
+
 def EnableTrt(mod, params=None, trt_version=None):
     if not trt_version:
         trt_version = GetTrtVersion()
@@ -487,7 +518,14 @@ def EnableTrt(mod, params=None, trt_version=None):
 
     mod['main'] = RemoveDropout().visit(mod['main'])
     mod = ReconstructNms(mod)
-    mod = TensorRTWhiteListAnnotator(trt_version)(mod)
+    #mod = TensorRTWhiteListAnnotator(trt_version)(mod)
+    mod = transform.AnnotateTargetWithMerge(['tensorrt'])(mod)
     mod = transform.PartitionGraph()(mod)
+    # Bind params for all TRT functions.
+    print(mod)
+    if params:
+        for x in mod.functions.items():
+            func_name = x[0].name_hint
+            mod[func_name] = _bind_params(mod[func_name], params)
     mod = transform.InferType()(mod)
     return mod

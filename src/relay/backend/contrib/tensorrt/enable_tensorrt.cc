@@ -501,17 +501,17 @@ class TrtEnabler : public ExprMutator {
       args.push_back(pair.second);
     }
     auto subgraph_func =
-        FunctionNode::make(params, body, body->checked_type_, {}, Attrs());
+        Function(params, body, body->checked_type_, {});
     subgraph_func =
-        FunctionSetAttr(subgraph_func, "Primitive", tvm::Integer(1));
-    subgraph_func = FunctionSetAttr(subgraph_func, "Compiler",
+        WithAttr(std::move(subgraph_func), "Primitive", tvm::Integer(1));
+    subgraph_func = WithAttr(std::move(subgraph_func), "Compiler",
                                     tvm::tir::StringImmNode::make("tensorrt"));
-    subgraph_func = FunctionSetAttr(subgraph_func, "ExternalSymbol",
+    subgraph_func = WithAttr(std::move(subgraph_func), "ExternalSymbol",
                                     tvm::tir::StringImmNode::make("tensorrt_0"));
     auto call = CallNode::make(subgraph_func, args);
 
     // Build outer func
-    return FunctionNode::make(func_params, call, subgraph_func->ret_type,
+    return Function(func_params, call, subgraph_func->ret_type,
                               subgraph_func->type_params, subgraph_func->attrs);
   }
 
