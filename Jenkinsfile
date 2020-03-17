@@ -81,6 +81,17 @@ def init_git() {
   }
 }
 
+def get_tensorrt() {
+  sh """
+     mkdir -p /packages
+     cd /packages
+     """
+  s3Download(file: 'TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz',
+             bucket: 'neo-ai-dlr-jenkins-artifacts',
+             path: 'TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz')
+  sh "tar xzvf TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz"
+}
+
 def init_git_win() {
     checkout scm
     retry(5) {
