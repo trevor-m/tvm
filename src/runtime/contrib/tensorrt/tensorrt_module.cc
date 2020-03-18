@@ -98,7 +98,6 @@ class TensorRTModule : public runtime::ModuleNode {
         LOG(INFO) << "Building new TensorRT engine for subgraph " << name;
         auto func = Downcast<relay::Function>(
             LoadJSON(this->serialized_subgraphs_[name]));
-        LOG(INFO) << AsText(func);
         auto inputs = ConvertInputs(args);
         relay::contrib::TensorRTBuilder builder(inputs);
         auto engine_and_context = builder.BuildEngine(func);
@@ -243,12 +242,12 @@ Module TensorRTModuleCreate(
   return Module(n);
 }
 
-TVM_REGISTER_GLOBAL("module.loadfile_tensorrt")
+TVM_REGISTER_GLOBAL("runtime.module.loadfile_tensorrt")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
   *rv = TensorRTModule::LoadFromFile(args[0]);
 });
 
-TVM_REGISTER_GLOBAL("module.loadbinary_tensorrt")
+TVM_REGISTER_GLOBAL("runtime.module.loadbinary_tensorrt")
 .set_body_typed(TensorRTModule::LoadFromBinary);
 
 }  // namespace runtime
