@@ -262,7 +262,6 @@ class RelayBuildModule : public runtime::ModuleNode {
       IRModule relay_module,
       const TargetsMap& targets,
       const std::unordered_map<std::string, runtime::NDArray>& params) {
-    LOG(INFO) << "got params: " << params.size();
     if (params.size()) {
       CHECK(relay_module->ContainGlobalVar("main"))
         << "Missing the main entry function";

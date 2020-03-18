@@ -355,9 +355,9 @@ def test_tensorrt_ops():
         return f, {'x': (1, 3840, 5)}
 
     # run_and_verify(test_nms())
-    #run_and_verify(test_float_const())
-    #run_and_verify(test_dense_from_pytorch())
-    #run_and_verify(test_multiple_outputs())
+    run_and_verify(test_float_const())
+    run_and_verify(test_dense_from_pytorch())
+    run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
     run_and_verify(test_leaky_relu())
     run_and_verify(test_batch_norm((1, 64, 56, 56), (64,)))
@@ -487,9 +487,9 @@ def test_tensorrt_integration(test_all_models=False):
     latency = {}
     models = [
         'alexnet',
-        #'resnet18_v1',
-        #'resnet18_v2',
-        #'squeezenet1.0',
+        'resnet18_v1',
+        'resnet18_v2',
+        'squeezenet1.0',
         'mobilenet0.25',
         'mobilenetv2_0.25',
         'vgg11',
@@ -557,8 +557,8 @@ def test_tensorrt_serialize():
         mod.run(data=i_data)
 
 if __name__ == '__main__':
-    #test_tensorrt_ops()
-    #test_tensorrt_simple()
-    #test_tensorrt_not_compatible()
+    test_tensorrt_ops()
+    test_tensorrt_simple()
+    test_tensorrt_not_compatible()
     test_tensorrt_integration()
     test_tensorrt_serialize()

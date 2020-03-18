@@ -22,32 +22,12 @@ import tvm
 from tvm import relay
 from tvm.relay.expr import Call, Constant, Tuple
 import tvm.relay.transform as transform
+from tvm.relay.build_module import bind_params_by_name
 
 from . import _transform
 from .expr_functor import ExprMutator
 from tvm.relay.annotation import compiler_begin, compiler_end
 from tvm.relay.expr_functor import ExprMutator
-
-def _bind_params(func, params):
-    """
-    Bind the params to the expression as constants.
-    """
-    name_dict = {}
-    for arg in func.params:
-        name = arg.name_hint
-        if name in name_dict:
-            name_dict[name] = None
-        else:
-            name_dict[name] = arg
-    bind_dict = {}
-    for k, v in params.items():
-        if k not in name_dict:
-            continue
-        arg = name_dict[k]
-        if arg is None:
-            raise ValueError("Multiple args in the function have name %s" % k)
-        bind_dict[arg] = relay.expr.const(v)
-    return relay.expr.bind(func, bind_dict)
 
 class LegalizeLayoutTranform(ExprMutator):
     """
@@ -468,24 +448,12 @@ def ReconstructNms(mod):
     ]
     return relay.transform.MergeComposite(pattern_table)(mod)
 
-from . import op as reg
+from tvm.relay import op as reg
 
 def _register_external_op_helper(op_name, supported=True):
-    """The helper function to indicate that a given operator can be supported
-    by DNNL.
-    Paramters
-    ---------
-    op_name : Str
-        The name of operator that will be registered.
-    Returns
-    -------
-    f : callable
-        A function that returns if the operator is supported by DNNL.
-    """
     @reg.register(op_name, "target.tensorrt")
     def _func_wrapper(attrs, args):
         return supported
-
     return _func_wrapper
 
 _register_external_op_helper("nn.conv2d")
@@ -510,22 +478,21 @@ def EnableTrt(mod, params=None, trt_version=None):
     assert isinstance(trt_version, (list, tuple))
     assert len(trt_version) == 3
 
-    # if params:
-    #     # Bind params so that we can use FoldConstant.
-    #     mod['main'] = _bind_params(mod['main'], params)
-
-    # mod = relay.transform.FoldConstant()(mod)
+    if params:
+        # Bind params so that we can use FoldConstant.
+        mod['main'] = bind_params_by_name(mod['main'], params)
+    mod = relay.transform.FoldConstant()(mod)
 
     mod['main'] = RemoveDropout().visit(mod['main'])
     mod = ReconstructNms(mod)
-    #mod = TensorRTWhiteListAnnotator(trt_version)(mod)
-    mod = transform.AnnotateTargetWithMerge(['tensorrt'])(mod)
+    mod = TensorRTWhiteListAnnotator(trt_version)(mod)
+    #mod = transform.AnnotateTargetWithMerge(['tensorrt'])(mod)
     mod = transform.PartitionGraph()(mod)
     # Bind params for all TRT functions.
-    print(mod)
-    if params:
-        for x in mod.functions.items():
-            func_name = x[0].name_hint
-            mod[func_name] = _bind_params(mod[func_name], params)
+    # print(mod)
+    # if params:
+    #     for x in mod.functions.items():
+    #         func_name = x[0].name_hint
+    #         mod[func_name] = _bind_params(mod[func_name], params)
     mod = transform.InferType()(mod)
     return mod
