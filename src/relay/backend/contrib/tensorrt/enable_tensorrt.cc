@@ -217,15 +217,14 @@ bool ConcatenateOpChecker(const CallNode* call, const std::string& op_name,
     return false;
   }
   const auto tuple = call->args[0].as<TupleNode>();
-  if (tuple) {
-    for (size_t i = 0; i < tuple->fields.size(); ++i) {
-      const auto constant = tuple->fields[i].as<ConstantNode>();
-      if (constant && constant->data.Shape().size() > 1 &&
-          constant->data.Shape()[0] != 1) {
-        LOG(INFO) << op_name << " not supported: cannot concatenate a batched "
-                                "constant with tensors.";
-        return false;
-      }
+  if (!tuple) return true;
+  for (size_t i = 0; i < tuple->fields.size(); ++i) {
+    const auto constant = tuple->fields[i].as<ConstantNode>();
+    if (constant && constant->data.Shape().size() > 1 &&
+        constant->data.Shape()[0] != 1) {
+      LOG(INFO) << op_name << " not supported: cannot concatenate a batched "
+                              "constant with tensors.";
+      return false;
     }
   }
   return true;
