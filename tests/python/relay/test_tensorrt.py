@@ -71,6 +71,38 @@ def test_tensorrt_simple():
 
         tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
 
+def test_tensorrt_bindparams():
+    if should_skip():
+        return
+    dtype = 'float32'
+    xshape = (1, 32, 14, 14)
+    yshape = (1, 32,  1,  1)
+    x = relay.var('x', shape=(xshape), dtype=dtype)
+    y = relay.var('y', shape=(yshape), dtype=dtype)
+    out = relay.nn.conv2d(x, y)
+    f = relay.Function([x, y], out)
+
+    params = {'y': np.ones(yshape, dtype='float32')}
+
+    mod = tvm.IRModule()
+    mod['main'] = f
+    mod = relay.tensorrt.EnableTrt(mod, params)
+
+    print(mod)
+
+    ref_mod = tvm.IRModule()
+    ref_mod['main'] = f
+
+    x_data = np.random.uniform(-1, 1, xshape).astype(dtype)
+    # Test against reference.
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod, "cuda")
+    mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
+    mod.set_input(**params)
+    mod.run(x=x_data)
+    results = [mod.get_output(i) for i in range(mod.get_num_outputs())]
+    #print(results)
+
 def test_tensorrt_not_compatible():
     if should_skip():
         return
@@ -542,13 +574,14 @@ def test_tensorrt_serialize():
         f_graph_json.write(graph)
     with open('compiled.params', 'wb') as f_params:
         f_params.write(relay.save_param_dict(params))
-    lib.save('compiled.tensorrt')
+    #lib.save('compiled.tensorrt')
+    lib.export_library('compiled.so')
     # Deserialize
     with open('compiled.json', 'r') as f_graph_json:
         graph = f_graph_json.read()
     with open('compiled.params', 'rb') as f_params:
         params = bytearray(f_params.read())
-    lib = tvm.runtime.load_module("compiled.tensorrt")
+    lib = tvm.runtime.load_module("compiled.so")
     # Run
     mod = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
     mod.load_params(params)
@@ -557,8 +590,9 @@ def test_tensorrt_serialize():
         mod.run(data=i_data)
 
 if __name__ == '__main__':
+    #test_tensorrt_bindparams()
     test_tensorrt_ops()
-    test_tensorrt_simple()
-    test_tensorrt_not_compatible()
+    # test_tensorrt_simple()
+    # test_tensorrt_not_compatible()
     test_tensorrt_integration()
-    test_tensorrt_serialize()
+    # test_tensorrt_serialize()

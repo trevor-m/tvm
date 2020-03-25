@@ -25,7 +25,6 @@
 #include <memory>
 #include <string>
 
-#include "../../../relay/backend/contrib/tensorrt/common_utils.h"
 #include "tensorrt_builder.h"
 #include "tensorrt_logger.h"
 #include "tensorrt_ops.h"

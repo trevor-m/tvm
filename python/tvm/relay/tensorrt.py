@@ -62,57 +62,19 @@ class RemoveDropout(ExprMutator):
             return visit.tuple_value.args[0]
         return visit
 
-class RemoveMultiplyByOne(ExprMutator):
-    """
-    Removes multiply by 1.0f. This pass when followed by
-    RemoveRedundantTranspose is intended to remove a pattern of
-    Transpose([1, 0]) -> Scale(1.0f) -> Transpose([1, 0]) produced by
-    PyTorch's addmm operator.
-    """
-    def visit_call(self, expr):
-        if expr.op.name == "multiply":
-            if isinstance(expr.args[1], Constant):
-                data = expr.args[1].data.asnumpy()
-                if data.shape == () and data.item() == 1.0:
-                    return expr.args[0]
-        return super().visit_call(expr)
+@transform.function_pass(opt_level=0)
+class LegalizeLayoutTranformPass:
+    def transform_function(self, func, mod, _):
+        if func.attrs and func.attrs['External'] == "tensorrt":
+            return LegalizeLayoutTranform().mutate(func)
+        return func
 
-class RemoveRedundantTranspose(ExprMutator):
-    """
-    Removes Transpose([1, 0]) followed by Transpose([1, 0]). This pass, when
-    preceded by with RemoveMultiplyByOne is intended to remove a pattern of
-    Transpose([1, 0]) -> Scale(1.0f) -> Transpose([1, 0]) produced by
-    PyTorch's addmm operator.
-    """
-    def check_axes(self, axes):
-        return len(axes) == 2 and int(axes[0].value) == 1 and int(axes[1].value) == 0
-
-    def visit_call(self, expr):
-        if expr.op.name == "transpose":
-            if self.check_axes(expr.attrs['axes']):
-                if isinstance(expr.args[0], Call) and expr.args[0].op.name == "transpose":
-                    if self.check_axes(expr.args[0].attrs['axes']):
-                        return expr.args[0].args[0]
-        return super().visit_call(expr)
-
-def PreprocessForTrt(mod):
-    """Applies passes to prepare main function for TensorRT conversion.
-
-    Parameters
-    ----------
-    mod: Module
-        The original module.
-
-    Returns
-    -------
-    mod: Module
-        The module modified for TensorRT.
-    """
-    mod['main'] = LegalizeLayoutTranform().visit(mod['main'])
-    mod['main'] = RemoveDropout().visit(mod['main'])
-    mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
-    mod['main'] = RemoveRedundantTranspose().visit(mod['main'])
-    return mod
+@transform.function_pass(opt_level=0)
+class RemoveDropoutPass:
+    def transform_function(self, func, mod, _):
+        if func.attrs and func.attrs['External'] == "tensorrt":
+            return RemoveDropout().mutate(func)
+        return func
 
 def GetTrtVersion():
     """Gets the version of TensorRT that TVM is built against.
@@ -129,52 +91,6 @@ def IsTrtRuntimeAvailable():
     if not tvm.get_global_func("relay._transform.GetTrtVersion", True):
         return False
     return GetTrtVersion() != ()
-
-def EnableTrtLegacy(mod, params=None, trt_version=None):
-    """Converts the "main" function in the module into one that can be executed using
-    TensorRT. If any of the operators are not supported by the TensorRT
-    conversion, the unmodified program will be returned instead.
-
-    Parameters
-    ----------
-    mod: Module
-        The original module.
-
-    params : dict of str to NDArray
-        Input parameters to the graph that do not change
-        during inference time. Used for constant folding.
-
-    trt_version : Optional[Tuple[int]]
-        Which version of TensorRT to target for partitioning as a tuple of
-        (major, minor, patch). If not specified, will attempt to get using
-        GetTrtVersion.
-
-    Returns
-    -------
-    mod: Module
-        The modified module which will use the TensorRT runtime if compatible.
-    """
-    if not trt_version:
-        trt_version = GetTrtVersion()
-        # If TVM wasn't built against TRT, default to target TRT 6. Since the
-        # actual conversion to TRT is done at runtime, building against TRT is
-        # not required for compilation.
-        if not trt_version:
-            trt_version = (6, 0, 1)
-    assert isinstance(trt_version, (list, tuple))
-    assert len(trt_version) == 3
-
-    # Apply passes required for TRT
-    seq = relay.transform.Sequential([relay.transform.RemoveUnusedFunctions(),
-                                      relay.transform.ConvertLayout('NCHW')])
-    with relay.transform.PassContext(opt_level=3):
-        mod = seq(mod)
-    mod = PreprocessForTrt(mod)
-    if params:
-        # Bind params so that we can use FoldConstant.
-        mod['main'] = _bind_params(mod['main'], params)
-    mod = relay.transform.FoldConstant()(mod)
-    return _transform.EnableTrt(*trt_version)(mod)
 
 def always_whitelist_fn(call, trt_version):
     return True
@@ -398,7 +314,7 @@ class TensorRTWhiteListAnnotator:
             "contrib.adaptive_max_pool2d": adaptive_pool2d_whitelist_fn,
             "contrib.adaptive_avg_pool2d": adaptive_pool2d_whitelist_fn,
             "clip": always_whitelist_fn,
-            "tensorrt.nms": nms_whitelist_fn,
+            # "tensorrt.nms": nms_whitelist_fn,
             # Ops which require TRT 5.1.5+
             "nn.leaky_relu": get_min_trt_version_whitelist_fn((5, 1, 5)),
             "sin": get_min_trt_version_whitelist_fn((5, 1, 5)),
@@ -468,6 +384,29 @@ _register_external_op_helper("nn.max_pool2d")
 _register_external_op_helper("nn.global_avg_pool2d")
 
 def EnableTrt(mod, params=None, trt_version=None):
+    """Converts the "main" function in the module into one that can be executed using
+    TensorRT. If any of the operators are not supported by the TensorRT
+    conversion, the unmodified program will be returned instead.
+
+    Parameters
+    ----------
+    mod: Module
+        The original module.
+
+    params : dict of str to NDArray
+        Input parameters to the graph that do not change
+        during inference time. Used for constant folding.
+
+    trt_version : Optional[Tuple[int]]
+        Which version of TensorRT to target for partitioning as a tuple of
+        (major, minor, patch). If not specified, will attempt to get using
+        GetTrtVersion.
+
+    Returns
+    -------
+    mod: Module
+        The modified module which will use the TensorRT runtime if compatible.
+    """
     if not trt_version:
         trt_version = GetTrtVersion()
         # If TVM wasn't built against TRT, default to target TRT 6. Since the
@@ -481,18 +420,15 @@ def EnableTrt(mod, params=None, trt_version=None):
     if params:
         # Bind params so that we can use FoldConstant.
         mod['main'] = bind_params_by_name(mod['main'], params)
-    mod = relay.transform.FoldConstant()(mod)
-
-    mod['main'] = RemoveDropout().visit(mod['main'])
-    mod = ReconstructNms(mod)
-    mod = TensorRTWhiteListAnnotator(trt_version)(mod)
-    #mod = transform.AnnotateTargetWithMerge(['tensorrt'])(mod)
-    mod = transform.PartitionGraph()(mod)
-    # Bind params for all TRT functions.
-    # print(mod)
-    # if params:
-    #     for x in mod.functions.items():
-    #         func_name = x[0].name_hint
-    #         mod[func_name] = _bind_params(mod[func_name], params)
-    mod = transform.InferType()(mod)
+    # Apply passes required for TRT
+    seq = relay.transform.Sequential([#transform.FoldConstant(),
+                                      TensorRTWhiteListAnnotator(trt_version),
+                                      transform.PartitionGraph(),
+                                      transform.RemoveUnusedFunctions(),
+                                      transform.ConvertLayout('NCHW'),
+                                      LegalizeLayoutTranformPass(),
+                                      RemoveDropoutPass(),
+                                      transform.InferType()])
+    with relay.transform.PassContext(opt_level=3):
+        mod = seq(mod)
     return mod

@@ -36,6 +36,9 @@
 
 #include "../../../../runtime/contrib/tensorrt/tensorrt_module.h"
 #include "../codegen_c/codegen_c.h"
+#if TVM_GRAPH_RUNTIME_TENSORRT
+#include "NvInfer.h"
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
 namespace tvm {
 namespace relay {
@@ -96,6 +99,23 @@ runtime::Module TrtCompiler(const ObjectRef& ref) {
 }
 
 TVM_REGISTER_GLOBAL("relay.ext.tensorrt").set_body_typed(TrtCompiler);
+
+/*!
+ * \brief Get TensorRT version that TVM was compiled against.
+ * \return TensorRT version as a list of [major, minor, patch], or an empty list
+ * if not compiled against TensorRT.
+ */
+Array<Integer> GetTrtVersion() {
+#if TVM_GRAPH_RUNTIME_TENSORRT
+  return {Integer(NV_TENSORRT_MAJOR), Integer(NV_TENSORRT_MINOR),
+          Integer(NV_TENSORRT_PATCH)};
+#else
+  return {};
+#endif  // TVM_GRAPH_RUNTIME_TENSORRT
+}
+
+TVM_REGISTER_GLOBAL("relay._transform.GetTrtVersion")
+    .set_body_typed(GetTrtVersion);
 
 }  // namespace contrib
 }  // namespace relay
