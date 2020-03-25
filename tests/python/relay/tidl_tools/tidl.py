@@ -2,6 +2,7 @@
 import subprocess
 
 import numpy as np
+import tvm
 from tvm import relay
 import topi
 from topi.util import get_const_tuple
@@ -566,10 +567,7 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     weight = this_node.args[1]
     #data_shape    = get_const_tuple(data.checked_type.shape)
     weight_shape  = get_const_tuple(weight.checked_type.shape)
-    weight_name   = weight.name_hint
     weight_type   = weight.checked_type.dtype
-    #print(weight_name)
-    #weights can be obtained by: weights=params[weight_name]
     strides       = get_const_tuple(this_node.attrs.strides)
     dilation      = get_const_tuple(this_node.attrs.dilation)
     padding       = get_const_tuple(this_node.attrs.padding)
@@ -588,7 +586,12 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params.num_groups = groups
 
     # Obtain weights from Relay params
-    weights = params[weight_name] # TODO: change to weights = weight.data after params binding 
+    if isinstance(weight,tvm.relay.expr.Constant):
+        weights = weight.data
+    else:
+        #print(weight_name)
+        weight_name = weight.name_hint
+        weights = params[weight_name] 
     # Convert to numpy array and then pass to C
     weights_np = weights.asnumpy()
 
@@ -949,6 +952,8 @@ def relay_ir_import(mod, params):
     True if import succeeds or False if import fails    
     """
 
+    import re
+
     # Traverse Relay IR graph and generate a dictionary of all nodes
     all_nodes_main = {}
     relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes_main)) 
@@ -959,9 +964,12 @@ def relay_ir_import(mod, params):
                 tidl_subgraphs.append(node.name_hint)
 
     # Question: how to traverse all tidl_* subgraphs?
-    subgraph_id = 0
     for tidl_subgraph in tidl_subgraphs:
         all_nodes_tidl = {}
+        # Extract subgraph id from subgraph name
+        id = re.search('tidl_(\d+)',tidl_subgraph)
+        subgraph_id = int(id.group(1))
+
         relay.analysis.post_order_visit(mod[tidl_subgraph], lambda node: traverse_expr(node, all_nodes_tidl)) 
     
         # Initialize TIDL import
@@ -981,7 +989,6 @@ def relay_ir_import(mod, params):
         _tidlImportOptimize.restype = ctypes.c_int
         if _tidlImportOptimize(subgraph_id) == -1:
             return False
-        subgraph_id = subgraph_id + 1
 
     return True
 

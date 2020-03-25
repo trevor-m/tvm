@@ -21,11 +21,21 @@
 #include <tvm/relay/type.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/object.h>
+#include <tvm/ir/module.h>
 
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
 #include "../codegen_c/codegen_c.h"
+
+namespace tvm {
+namespace runtime {
+Module TIDLModuleCreate(int total_subgraphs, 
+                      const std::unordered_map<std::string, int>& num_inputs,
+                      const std::unordered_map<std::string, int>& num_outputs);
+}
+}
 
 namespace tvm {
 namespace relay {
@@ -39,51 +49,55 @@ class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
 
   runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
     int total_subgraphs = 0;
-    int subgraph_id = 0;
+    //std::string subgraph_names[MAX_NUM_TIDL_SUBRAPHS];  // can be used for error checking
 
     if (ref->IsInstance<FunctionNode>()) {
-      std::cout << "FunctionNode: ";
-      std::string subgraph_name = GetExtSymbol(Downcast<Function>(ref));
-      std::cout << "subgraph_name is: " << subgraph_name <<std::endl;
+      //std::cout << "FunctionNode: ";
+      //subgraph_names[0] = GetExtSymbol(Downcast<Function>(ref));
+      //std::cout << "subgraph_name is: " << subgraph_names[0] <<std::endl;
       total_subgraphs = 1;
+      
     } else if (ref->IsInstance<IRModuleNode>()) {
-      // TODO: support multiple functions.
       IRModule mod = Downcast<IRModule>(ref);
       total_subgraphs = mod->functions.size();
       std::cout << "IRModuleNode, total subgraphs: " << total_subgraphs << std::endl;
-      for (const auto& it : mod->functions) {
-        //std::string subgraph_name = GetExtSymbol(Downcast<Function>(it.second));
-        //std::cout << "subgraph id: " << subgraph_id << ", ";
-        //std::cout << "subgraph_name: " << subgraph_name <<std::endl;
 
+      for (const auto& it : mod->functions) {
         auto func = Downcast<Function>(it.second);
         auto subgraph_name = GetExtSymbol(func);
+        // get subgraph_id from subgraph_name
+        //subgraph_names[subgraph_id] = subgraph_name;
+
         const int num_inputs = func->params.size();
+        subgraph_num_inputs[subgraph_name] = num_inputs;
         for (int i = 0; i < num_inputs; i++) {
           std::cout << subgraph_name << " input " << i << " is named " << func->params[i]->name_hint() << std::endl;
         }
 
         const int num_outputs = func->ret_type.as<TensorTypeNode>() ? 1 : func->ret_type.as<TupleTypeNode>()->fields.size();
+        subgraph_num_outputs[subgraph_name] = num_outputs;
         std::cout << subgraph_name << " has " << num_inputs << " inputs." << std::endl;
         std::cout << subgraph_name << " has " << num_outputs << " outputs." << std::endl;
-        //LOG(INFO) << subgraph_name << " has " << num_outputs << " outputs.";
-
-        subgraph_id++;
       }
     } else {
       LOG(FATAL)
           << "The input ref is expected to be a Relay function or module.";
     }
 
-    // TODO: support multiple functions - how to do it?
-    const PackedFunc* pf =
-          runtime::Registry::Get("tvm.contrib.tidl.create");
-    CHECK(pf != nullptr)
-          << "tvm.contrib.tidl.create was not found in the registry.";
-    // need to pass what TIDL runtime needs:
-    //    - 
-    return (*pf)(total_subgraphs, subgraph_id);
+    //const PackedFunc* pf = runtime::Registry::Get("tvm.contrib.tidl.create");
+    //CHECK(pf != nullptr)
+    //      << "tvm.contrib.tidl.create was not found in the registry.";
+    //// subgraph_names can be used for error checking at runtime
+    ////return (*pf)(total_subgraphs, subgraph_names);
+    //return (*pf)(total_subgraphs, subgraph_num_inputs, subgraph_num_outputs);
+    
+    return runtime::TIDLModuleCreate(total_subgraphs, subgraph_num_inputs, subgraph_num_outputs);
   }
+
+ private:
+  /*! \brief  */
+  std::unordered_map<std::string, int> subgraph_num_inputs;
+  std::unordered_map<std::string, int> subgraph_num_outputs;
 };
 
 /*!
