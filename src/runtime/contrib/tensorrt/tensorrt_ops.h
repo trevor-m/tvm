@@ -1062,6 +1062,7 @@ class NmsOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input->getDimensions());
     const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
+    const int num_boxes = input_dims[params->network->hasImplicitBatchDimension() ? 0 : 1];
     // Slice input into boxes and scores
     std::vector<int> scores_begin(input_dims.size(), 0);
     std::vector<int> scores_size(input_dims.begin(), input_dims.end());
@@ -1082,8 +1083,8 @@ class NmsOpConverter : public TrtOpConverter {
     nms_params.shareLocation = true; // if num_classes = 1
     nms_params.backgroundLabelId = -1;
     nms_params.numClasses = 1;
-    nms_params.topK = 3840;
-    nms_params.keepTopK = 3840;
+    nms_params.topK = nms_attrs->top_k == -1 ? num_boxes : std::min(num_boxes, nms_attrs->top_k);
+    nms_params.keepTopK = nms_params.topK;
     nms_params.scoreThreshold = get_valid_counts_attrs->score_threshold;
     nms_params.iouThreshold = nms_attrs->iou_threshold;
     nms_params.isNormalized = false;
@@ -1094,7 +1095,7 @@ class NmsOpConverter : public TrtOpConverter {
     //auto num_valid = nms_layers->getOutput(0);
     auto output_boxes = nms_layer->getOutput(1);
     auto output_scores = nms_layer->getOutput(2);
-    output_scores = Reshape(params, output_scores, {1, 3840, 1});
+    output_scores = Reshape(params, output_scores, {1, num_boxes, 1});
     std::vector<nvinfer1::ITensor*> concat_inputs = {output_scores, output_boxes};
      nvinfer1::IConcatenationLayer* concat_layer =
         params->network->addConcatenation(concat_inputs.data(),
