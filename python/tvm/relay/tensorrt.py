@@ -161,6 +161,9 @@ def global_pool_2d_whitelist_fn(call, trt_version):
     return True
 
 def expand_dims_whitelist_fn(call, trt_version):
+    if call.type_args[0].dtype != "float32":
+        print("{}: only fp32 inputs are supported.".format(call.op.name))
+        return False
     if trt_version < (6, 0, 1) and int(call.attrs.axis) == 0:
         print("{}: can't modify batch dimension.".format(call.op.name))
         return False
@@ -248,14 +251,17 @@ def get_min_trt_version_whitelist_fn(min_trt_version):
 def strided_slice_whitelist_fn(call, trt_version):
     if not get_min_trt_version_whitelist_fn((5, 1, 5))(call, trt_version):
         return False
+    if call.type_args[0].dtype != "float32":
+        print("{}: only fp32 inputs are supported.".format(call.op.name))
+        return False
     if trt_version < (6, 0, 1):
         batch_dim_begin_modified = call.attrs.begin[0] is not None and int(call.attrs.begin[0]) != 0
         batch_dim_end_modified = call.attrs.end[0] is not None and int(call.attrs.end[0]) != -1 and int(call.attrs.end[0]) != int(call.type_args[0].shape[0])
         if batch_dim_begin_modified or batch_dim_end_modified:
             print("{}: can't modify batch dimension.".format(call.op.name))
             return False
-    if any([x < 0 for x in map(int, call.attrs.begin)]) or any([x < 0 for x in map(int, call.attrs.end)]):
-        print("{}: start/end values must be positive".format(call.op.name))
+    if any([x.defined() and x <= 0 for x in call.attrs.strides]):
+        print("{}: stride must be positive".format(call.op.name))
         return False
     return True
 

@@ -167,9 +167,10 @@ class TrtOpConverter {
     }
     CHECK(axis >= -input_rank && axis < input_rank);
     if (axis < 0) axis += input_rank;
-    CHECK_NE(axis, 0);
-    // Subtract 1 for implicit batch dim.
     if (params->network->hasImplicitBatchDimension()) {
+      // Can't modify batch dimenson.
+      CHECK_NE(axis, 0);
+      // Subtract 1 for implicit batch dim.
       axis -= 1;
     }
     return axis;
@@ -930,20 +931,23 @@ class StridedSliceOpConverter : public TrtOpConverter {
     const bool default_strides =
         !attrs->strides.defined() || attrs->strides.size() == 0;
     if (params->network->hasImplicitBatchDimension()) {
-      CHECK(default_strides || attrs->strides[0].as<IntImmNode>()->value == 1);
+      CHECK(default_strides || !attrs->strides[0].defined() || attrs->strides[0].as<IntImmNode>()->value == 1);
     }
+
+    auto process_slice_index = [](Integer x, int default_value, int dim_value) {
+      if (!x.defined()) return default_value;
+      int value = x.as<IntImmNode>()->value;
+      if (value < 0) value += dim_value;
+      return value;
+    };
 
     const int start_index =
         params->network->hasImplicitBatchDimension() ? 1 : 0;
     std::vector<int> start, size, strides;
     for (size_t i = start_index; i < attrs->begin.size(); ++i) {
-      const int begin_value = attrs->begin[i].defined()
-                                  ? attrs->begin[i].as<IntImmNode>()->value
-                                  : 0;
-      const int end_value = attrs->end[i].defined()
-                                ? attrs->end[i].as<IntImmNode>()->value
-                                : input_dims[i - start_index];
-      const int stride_value = (default_strides || i >= attrs->strides.size())
+      const int begin_value = process_slice_index(attrs->begin[i], 0, input_dims[i - start_index]);
+      const int end_value = process_slice_index(attrs->end[i], input_dims[i - start_index], input_dims[i - start_index]);
+      const int stride_value = (default_strides || i >= attrs->strides.size() || !attrs->strides[i].defined())
                                    ? 1
                                    : attrs->strides[i].as<IntImmNode>()->value;
       CHECK_GT(stride_value, 0);
