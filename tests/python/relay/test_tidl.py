@@ -29,6 +29,7 @@ from tvm.relay.annotation import compiler_begin, compiler_end
 from tvm.relay.expr_functor import ExprMutator
 from tvm.contrib import cc
 from tvm.relay.build_module import bind_params_by_name
+from tvm.contrib import graph_runtime
 
 from tidl_tools import tidl
 from tidl_tools import tidlAnnotation
@@ -92,6 +93,33 @@ class WholeGraphAnnotator(ExprMutator):
             new_call = compiler_end(new_call, self.compiler)
         return new_call
 
+# Leverage the pass manager to write a simple white list based annotator
+@transform.function_pass(opt_level=0)
+class WhiteListAnnotator:
+    def __init__(self, op_list, compiler):
+        assert isinstance(op_list, (list, tuple, set))
+        self.op_list = op_list
+        self.compiler = compiler
+
+    def transform_function(self, func, mod, ctx):
+
+        annotator = self
+        class Annotator(tvm.relay.ExprMutator):
+            def visit_call(self, call):
+                op_name = call.op.name
+                if op_name in annotator.op_list:
+                    new_args = []
+                    for arg in call.args:
+                        ann = compiler_begin(super().visit(arg),
+                                             annotator.compiler)
+                        new_args.append(ann)
+                    new_call = relay.Call(call.op, new_args, call.attrs,
+                                          call.type_args)
+                    return compiler_end(new_call, annotator.compiler)
+                else:
+                    return super().visit_call(call)
+        return Annotator().visit(func)
+
 def test_extern_tidl():
     if os.getenv("TIDL_PLSDK") is None:
       plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
@@ -106,8 +134,15 @@ def test_extern_tidl():
     dtype = "float32"
     input_shape = (1, 3, 224, 224) # NCHW
     w1_shape    = (32, 3, 3, 3)    # OIHW
-    w1 = np.random.rand(*w1_shape).astype('float32')
+    w2_shape    = (1, 32, 3, 3)    # OIHW
+    #w1 = np.random.rand(*w1_shape).astype('float32')
+    #w1 = np.random.uniform(-1,1,size=data_shape).astype('float32')
+    mnet1_conv2d_0 = np.load('MobilenetV1_Conv2d_0_weights.npy').astype(np.float32) # HWIO
+    w1 = mnet1_conv2d_0.transpose(3,2,0,1)
     params_w1 = tvm.nd.array(w1)
+    mnet1_conv2d_1 = np.load('MobilenetV1_Conv2d_1_weights.npy').astype(np.float32) # HWIO
+    w2 = mnet1_conv2d_1.transpose(3,2,0,1)
+    params_w2 = tvm.nd.array(w2)
 
     data = relay.var('data', shape=(input_shape), dtype=dtype)
     weight1 = relay.var('weight1', shape=(w1_shape), dtype=dtype)
@@ -115,6 +150,7 @@ def test_extern_tidl():
                                weight1,
                                kernel_size=(3, 3),
                                padding=(1, 1),
+                               #strides=(2,2),
                                kernel_layout = 'OIHW')
 
     clip_1 = relay.clip(conv2d_1, 0, 6) # relu6
@@ -125,14 +161,44 @@ def test_extern_tidl():
     print('---------- Original graph ----------')
     print(mod1.astext(show_meta_data=False))
 
-    mod1['main'] = bind_params_by_name(mod1['main'], params1)
-    mod3 = tvm.IRModule()
-    mod3['main'] = WholeGraphAnnotator('tidl').visit(mod1['main'])
-    print('---------- Whole graph annotated ----------')
-    print(mod3.astext(show_meta_data=False))
-    mod3_partition = relay.transform.PartitionGraph()(mod3)
-    print('---------- Whole graph annotated and partitioned ----------')
-    print(mod3_partition.astext(show_meta_data=False))
+    # Build the graph to run on host (x86)
+    print('Build the graph to run on host (x86)')
+    with relay.build_config(opt_level=3):
+        target = "llvm"
+        graph, lib, params = relay.build_module.build(mod1, target=target, params=params1)
+
+    ctx = tvm.cpu()
+    rand_data = np.random.uniform(-1, 1, size=input_shape).astype("float32")
+    # create module
+    module = graph_runtime.create(graph, lib, ctx)
+    # set input and parameters
+    module.set_input("data", rand_data)
+    module.set_input(**params)
+    # run
+    module.run()
+    # get output
+    out_shape = (1,32,224,224)
+    out = module.get_output(0, tvm.nd.empty(out_shape)).asnumpy()
+    # Print first 10 elements of output
+    print(out.flatten()[0:10])
+
+    # Build the graph to run on ARM
+    print('Build the graph to run on ARM')
+    with relay.build_config(opt_level=3):
+        target = "llvm -target=armv7l-linux-gnueabihf"
+        graph, lib, params = relay.build_module.build(mod1, target=target, params=params1)
+
+    artifacts_folder = "./artifacts_arm/"
+    path_lib    = artifacts_folder + "deploy_lib.tar"
+    path_graph  = artifacts_folder + "deploy_graph.json"
+    lib.export_library(path_lib)
+    path_params = artifacts_folder + "deploy_param.params"
+
+    with open(path_graph, "w") as fo:
+      fo.write(graph)
+    with open(path_params, "wb") as fo:
+      fo.write(relay.save_param_dict(params))
+    print('Model artifacts saved to run on ARM')
 
     #============= Annotating the graph ==============
     #TIDL annotation pass:
@@ -156,40 +222,42 @@ def test_extern_tidl():
     # For now, just manually annotate the graph:
     #    - whole graph offload, or
     #    - subgraph offload
-    begin0 = relay.annotation.compiler_begin(data, "tidl")
-    begin1 = relay.annotation.compiler_begin(weight1, "tidl")
-    node0  = relay.nn.conv2d(begin0,
-                             begin1,
-                             kernel_size=(3, 3),
-                             padding=(1, 1),
-                             kernel_layout = 'OIHW')
-    node1  = relay.clip(node0, 0, 6) # relu6
-    # whole graph offload
-    out2 = relay.annotation.compiler_end(node1, "tidl")
-    f2   = relay.Function([data, weight1], out2)
+
+    # whole graph offload to TIDL
+    mod1['main'] = bind_params_by_name(mod1['main'], params1)
+    #mod3 = tvm.IRModule()
+    #mod3['main'] = WholeGraphAnnotator('tidl').visit(mod1['main'])
+    mod3 = WhiteListAnnotator(["nn.conv2d","clip"],"tidl")(mod1)
+    print('---------- Whole graph annotated ----------')
+    print(mod3.astext(show_meta_data=False))
+    mod3_partition = relay.transform.PartitionGraph()(mod3)
+    print('---------- Whole graph annotated and partitioned ----------')
+    print(mod3_partition.astext(show_meta_data=False))
+
+
+    # subgraph offload to TIDL
+    data = relay.var('data', shape=(input_shape), dtype=dtype)
+    clip_1 = relay.clip(data, 0, 6) # relu6
+    clip_2 = relay.nn.relu(clip_1) # relu
+    f2   = relay.Function([data], clip_2)
     mod2 = tvm.IRModule.from_expr(f2)
-    params2 = {'weight1':params_w1} 
-    #mod2['main'] = bind_params_by_name(mod2['main'], params2)
+    mod4 = WhiteListAnnotator(['clip', 'nn.relu'], 'tidl')(mod2)
+    params4 = {}
     print('---------- Annotated graph ----------')
-    print(mod2.astext(show_meta_data=False))
+    print(mod4.astext(show_meta_data=False))
 
     #============= Partitioning the graph ==============
-    mod2_partition = transform.PartitionGraph()(mod2)
+    mod4_partition = transform.PartitionGraph()(mod4)
     print('---------- Partitioned graph ----------')
-    print(mod2_partition.astext(show_meta_data=False))
+    print(mod4_partition.astext(show_meta_data=False))
 
-    ################### Gap ############################
-    # Can't use original names for params
-    # TODO: params binding
-    ################### Gap ############################
-    params = {"tidl_input1":params_w1} 
 
     #============= Importing subgraph(s) to TIDL ==============
     # TIDL import pass - import all TIDL subgraphs
     # invoking Relay IR import from TIDL package
     print('---------- Subgraphs import to TIDL ----------')
-    #if tidl.relay_ir_import(mod2_partition, params) == False:
-    if tidl.relay_ir_import(mod3_partition, params) == False:
+    if tidl.relay_ir_import(mod4_partition, params4) == False:
+    #if tidl.relay_ir_import(mod3_partition, params) == False:
         print('Importing this model to TIDL failed!')
     #    assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tidl'
     else:
@@ -201,6 +269,7 @@ def test_extern_tidl():
         subgraph_id = 0
         calibration_image = './tidl_tools/airshow.jpg'
         raw_image = 'raw_calib_image.bin'
+        # TODO: how to preprocess image properly for all supported frameworks??
         tidl_utils.tf_image_preprocess(calibration_image, raw_image, input_shape)
         tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
         print('Importing this model to TIDL succeeded!')
@@ -209,7 +278,8 @@ def test_extern_tidl():
     print('---------- Code generation with TIDL subgraphs ----------')
     with relay.build_config(opt_level=3):
         target = "llvm -target=armv7l-linux-gnueabihf"
-        graph, lib, params = relay.build_module.build(mod3_partition, target=target)
+        #graph, lib, params = relay.build_module.build(mod2_partition, target=target)
+        graph, lib, params = relay.build_module.build(mod4_partition, target=target)
         print(lib)
 
     artifacts_folder = "./artifacts/"
@@ -217,7 +287,7 @@ def test_extern_tidl():
     path_graph  = artifacts_folder + "deploy_graph.json"
     # should use compiler: arm_gcc = plsdk_devkit + "arm-linux-gnueabihf-g++"
     lib.save(path_lib) # whole graph offload and heterogeneous execute may need to use diff func. Trevor to check
-    lib2 = tvm.runtime.load_module(path_lib)
+    #lib.export_library(path_lib) 
     path_params = artifacts_folder + "deploy_param.params"
 
     with open(path_graph, "w") as fo:

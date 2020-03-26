@@ -817,7 +817,9 @@ def tidl_import_init(all_nodes):
     #    quantRoundAdd = 50
     #    inQuantFactor = 128*255
     # Other parameters depend on input dimension
+    # TODO: obtain these parameters automatically
     config_params = TIDLconfigParams(12,50,32640,1,3,224,224)
+    #config_params = TIDLconfigParams(12,50,255,1,3,224,224)
 
     # Find first node of the graph and get input tensor shape
     for node in all_nodes:
@@ -831,28 +833,34 @@ def tidl_import_init(all_nodes):
     input_shape = get_const_tuple(data.checked_type.shape) 
 
     # Find first conv2d node to get data layout (first node may not have this infomation)
-    for node in all_nodes:
-        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
-            if node.op.name == "nn.conv2d":
-                print('Found first conv2d node')
-                break
+#    for node in all_nodes:
+#        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
+#            if node.op.name == "nn.conv2d":
+#                print('Found first conv2d node')
+#                break
+#
+#    # Fill dimension parameters for TIDL based on input tensor shape and data layout
+#    if node.attrs.data_layout == "NCHW":
+#        print('Data layout is NCHW')
+#        layout = b'NCHW'
+#        config_params.inNumChannels = input_shape[1]
+#        config_params.inHeight      = input_shape[2]
+#        config_params.inWidth       = input_shape[3]
+#    elif node.attrs.data_layout == "NHWC":
+#        print('Data layout is NHWC')
+#        layout = b'NHWC'
+#        config_params.inNumChannels = input_shape[3]
+#        config_params.inHeight      = input_shape[1]
+#        config_params.inWidth       = input_shape[2]
+#    else:
+#        print('data layout ' + node.attrs.data_layout + ' is not supported')
+#        return False
 
-    # Fill dimension parameters for TIDL based on input tensor shape and data layout
-    if node.attrs.data_layout == "NCHW":
-        print('Data layout is NCHW')
-        layout = b'NCHW'
-        config_params.inNumChannels = input_shape[1]
-        config_params.inHeight      = input_shape[2]
-        config_params.inWidth       = input_shape[3]
-    elif node.attrs.data_layout == "NHWC":
-        print('Data layout is NHWC')
-        layout = b'NHWC'
-        config_params.inNumChannels = input_shape[3]
-        config_params.inHeight      = input_shape[1]
-        config_params.inWidth       = input_shape[2]
-    else:
-        print('data layout ' + node.attrs.data_layout + ' is not supported')
-        return False
+    print('Data layout is NCHW')
+    layout = b'NCHW'
+    config_params.inNumChannels = input_shape[1]
+    config_params.inHeight      = input_shape[2]
+    config_params.inWidth       = input_shape[3]
 
     # Invoking C library call to initialize TIDL import
     _tidlImportInit = _tidl_mod.tidlImportInit

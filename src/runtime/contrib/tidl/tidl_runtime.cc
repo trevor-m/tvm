@@ -48,6 +48,10 @@
 #include <vector>
 #include "../../file_util.h"
 
+//#define MAX_INPUT_TENSORS  4
+//#define MAX_OUTPUT_TENSORS 4
+//#define MAX_BATCH_SIZE     256
+
 extern "C" {
 extern void TidlRunSubgraph(
     int total_subgraphs,   // passed from TIDL codegen
@@ -154,13 +158,16 @@ class TIDLModule : public runtime::ModuleNode {
       LOG(FATAL) << "Subgraph name doesn't contain \"tidl_\"!" << std::endl;
       return PackedFunc();
     }
+    std::cout << "Initializing TIDL ..." << std::endl;
     TidlInit();  // Question - should TidlInit() be called here??
+    std::cout << "TIDL Initialized. Now running inference... " << std::endl;
 
     // get subgraph id from name
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
       std::string subgraph_name = (std::string)name;
       // Get subgraph id which is after "tidl_" (5 characters)
       int subgraph_id = std::stoi(subgraph_name.erase(0,5));
+      std::cout << "TIDL subgraph name: " << name << " , subgraph id: " << subgraph_id << std::endl;
       DLTensor *arg0 = (DLTensor *)args[0];
       const int batch_size = arg0->shape[0];
       int num_inputs  = num_inputs_[name];
@@ -169,21 +176,26 @@ class TIDLModule : public runtime::ModuleNode {
       //float** outputs = new float*[num_outputs];
       std::vector<float *> inputs;
       std::vector<float *> outputs;
+      //float *inputs[MAX_INPUT_TENSORS*MAX_BATCH_SIZE];
+      //float *outputs[MAX_OUTPUT_TENSORS*MAX_BATCH_SIZE];
       for (int i = 0; i < num_inputs; i++) {
         DLTensor *arg = (DLTensor *)args[i];
         //inputs[i] = reinterpret_cast<float*>(arg->data);
         inputs.push_back(reinterpret_cast<float*>(arg->data));
       }
       for (int i = 0; i < num_outputs; i++) {
-        const int index_in_args = num_inputs - num_outputs + i;
+        const int index_in_args = num_inputs + i;
         DLTensor *arg = (DLTensor *)args[index_in_args];
         //outputs[i] = reinterpret_cast<float*>(arg->data);
         outputs.push_back(reinterpret_cast<float*>(arg->data));
       }
 
       // ... Execute TidlRunSubgraph ...
+      std::cout << "Invoking TIDL with args: " << total_subgraphs_ << subgraph_id;
+      std::cout << batch_size << num_inputs << num_outputs << std::endl;
       tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, 
                     num_inputs, num_outputs, &inputs[0], &outputs[0]);
+      std::cout << "TIDL execution finished." << std::endl;
     });
 #else
     LOG(FATAL) << "TVM was not built with TIDL runtime enabled. Build "
