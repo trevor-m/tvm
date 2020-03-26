@@ -120,6 +120,13 @@ set(USE_MICRO_STANDALONE_RUNTIME OFF)
 # - /path/to/llvm-config: enable specific LLVM when multiple llvm-dev is available.
 set(USE_LLVM OFF)
 
+# Whether enable TIDL during compile
+#
+# Possible values:
+# - ON: enable TIDL 
+# - OFF: disable TIDL
+set(USE_TIDL ON)
+
 #---------------------------------------------
 # Contrib libraries
 #---------------------------------------------
