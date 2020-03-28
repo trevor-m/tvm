@@ -211,13 +211,13 @@ class TIDLModule : public runtime::ModuleNode {
                   const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
-    std::cout << "SaveToFile: file name is " << file_name << std::endl;
+    std::cout << "TIDL SaveToFile: file name is " << file_name << std::endl;
     SaveBinaryToFile(file_name, ToJSON(total_subgraphs_, num_inputs_, num_outputs_));
   }
 
   // used for export in case of heterogeneous execute
   void SaveToBinary(dmlc::Stream* stream) final {
-    std::cout << "SaveToBinary: " << std::endl;
+    std::cout << "TIDL SaveToBinary: " << std::endl;
     stream->Write(ToJSON(total_subgraphs_, num_inputs_, num_outputs_));
   }
 
