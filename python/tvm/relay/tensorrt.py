@@ -24,9 +24,9 @@ from tvm.relay.expr import Call, Constant, Tuple
 import tvm.relay.transform as transform
 from tvm.relay.build_module import bind_params_by_name
 
-from . import _transform
+from tvm.relay.transform import _ffi_api 
 from .expr_functor import ExprMutator
-from tvm.relay.annotation import compiler_begin, compiler_end
+from tvm.relay.op.annotation import compiler_begin, compiler_end
 from tvm.relay.expr_functor import ExprMutator
 
 class LegalizeLayoutTranform(ExprMutator):
@@ -72,9 +72,9 @@ class LegalizeLayoutTranformPass:
 @transform.function_pass(opt_level=0)
 class RemoveDropoutPass:
     def transform_function(self, func, mod, _):
-        if func.attrs and func.attrs['External'] == "tensorrt":
-            return RemoveDropout().mutate(func)
-        return func
+        print('GOT FUNC', func)
+        return RemoveDropout().visit(func)
+        #return func
 
 def GetTrtVersion():
     """Gets the version of TensorRT that TVM is built against.
@@ -85,7 +85,7 @@ def GetTrtVersion():
         TensorRT version as a tuple of major, minor, and patch number. If TVM
         is not built with TensorRT, an empty tuple is returned instead.
     """
-    return tuple(map(int, _transform.GetTrtVersion()))
+    return tuple(map(int, _ffi_api.GetTrtVersion()))
 
 def IsTrtRuntimeAvailable():
     if not tvm.get_global_func("relay._transform.GetTrtVersion", True):
@@ -337,11 +337,11 @@ class TensorRTWhiteListAnnotator:
         annotator = self
         class Annotator(tvm.relay.ExprMutator):
             def visit_call(self, call):
-                if isinstance(call.op, tvm.relay.expr.Function) and call.op.attrs['Composite'] is not None:
-                    # Strip quotes from string.
-                    op_name = str(call.op.attrs['Composite'])[1:-1]
-                else:
-                    op_name = call.op.name
+                #if isinstance(call.op, tvm.relay.expr.Function) and call.op.attrs['Composite'] is not None:
+                #    # Strip quotes from string.
+                #    op_name = str(call.op.attrs['Composite'])[1:-1]
+                #else:
+                op_name = call.op.name
                 if op_name in annotator.op_list and annotator.op_list[op_name](call, annotator.trt_version):
                     new_args = []
                     for arg in call.args:
@@ -386,8 +386,12 @@ _register_external_op_helper("multiply")
 _register_external_op_helper("nn.bias_add")
 _register_external_op_helper("nn.batch_flatten")
 _register_external_op_helper("nn.max_pool2d")
-#_register_external_op_helper("nn.batch_norm")
+_register_external_op_helper("nn.dropout")
+_register_external_op_helper("nn.batch_norm")
 _register_external_op_helper("nn.global_avg_pool2d")
+_register_external_op_helper("clip")
+_register_external_op_helper("concatenate")
+_register_external_op_helper("nn.avg_pool2d")
 
 def EnableTrt(mod, params=None, trt_version=None):
     """Converts the "main" function in the module into one that can be executed using
@@ -424,17 +428,20 @@ def EnableTrt(mod, params=None, trt_version=None):
     assert len(trt_version) == 3
 
     if params:
-        # Bind params so that we can use FoldConstant.
-        mod['main'] = bind_params_by_name(mod['main'], params)
+       # Bind params so that we can use FoldConstant.
+       mod['main'] = bind_params_by_name(mod['main'], params)
     # Apply passes required for TRT
     seq = relay.transform.Sequential([#transform.FoldConstant(),
-                                      TensorRTWhiteListAnnotator(trt_version),
-                                      transform.PartitionGraph(),
-                                      transform.RemoveUnusedFunctions(),
-                                      transform.ConvertLayout('NCHW'),
-                                      LegalizeLayoutTranformPass(),
+                                      #TensorRTWhiteListAnnotator(trt_version),
                                       RemoveDropoutPass(),
+                                      transform.AnnotateTarget('tensorrt'),
+                                      transform.MergeCompilerRegions(),
+                                      transform.PartitionGraph(),
+                                    #   transform.RemoveUnusedFunctions(),
+                                    #   transform.ConvertLayout('NCHW'),
+                                      #LegalizeLayoutTranformPass(),
                                       transform.InferType()])
     with relay.transform.PassContext(opt_level=3):
         mod = seq(mod)
+    print(mod)
     return mod

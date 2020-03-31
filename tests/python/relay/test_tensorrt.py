@@ -23,6 +23,7 @@ import tvm.relay.testing
 import tvm.relay.tensorrt
 import pytest
 from tvm.contrib import graph_runtime
+from tvm.contrib.debugger import debug_runtime
 
 def should_skip():
     if not tvm.runtime.enabled("cuda") or not tvm.gpu(0).exist:
@@ -33,12 +34,102 @@ def should_skip():
         return True
     return False
 
+from tvm.relay.expr_functor import ExprMutator
+from tvm.relay.expr import Call, Constant, Tuple, GlobalVar
+from tvm.relay.op import Op
+from tvm.relay.function import Function
+
+class CalibrationGraphMutator(ExprMutator):
+    """This mutator should be called after partioning to produce a module which
+    can be executed purely using TVM and will produce additional outputs for
+    subgraph inputs. name_map can be used to find the subgraph input name
+    corresponding to the output of the same index.
+    """
+    def __init__(self, compiler):
+        ExprMutator.__init__(self)
+        self.additional_outputs = []
+        self.compiler = compiler
+        # Will map index in output to subgraph param name.
+        self.name_map = {}
+
+    def visit_call(self, call):
+        if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
+            call_args = []
+            var_map = {}
+            for arg, param in zip(call.args, call.op.params):
+                arg = super().visit(arg)
+                call_args.append(arg)
+                self.additional_outputs.append(arg)
+                self.name_map[len(self.additional_outputs)] = param.name_hint
+                var_map = {param: arg}
+            # Create new function to remove external codegen attributes
+            func = relay.Function(call.op.params, call.op.body)
+            func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+            func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+            return relay.Call(func, call_args)
+        return super().visit_call(call)
+
+    def make_calibration_graph(self, expr):
+        visit_body = super().visit(expr.body)
+        return relay.Function(expr.params, relay.Tuple([visit_body] + self.additional_outputs))
+
+# @tvm.relay.transform.function_pass(opt_level=0)
+# class MakeCalibrationGraphPass:
+#     def transform_function(self, func, mod, _):
+#         #if func.attrs and func.attrs['External'] == "tensorrt":
+#         print(func)
+#         return MakeCalibrationGraph().visit(func)
+#         #return func
 def test_tensorrt_simple():
+    dtype = 'float32'
+    xshape = (1, 3, 2, 2)
+    yshape = (1, 3,  1,  1)
+    zshape = (1,  1,  1,  1)
+    x = relay.var('x', shape=(xshape), dtype=dtype)
+    y = relay.var('y', shape=(yshape), dtype=dtype)
+    z = relay.var('z', shape=(zshape), dtype=dtype)
+    w = z * (x + y)
+    out = relay.nn.relu(w)
+    f = relay.Function([x, y, z], out)
+
+    mod = tvm.IRModule()
+    mod['main'] = f
+
+    # Annotate and partition
+    # Replace AnnotateTarget with whatever annotator you are currently using.
+    mod = relay.transform.AnnotateTarget("tidl")(mod)
+    mod = relay.transform.PartitionGraph()(mod)
+    print("Partitioned module:", mod)
+
+    # Inline functions
+    mod = relay.transform.Inline()(mod)
+    my_mutator = CalibrationGraphMutator("tidl")
+    mod["main"] = my_mutator.make_calibration_graph(mod["main"])
+    print("Calibration module:", mod)
+    print("Input map:", my_mutator.name_map)
+
+    x_data = np.random.uniform(-1, 1, xshape).astype(dtype)
+    y_data = np.random.uniform(-1, 1, yshape).astype(dtype)
+    z_data = np.random.uniform(-1, 1, zshape).astype(dtype)
+
+    # Build and execute calibration graph to get outputs
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod, "llvm")
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod.run(x=x_data, y=y_data, z=z_data)
+    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
+
+    for i in range(len(results)):
+        if i in my_mutator.name_map:
+            print("Subgraph input: ", my_mutator.name_map[i], " has value: ", results[i])
+
+
+def test_calibration_simple():
     if should_skip():
         return
     dtype = 'float32'
-    xshape = (1, 32, 14, 14)
-    yshape = (1, 32,  1,  1)
+    xshape = (1, 3, 2, 2)
+    yshape = (1, 3,  1,  1)
     zshape = (1,  1,  1,  1)
     x = relay.var('x', shape=(xshape), dtype=dtype)
     y = relay.var('y', shape=(yshape), dtype=dtype)
@@ -50,7 +141,13 @@ def test_tensorrt_simple():
     mod = tvm.IRModule()
     mod['main'] = f
     mod = relay.tensorrt.EnableTrt(mod)
-
+    print(mod)
+    #input()
+    make_calib_mod = MakeCalibrationGraph()
+    mod["main"] = make_calib_mod.make_calib(mod["main"])
+    print(mod)
+    print(make_calib_mod.name_map)
+    #input()
     ref_mod = tvm.IRModule()
     ref_mod['main'] = f
 
@@ -69,7 +166,10 @@ def test_tensorrt_simple():
         ref_ex = relay.create_executor(kind, mod=ref_mod, ctx=tvm.cpu(0))
         ref_res = ref_ex.evaluate()(x_data, y_data, z_data)
 
+        print(res)
+        print(ref_res)
         tvm.testing.assert_allclose(res.asnumpy(), ref_res.asnumpy(), rtol=1e-5)
+
 
 def test_tensorrt_bindparams():
     if should_skip():
@@ -474,6 +574,38 @@ def test_tensorrt_ops():
     #                 # TODO(trevmorr): 'align_corners' gives incorrect results. 'half_pixel' not supported?
     #                 run_and_verify(test_resize(x_shape, out_size, layout, method, coordinate_transformation_mode))
 
+from tvm import relay
+import mxnet as mx
+from mxnet.gluon.model_zoo.vision import get_model
+from tvm.relay import op as reg
+
+def _register_external_op_helper(op_name, supported=True):
+    @reg.register(op_name, "target.tidl")
+    def _func_wrapper(attrs, args):
+        return supported
+    return _func_wrapper
+
+_register_external_op_helper("nn.conv2d")
+_register_external_op_helper("nn.dense")
+_register_external_op_helper("nn.relu")
+_register_external_op_helper("clip")
+_register_external_op_helper("add")
+_register_external_op_helper("multiply")
+_register_external_op_helper("nn.bias_add")
+_register_external_op_helper("nn.batch_flatten")
+_register_external_op_helper("nn.max_pool2d")
+_register_external_op_helper("nn.dropout")
+_register_external_op_helper("nn.batch_norm")
+_register_external_op_helper("nn.global_avg_pool2d")
+
+def small_repro():
+    block = get_model('mobilenet1.0', pretrained=True)
+    mod, params = relay.frontend.from_mxnet(block, shape={'data': (1, 3, 224, 224)}, dtype='float32')
+    mod = relay.transform.AnnotateTarget("tidl")(mod)
+    mod = relay.transform.MergeCompilerRegions()(mod)
+    mod = relay.transform.PartitionGraph()(mod)
+    print(mod)
+
 def test_tensorrt_integration(test_all_models=False):
     if should_skip():
         return
@@ -518,14 +650,15 @@ def test_tensorrt_integration(test_all_models=False):
 
     latency = {}
     models = [
-        'alexnet',
-        'resnet18_v1',
-        'resnet18_v2',
+        # 'alexnet',
+        # 'resnet18_v1',
+        # 'resnet18_v2',
         'squeezenet1.0',
-        'mobilenet0.25',
-        'mobilenetv2_0.25',
-        'vgg11',
-        'densenet121']
+        #'mobilenet0.25',
+        #'mobilenetv2_0.25',
+        #'vgg11',
+        #'densenet121',
+    ]
     additional_models = [
         'resnet34_v1',
         'resnet50_v1',
@@ -590,8 +723,9 @@ def test_tensorrt_serialize():
         mod.run(data=i_data)
 
 if __name__ == '__main__':
+    # small_repro()
     #test_tensorrt_bindparams()
-    test_tensorrt_ops()
+    # test_tensorrt_ops()
     # test_tensorrt_simple()
     # test_tensorrt_not_compatible()
     test_tensorrt_integration()
