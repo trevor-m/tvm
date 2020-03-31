@@ -62,6 +62,16 @@ class AnnotateTargetWrapper : public ExprMutator {
         return true;
       }
     }
+    if (expr->IsInstance<TupleNode>()) {
+      Tuple tuple = Downcast<Tuple>(expr);
+      for (auto field : tuple->fields) {
+        if (!field->IsInstance<CallNode>() ||
+            field.as<CallNode>()->op != compiler_begin_op) {
+          return false;
+        }
+        return true;
+      }
+    }
     return false;
   }
 
@@ -110,8 +120,21 @@ class AnnotateTargetWrapper : public ExprMutator {
 
     auto tup = Downcast<Tuple>(new_e);
     Array<Expr> new_fields;
+    bool all_fields_supported = true;
     for (auto field : tup->fields) {
-      new_fields.push_back(InsertEnd(field));
+      if (!IsSupported(field)) {
+        all_fields_supported = false;
+      }
+    }
+    for (auto field : tup->fields) {
+      if (all_fields_supported) {
+        const auto* begin_op =
+            runtime::Registry::Get("relay.op.annotation._make.compiler_begin");
+        CHECK(begin_op);
+        new_fields.push_back((*begin_op)(InsertEnd(field), target_));
+      } else {
+        new_fields.push_back(InsertEnd(field));
+      }
     }
     return Tuple(new_fields);
   }
