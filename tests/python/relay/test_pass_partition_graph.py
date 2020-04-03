@@ -17,17 +17,19 @@
 """Unit tests for graph partitioning."""
 import os
 import sys
+
 import numpy as np
 
 import tvm
 import tvm.relay.testing
-from tvm import relay
-from tvm import runtime
-from tvm.runtime import container
-from tvm.relay import transform
+from tvm import relay, runtime
 from tvm.contrib import util
-from tvm.relay.op.annotation import compiler_begin, compiler_end
+from tvm.relay import transform
+from tvm.relay.backend import compile_engine
 from tvm.relay.expr_functor import ExprMutator
+from tvm.relay.op.annotation import compiler_begin, compiler_end
+from tvm.runtime import container
+
 
 # Leverage the pass manager to write a simple white list based annotator
 @transform.function_pass(opt_level=0)
@@ -188,6 +190,7 @@ def check_result(mod, map_inputs, out_shape, result, tol=1e-5, target="llvm",
         return lib
 
     def check_vm_result():
+        compile_engine.get().clear()
         with relay.build_config(opt_level=3):
             exe = relay.vm.compile(mod, target=target, params=params)
         code, lib = exe.save()
@@ -199,6 +202,7 @@ def check_result(mod, map_inputs, out_shape, result, tol=1e-5, target="llvm",
         tvm.testing.assert_allclose(out.asnumpy(), result, rtol=tol, atol=tol)
 
     def check_graph_runtime_result():
+        compile_engine.get().clear()
         with relay.build_config(opt_level=3):
             json, lib, param = relay.build(mod, target=target, params=params)
         lib = update_lib(lib)
@@ -449,9 +453,11 @@ def test_extern_dnnl_mobilenet():
     mod, params = relay.testing.mobilenet.get_workload(
         batch_size=1, dtype='float32')
 
-    op_list = ["nn.conv2d", "nn.dense", "nn.relu", "add"]
-    mod = WhiteListAnnotator(op_list, "dnnl")(mod)
+    mod = transform.AnnotateTarget(["dnnl"])(mod)
+    mod = transform.MergeCompilerRegions()
     mod = transform.PartitionGraph()(mod)
+    # FIXME(@comaniac): Still try to fuse global function when lowering
+    print(mod)
     i_data = np.random.uniform(0, 1, ishape).astype(dtype)
 
     ref_mod, params = relay.testing.mobilenet.get_workload(batch_size=1,
