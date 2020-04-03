@@ -9,7 +9,10 @@ from topi.util import get_const_tuple
 import ctypes
 import os
 
-from . import tidlAnnotation
+from tvm.relay.expr_functor import ExprMutator
+from tvm.relay.expr import Call, Constant, Tuple, GlobalVar
+from tvm.relay.op import Op
+from tvm.relay.function import Function
 
 
 class RelayGraphParams:
@@ -581,7 +584,11 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params = Conv2dParams()
     (conv2d_params.stride_h, conv2d_params.stride_w) = strides
     (conv2d_params.dilation_h, conv2d_params.dilation_w) = dilation
-    (conv2d_params.pad_h, pad_h_2, conv2d_params.pad_w, pad_w_2) = padding
+    print("Conv2d padding: ")
+    print(padding)
+    # TODO: to pass all padding values to TIDL and use strideOffsetMethod
+    (pad_h_1, pad_w_1, conv2d_params.pad_h, conv2d_params.pad_w) = padding
+    #(conv2d_params.pad_h, conv2d_params.pad_w) = padding
     (conv2d_params.kernel_h, conv2d_params.kernel_w) = kernel_size
     conv2d_params.num_groups = groups
 
@@ -683,20 +690,23 @@ def tidl_import_add(node, params):
     True if import succeeds or False if import fails    
     """
 
-    if isinstance(node.args[1], relay.expr.Var):
+    if isinstance(node.args[1], relay.expr.Var) or isinstance(node.args[1], tvm.relay.expr.Constant):
         print('This is a bias_add operator')
         bias = node.args[1]
-        bias_params_name = bias.name_hint
+        if isinstance(bias, tvm.relay.expr.Constant):
+            bias_params = bias.data
+        else:
+            bias_params = params[bias.name_hint]
+
         if bias.checked_type.dtype == 'float32':
             bias_params_dtype = b'float32'
         #elif bias.checked_type.dtype == 'int8':
         #    bias_params_dtype = b'int8'
         else:
-            printf('Unsupported data type of add')
+            print('Unsupported data type of add')
             return False
 
         bias_params_len = bias.checked_type.shape[0]
-        bias_params = params[bias_params_name]
         bias_params_np = bias_params.asnumpy()
 
         _tidlImportBiasAdd = _tidl_mod.tidlImportBiasAdd
@@ -711,7 +721,7 @@ def tidl_import_add(node, params):
         _tidlImportAdd.restype  = None
         _tidlImportAdd()
     else:
-        printf('Error in importing add operator')
+        print('Error in importing add operator')
         return False
 
     return True
@@ -743,10 +753,17 @@ def tidl_import_batch_norm(node, params):
         return False
     bn_params.num_params = node.args[1].checked_type.shape[0]
 
-    gama = params[node.args[1].name_hint].asnumpy()
-    beta = params[node.args[2].name_hint].asnumpy()
-    mean = params[node.args[3].name_hint].asnumpy()
-    var  = params[node.args[4].name_hint].asnumpy()
+    # Obtain weights from Relay params
+    if isinstance(node.args[1],tvm.relay.expr.Constant):
+        gama = node.args[1].data.asnumpy()
+        beta = node.args[2].data.asnumpy()
+        mean = node.args[3].data.asnumpy()
+        var  = node.args[4].data.asnumpy()
+    else:
+        gama = params[node.args[1].name_hint].asnumpy()
+        beta = params[node.args[2].name_hint].asnumpy()
+        mean = params[node.args[3].name_hint].asnumpy()
+        var  = params[node.args[4].name_hint].asnumpy()
     #print('Batch norm parameters:')
     #print(gama)
     #print(beta)
@@ -819,7 +836,7 @@ def tidl_import_init(all_nodes):
     # Other parameters depend on input dimension
     # TODO: obtain these parameters automatically
     config_params = TIDLconfigParams(12,50,32640,1,3,224,224)
-    #config_params = TIDLconfigParams(12,50,255,1,3,224,224)
+    #config_params = TIDLconfigParams(12,50,3782,1,32,112,112)
 
     # Find first node of the graph and get input tensor shape
     for node in all_nodes:
@@ -833,34 +850,34 @@ def tidl_import_init(all_nodes):
     input_shape = get_const_tuple(data.checked_type.shape) 
 
     # Find first conv2d node to get data layout (first node may not have this infomation)
-#    for node in all_nodes:
-#        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
-#            if node.op.name == "nn.conv2d":
-#                print('Found first conv2d node')
-#                break
-#
-#    # Fill dimension parameters for TIDL based on input tensor shape and data layout
-#    if node.attrs.data_layout == "NCHW":
-#        print('Data layout is NCHW')
-#        layout = b'NCHW'
-#        config_params.inNumChannels = input_shape[1]
-#        config_params.inHeight      = input_shape[2]
-#        config_params.inWidth       = input_shape[3]
-#    elif node.attrs.data_layout == "NHWC":
-#        print('Data layout is NHWC')
-#        layout = b'NHWC'
-#        config_params.inNumChannels = input_shape[3]
-#        config_params.inHeight      = input_shape[1]
-#        config_params.inWidth       = input_shape[2]
-#    else:
-#        print('data layout ' + node.attrs.data_layout + ' is not supported')
-#        return False
+    for node in all_nodes:
+        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
+            if node.op.name == "nn.conv2d":
+                print('Found first conv2d node')
+                break
 
-    print('Data layout is NCHW')
-    layout = b'NCHW'
-    config_params.inNumChannels = input_shape[1]
-    config_params.inHeight      = input_shape[2]
-    config_params.inWidth       = input_shape[3]
+    # Fill dimension parameters for TIDL based on input tensor shape and data layout
+    if node.attrs.data_layout == "NCHW":
+        print('Data layout is NCHW')
+        layout = b'NCHW'
+        config_params.inNumChannels = input_shape[1]
+        config_params.inHeight      = input_shape[2]
+        config_params.inWidth       = input_shape[3]
+    elif node.attrs.data_layout == "NHWC":
+        print('Data layout is NHWC')
+        layout = b'NHWC'
+        config_params.inNumChannels = input_shape[3]
+        config_params.inHeight      = input_shape[1]
+        config_params.inWidth       = input_shape[2]
+    else:
+        print('data layout ' + node.attrs.data_layout + ' is not supported')
+        return False
+
+#    print('Data layout is NCHW')
+#    layout = b'NCHW'
+#    config_params.inNumChannels = input_shape[1]
+#    config_params.inHeight      = input_shape[2]
+#    config_params.inWidth       = input_shape[3]
 
     # Invoking C library call to initialize TIDL import
     _tidlImportInit = _tidl_mod.tidlImportInit
@@ -1000,6 +1017,45 @@ def relay_ir_import(mod, params):
 
     return True
 
+def relay_ir_import_whole_graph(mod, params, subgraph_id):
+    r""" Relay IR import to TIDL 
+
+    Parameters
+    ----------
+    mod : tvm.relay.Module 
+        Relay IR graph
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+
+    Returns
+    -------
+    True if import succeeds or False if import fails    
+    """
+
+    # Traverse Relay IR graph and generate a dictionary of all nodes
+    all_nodes = {}
+    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes)) 
+
+    # Initialize TIDL import
+    if tidl_import_init(all_nodes) == False:
+        return False
+
+    # Scan through all relay.expr.Call nodes and import each to TICL
+    for node in all_nodes:
+        if isinstance(node, relay.expr.Call):
+            result = tidl_import_node(all_nodes, node, params)
+            if result == False:
+                return False
+
+    # Invoke TIDL optimization of the imported graph
+    _tidlImportOptimize = _tidl_mod.tidlImportOptimize
+    _tidlImportOptimize.argtype = ctypes.c_int
+    _tidlImportOptimize.restype = ctypes.c_int
+    if _tidlImportOptimize(subgraph_id) == -1:
+        return False
+
+    return True
+
 def tidl_calib(calib_tool, calib_raw_image, subgraph_id):
     r""" TIDL calibration after importing Relay IR
     Parameters
@@ -1060,3 +1116,43 @@ def tidl_calib(calib_tool, calib_raw_image, subgraph_id):
         return True, last_node_dim
     else:
         return False, None
+
+
+class VarReplacer(ExprMutator):
+    def __init__(self, var_map):
+        ExprMutator.__init__(self)
+        self.var_map = var_map
+
+    def visit_var(self, var):
+        if var in self.var_map:
+            return self.var_map[var]
+        return super().visit_var(var)
+
+
+class CalibrationGraphMutator(ExprMutator):
+    """This mutator should be called after partioning to produce a module which
+    can be executed purely using TVM and will produce additional outputs for
+    subgraph inputs. name_map can be used to find the subgraph input name
+    corresponding to the output of the same index.
+    """
+    def __init__(self, compiler):
+        ExprMutator.__init__(self)
+        self.additional_outputs = []
+        self.compiler = compiler
+        # Will map index in output to subgraph param name.
+        self.name_map = {}
+
+    def visit_call(self, call):
+        if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
+            var_map = {}
+            for arg, param in zip(call.args, call.op.params):
+                arg = super().visit(arg)
+                var_map[param] = arg
+                self.additional_outputs.append(arg)
+                self.name_map[len(self.additional_outputs)] = param.name_hint
+            return VarReplacer(var_map).visit(call.op.body)
+        return super().visit_call(call)
+
+    def make_calibration_graph(self, expr):
+        visit_body = super().visit(expr.body)
+        return relay.Function(expr.params, relay.Tuple([visit_body] + self.additional_outputs))

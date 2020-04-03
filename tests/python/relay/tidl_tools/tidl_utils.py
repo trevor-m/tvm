@@ -12,10 +12,20 @@ def tf_image_preprocess(input_image, output_image, image_dim):
     output_image: str
         Output raw image file name
     image_dim: list
-        Image dimension        
+        Image dimension: HxWxC
     """
 
-    output_image_size = image_dim[0:2] # get image height and weight
+    # get image height and weight
+    output_image_size = image_dim[0:2]
+    #if input_layout == 'HWCN' or input_layout == 'HWNC':
+    #    output_image_size = image_dim[0:2]
+    #elif input_layout == 'NCHW':
+    #    output_image_size = image_dim[2:4]
+    #elif input_layout == 'NHWC':
+    #    output_image_size = image_dim[1:3]
+    #else:
+    #    print('Input layout is not supported')
+    #    return
   
     image_BGR = cv2.imread(filename = input_image)
     
@@ -40,7 +50,7 @@ def tf_image_preprocess(input_image, output_image, image_dim):
     y1 = round(end_y)
     cropped_image = image[x0:x1,y0:y1]
     resized_image = cv2.resize(cropped_image, output_image_size, interpolation = cv2.INTER_AREA)
-  
+
     # serialize data to be written to a file
     r,g,b = cv2.split(resized_image)
     total_per_plane = output_image_size[0]*output_image_size[1];
@@ -99,3 +109,19 @@ def onnx_image_preprocess(input_image, output_image, output_dim):
     y = np.hstack((rr_norm, rg_norm, rb_norm))
     np.clip(y, -128,127)
     y.astype('int8').tofile(output_image);
+
+def float_nd_to_int8_1d(input):
+    r""" Convert float32 nd array to int8 1d array
+    Parameters
+    ----------
+    input: N dimension float32 array in "NCHW" format
+    output: 1 dimension int8 array HxWxCxN
+    """
+
+    scale = 128.0/max(abs(np.amin(input)), np.amax(input))
+    y = np.multiply(input, scale)
+    z = np.rint(y)
+    z = np.clip(z,-128,127)
+    output = z.flatten()
+
+    return output

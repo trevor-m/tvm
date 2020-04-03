@@ -32,11 +32,10 @@ from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
 
 from tidl_tools import tidl
-from tidl_tools import tidlAnnotation
 from tidl_tools import tidl_utils
 
 
-@transform.function_pass(opt_level=0)
+@relay.transform.function_pass(opt_level=0)
 class TIDLWhiteListAnnotator:
     def __init__(self, op_list, compiler):
         self.op_list = op_list
@@ -44,7 +43,7 @@ class TIDLWhiteListAnnotator:
 
     def transform_function(self, func, mod, ctx):
 
-        op_annotations = tidlAnnotation.tidl_annotation(mod)
+        op_annotations = tidl.annotation(mod)
         for node in op_annotations:
             print(f'Operator {node.op.name}: {op_annotations[node]}')
 
@@ -94,7 +93,7 @@ class WholeGraphAnnotator(ExprMutator):
         return new_call
 
 # Leverage the pass manager to write a simple white list based annotator
-@transform.function_pass(opt_level=0)
+@relay.transform.function_pass(opt_level=0)
 class WhiteListAnnotator:
     def __init__(self, op_list, compiler):
         assert isinstance(op_list, (list, tuple, set))
@@ -121,18 +120,20 @@ class WhiteListAnnotator:
         return Annotator().visit(func)
 
 def test_extern_tidl():
-    if os.getenv("TIDL_PLSDK") is None:
-      plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
-    else: 
-      plsdk = os.getenv('TIDL_PLSDK')
-    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
-    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
-    tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
-    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+#    if os.getenv("TIDL_PLSDK") is None:
+#      plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+#    else: 
+#      plsdk = os.getenv('TIDL_PLSDK')
+#    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+#    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
+#    tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
+#    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
 
     #============= Constructing a simple graph ==============
-    dtype = "float32"
-    input_shape = (1, 3, 224, 224) # NCHW
+    dtype = 'float32'
+    input_shape    = (1, 3, 224, 224) # NCHW
+    tidl_input_dim = (input_shape[2],input_shape[3],input_shape[1]) # HxWxC
+    input_layout= 'NCHW'
     w1_shape    = (32, 3, 3, 3)    # OIHW
     w2_shape    = (1, 32, 3, 3)    # OIHW
     mnet1_conv2d_0 = np.load('MobilenetV1_Conv2d_0_weights.npy').astype(np.float32)
@@ -149,7 +150,7 @@ def test_extern_tidl():
                                weight1,
                                kernel_size=(3, 3),
                                padding=(1, 1),
-                               #strides=(2,2),
+                               strides=(2,2),
                                kernel_layout = 'OIHW')
     weight2 = relay.var('weight2', shape=(w2_shape), dtype=dtype)
     conv2d_2 = relay.nn.conv2d(conv2d_1,
@@ -158,9 +159,10 @@ def test_extern_tidl():
                                padding=(1, 1),
                                #strides=(2,2),
                                kernel_layout = 'OIHW')
-    #out = conv2d_2
     clip = relay.clip(conv2d_1,0,6)
-    out  = clip
+    #out = conv2d_1
+    out = conv2d_2
+    #out  = clip
     f1 = relay.Function([data, weight1, weight2], out)
     mod1 = tvm.IRModule.from_expr(f1)
     params = {'weight1':params_w1, 'weight2':params_w2} 
@@ -192,21 +194,60 @@ def test_extern_tidl():
     mod2['main'] = WholeGraphAnnotator('tidl').visit(mod1['main'])
     print('---------- Whole graph annotated ----------')
     print(mod2.astext(show_meta_data=False))
-    mod2_partition = relay.transform.PartitionGraph()(mod2)
+    mod_whole_graph_tidl = relay.transform.PartitionGraph()(mod2)
     print('---------- Whole graph annotated and partitioned ----------')
-    print(mod2_partition.astext(show_meta_data=False))
+    print(mod_whole_graph_tidl.astext(show_meta_data=False))
 
     # subraph offload to TIDL
     mod3 = WhiteListAnnotator(["nn.conv2d"],"tidl")(mod1)
-    mod3_partition = relay.transform.PartitionGraph()(mod3)
+    print('---------- Subgraph annotated ----------')
+    print(mod3.astext(show_meta_data=False))
+    mod_subgraph_tidl = relay.transform.PartitionGraph()(mod3)
     print('---------- Subgraph annotated and partitioned ----------')
-    print(mod3_partition.astext(show_meta_data=False))
+    print(mod_subgraph_tidl.astext(show_meta_data=False))
+
+    # From partitioned module, create a "calibration model" which can be
+    # executed on CPU and will give additional outputs for boundary tensors.
+    #mod4 = relay.transform.InferType()(mod_whole_graph_tidl)
+    mod4 = relay.transform.InferType()(mod_subgraph_tidl)
+    mod4 = relay.transform.Inline()(mod4)
+    my_mutator = tidl.CalibrationGraphMutator("tidl")
+    mod4["main"] = my_mutator.make_calibration_graph(mod4["main"])
+    print("Calibration module:", mod4)
+    print("Input map:", my_mutator.name_map)
+
+    # Build and execute calibration graph to get outputs
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod4, "llvm")
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    #input_data = np.random.uniform(-1, 1, size=input_shape).astype(dtype)
+    #image = np.load('./tidl_tools/airshow.npy') # HxWxC
+    #image = image.transpose(2,0,1)
+    #input_data = np.expand_dims(image,0)
+    input_data = np.load('./tidl_tools/dog.npy') # (1,3,224,224)
+    print("Input data shape: ")
+    print(input_data.shape)
+    mod.set_input('data', input_data)
+    mod.set_input(**params)
+    mod.run()
+    #mod.run(data=input_data, weight1=params_w1, weight2=params_w2)
+
+    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
+    np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
+
+    # We now have subgraph inputs
+    for i in range(len(results)):
+        if i in my_mutator.name_map:
+            print("Subgraph input: ", my_mutator.name_map[i], " has value: ", results[i])
+            file_name = my_mutator.name_map[i] + ".txt"
+            np.savetxt(file_name, results[i].flatten(), fmt='%10.5f')
 
     #============= Importing subgraph(s) to TIDL ==============
     # TIDL import pass - import all TIDL subgraphs
     # invoking Relay IR import from TIDL package
     print('---------- Subgraphs import to TIDL ----------')
-    if tidl.relay_ir_import(mod3_partition, params) == False:
+    #if tidl.relay_ir_import(mod_whole_graph_tidl, params) == False:
+    if tidl.relay_ir_import(mod_subgraph_tidl, params) == False:
         print('Importing this model to TIDL failed!')
     #    assert mod['main'].attrs and mod['main'].attrs.Compiler == 'tidl'
     else:
@@ -216,21 +257,136 @@ def test_extern_tidl():
         # TODO: implement boundary tensors conversions
         ############################### Gap ############################
         subgraph_id = 0
-        calibration_image = './tidl_tools/airshow.jpg'
-        raw_image = 'raw_calib_image.bin'
+        #calibration_image = './tidl_tools/airshow.jpg'
+        raw_image_1 = 'raw_calib_image.bin'
         # TODO: how to preprocess image properly for all supported frameworks??
-        tidl_utils.tf_image_preprocess(calibration_image, raw_image, input_shape)
-        tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
-        #subgraph_id = 1
-        #tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
+        #tidl_utils.tf_image_preprocess(calibration_image, raw_image_1, tidl_input_dim)
+        raw_image_data = tidl_utils.float_nd_to_int8_1d(input_data)
+        raw_image_data.astype('int8').tofile(raw_image_1);
+        tidl.tidl_calib(tidl_calib_tool, raw_image_1, subgraph_id)
+        subgraph_id = 0
+        raw_input_0 = './trace_1graph/trace_dump_1_112x112.y'
+        #tidl.tidl_calib(tidl_calib_tool, raw_input_0, subgraph_id)
         print('Importing this model to TIDL succeeded!')
 
     #============= Compiling the graph (with TIDL subgraphs) ==============
     print('---------- Code generation with TIDL subgraphs ----------')
     with relay.build_config(opt_level=3):
         target = "llvm -target=armv7l-linux-gnueabihf"
-        #graph, lib, params = relay.build_module.build(mod2_partition, target=target)
-        graph, lib, params = relay.build_module.build(mod3_partition, target=target)
+        graph, lib, params = relay.build_module.build(mod_whole_graph_tidl, target=target)
+        #graph, lib, params = relay.build_module.build(mod_subgraph_tidl, target=target)
+        print(lib)
+
+    artifacts_folder = "./artifacts/"
+    path_lib    = artifacts_folder + "deploy_lib.so"
+    path_graph  = artifacts_folder + "deploy_graph.json"
+    #lib.save(path_lib) # for whole graph execute on TIDL
+    lib.export_library(path_lib, cc=arm_gcc) # for heterogeneous execute on TIDL+ARM
+    path_params = artifacts_folder + "deploy_param.params"
+
+    with open(path_graph, "w") as fo:
+      fo.write(graph)
+    with open(path_params, "wb") as fo:
+      fo.write(relay.save_param_dict(params))
+
+import tensorflow as tf
+from tvm.relay.testing import tf as tf_testing
+
+def test_extern_tidl_mobilenet():
+    dtype = 'float32'
+    input_shape    = (1, 3, 224, 224) # NCHW
+    tidl_input_dim = (input_shape[2],input_shape[3],input_shape[1]) # HxWxC
+    #============= Load MobileNetV1 model ==============
+#    mod, params_mod = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+
+    #model      = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
+    #out_node   = 'MobilenetV1/Predictions/Reshape_1'
+    model      = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
+    out_node   = 'MobilenetV2/Predictions/Reshape_1'
+    input_node = "input"
+    model_input_shape = (224,224,3)
+    data_shape_input = list(model_input_shape)
+    data_shape_input.insert(0,1)
+    data_shape_input = tuple(data_shape_input) # Prepend batch size
+    print(data_shape_input)
+
+    layout = None
+    with tf.gfile.GFile(model, 'rb') as f:
+        # Import tensorflow graph definition to relay frontend.
+        graph_def = tf.GraphDef()
+        graph_def.ParseFromString(f.read())
+        graph = tf.import_graph_def(graph_def, name='')
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+        
+        # Add shapes to the graph.
+        with tf.Session() as sess:
+            graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
+
+        shape_dict = {input_node : data_shape_input}
+        print("Inut node shape dict:" + str(shape_dict))
+        mod, params_mod = relay.frontend.from_tensorflow(graph_def,
+                                                         layout=layout,
+                                                         shape=shape_dict, 
+                                                         outputs=None)
+        print("Tensorflow protobuf imported to relay frontend.")
+   
+    print('-------- Original MobileNetV1 model --------')
+    print(mod.astext(show_meta_data=False))
+
+    # TIDL annotation pass:
+    #    - mark each operator either supported (True) or unsupported (False) by TIDL
+    op_annotations = tidl.annotation(mod)
+    
+    # Check if whole graph can offload to TIDL (no graph partitioning for now)
+    full_graph_tidl = True
+    for node in op_annotations:
+        print(f'Operator {node.op.name}: {op_annotations[node]}')
+        if op_annotations[node] == False:
+            full_graph_tidl= False
+            break
+
+    if full_graph_tidl == True:
+        print("Try to import this model to TIDL")
+        #============= Annotating the graph to run on TIDL ==============
+        mod['main'] = bind_params_by_name(mod['main'], params_mod)
+        # whole graph offload to TIDL
+        mod_tidl = tvm.IRModule()
+        mod_tidl['main'] = WholeGraphAnnotator('tidl').visit(mod['main'])
+        print('---------- Whole graph annotated ----------')
+        print(mod_tidl.astext(show_meta_data=False))
+        mod_tidl = relay.transform.PartitionGraph()(mod_tidl)
+        print('---------- Whole graph annotated and partitioned ----------')
+        print(mod_tidl.astext(show_meta_data=False))
+
+        #if tidl.relay_ir_import_whole_graph(mod, params_mod, 0) == False:
+        if tidl.relay_ir_import(mod_tidl, params_mod) == False:
+            print('Importing this model to TIDL failed!')
+            model_imported_to_TIDL = False
+        else:
+            # TIDL calibration pass:
+            subgraph_id = 0
+            calibration_image = './tidl_tools/airshow.jpg'
+            raw_image = 'raw_calib_image.bin'
+            tidl_utils.tf_image_preprocess(calibration_image, raw_image, tidl_input_dim)
+            tidl_calib_status, last_node_dim = tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
+
+            if tidl_calib_status == False:
+                print('TIDL calibration for this model failed!')
+                model_imported_to_TIDL = False
+            else:
+                print('TIDL Calibration for this model succeeded!')
+                model_imported_to_TIDL = True
+    else:
+        print("Run this model on ARM")
+
+    # Compile the graph (with or without TIDL offload)
+    with relay.build_config(opt_level=3):
+        target = "llvm -target=armv7l-linux-gnueabihf"
+        if full_graph_tidl == True and model_imported_to_TIDL == True:
+            #graph, lib, params = relay.build_module.build(mod_tidl, target=target, params=params_mod)
+            graph, lib, params = relay.build_module.build(mod_tidl, target=target)
+        else:
+            graph, lib, params = relay.build_module.build(mod, target=target, params=params_mod)
         print(lib)
 
     artifacts_folder = "./artifacts/"
@@ -247,4 +403,14 @@ def test_extern_tidl():
 
 
 if __name__ == '__main__':
-    test_extern_tidl()
+    if os.getenv("TIDL_PLSDK") is None:
+      plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+    else: 
+      plsdk = os.getenv('TIDL_PLSDK')
+    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
+    tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
+    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+
+    #test_extern_tidl()
+    test_extern_tidl_mobilenet()
