@@ -91,11 +91,13 @@ GetOpConverters() {
   map->emplace("ceil", std::make_shared<UnaryOpConverter>());
   map->emplace("floor", std::make_shared<UnaryOpConverter>());
   map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
+  map->emplace("split", std::make_shared<SplitOpConverter>());
 #else
   map->emplace("clip", std::make_shared<ClipLegacyOpConverter>());
 #endif
 #if TRT_VERSION_GE(6, 0, 1)
   map->emplace("image.resize", std::make_shared<ResizeOpConverter>());
+  map->emplace("nn.upsampling", std::make_shared<UpsamplingOpConverter>());
 #endif
   map->emplace("tensorrt.nms", std::make_shared<NmsOpConverter>());
   return map;
@@ -144,6 +146,12 @@ void TensorRTBuilder::ProcessOutputs(const Expr& expr) {
   for (size_t i = 0; i < network_outputs.size(); ++i) {
     CHECK(network_outputs[i].type == kTensor);
     auto out_tensor = network_outputs[i].tensor;
+
+    // Workaround to support duplicate outputs
+    if (out_tensor->isNetworkOutput()) {
+      out_tensor = network_->addIdentity(*out_tensor)->getOutput(0);
+    }
+
     std::string output_name = "tensorrt_output" + std::to_string(i);
     out_tensor->setName(output_name.c_str());
     network_output_names_.push_back(output_name);
@@ -335,16 +343,22 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
     // Update network_input_map_
     const int original_index = network_input_map_[original_name];
     network_input_map_.erase(original_name);
+    // Push all other inputs back.
+    for (auto it : network_input_map_) {
+      if (it.second > original_index) {
+        network_input_map_[it.first] += new_names.size() - 1;
+      }
+    }
     for (size_t i = 0; i < new_names.size(); ++i) {
       network_input_map_[new_names[i]] = original_index + i;
     }
     // Update network_input_names_
-    network_input_names_.insert(network_input_names_.begin() + original_index + 1, new_names.begin(), new_names.end());
     network_input_names_.erase(network_input_names_.begin() + original_index);
+    network_input_names_.insert(network_input_names_.begin() + original_index, new_names.begin(), new_names.end());
     // Update network_input_is_baked_
     bool is_baked = network_input_is_baked_[original_index];
-    network_input_is_baked_.insert(network_input_is_baked_.begin() + original_index + 1, new_names.size(), is_baked);
     network_input_is_baked_.erase(network_input_is_baked_.begin() + original_index);
+    network_input_is_baked_.insert(network_input_is_baked_.begin() + original_index, new_names.size(), is_baked);
   } else if (node->checked_type().as<TensorTypeNode>()) {
     // Standard TensorType case.
     const std::string& tensor_name = node->name_hint();

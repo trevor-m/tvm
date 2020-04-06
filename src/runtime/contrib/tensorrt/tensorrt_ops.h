@@ -1026,7 +1026,7 @@ class ResizeOpConverter : public TrtOpConverter {
     CHECK_EQ(output_dims.size(), required_rank);
     CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
     int h_index = attrs->layout == "NCHW" ? 2 : 1;
-    int w_index = attrs->layout == "NHWC" ? 3 : 2;
+    int w_index = attrs->layout == "NCHW" ? 3 : 2;
     if (params->network->hasImplicitBatchDimension()) {
       h_index -= 1;
       w_index -= 1;
@@ -1108,6 +1108,107 @@ class NmsOpConverter : public TrtOpConverter {
     params->outputs.push_back(concat_layer->getOutput(0));
   }
 };
+
+#if TRT_VERSION_GE(5, 1, 5)
+class SplitOpConverter : public TrtOpConverter {
+ public:
+  SplitOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const auto* attrs = params->call->attrs.as<SplitAttrs>();
+    const int input_rank = input->getDimensions().nbDims;
+    const int axis = ConvertAxis(params, attrs->axis, input_dims.size());
+    const int sections = attrs->indices_or_sections.as<IntImmNode>()->value;
+
+    std::vector<int> start(input_dims.size(), 0);
+    std::vector<int> size(input_dims.begin(), input_dims.end());
+    size[axis] = input_dims[axis] / sections;
+    std::vector<int> strides(input_dims.size(), 1);
+    for (int i = 0; i < sections; ++i) {
+      start[axis] = i * size[axis];
+      auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
+                                                  VectorToTrtDims(size),
+                                                  VectorToTrtDims(strides));
+
+      params->outputs.push_back(slice_layer->getOutput(0));
+    }
+  }
+};
+#endif
+
+#if TRT_VERSION_GE(5, 1, 5)
+// TODO(trevmorr): Not needed.
+class SliceLikeOpConverter : public TrtOpConverter {
+ public:
+  SliceLikeOpConverter() : TrtOpConverter({kTensor, kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto input_2 = params->inputs.at(1).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    auto new_dims = TrtDimsToVector(input_2->getDimensions());
+    const auto* attrs = params->call->attrs.as<SliceLikeAttrs>();
+    if (attrs->axes.defined()) {
+      for (int i = 0; i < attrs->axes.size(); i++) {
+        const int axis = ConvertAxis(params, attrs->axes[i].as<IntImmNode>()->value, input_dims.size());
+        input_dims[axis] = new_dims[axis];
+      }
+    } else {
+      // Use all dims when axes is not defined.
+      CHECK_EQ(input_dims.size(), new_dims.size());
+      input_dims = new_dims;
+    }
+
+    // slice_like always begins at 0.
+    std::vector<int> start(input_dims.size(), 0);
+    std::vector<int> strides(input_dims.size(), 1);
+    auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
+                                                 VectorToTrtDims(input_dims),
+                                                 VectorToTrtDims(strides));
+
+    params->outputs.push_back(slice_layer->getOutput(0));
+  }
+};
+#endif
+
+#if TRT_VERSION_GE(6, 0, 1)
+class UpsamplingOpConverter : public TrtOpConverter {
+ public:
+  UpsamplingOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    const auto* attrs = params->call->attrs.as<UpSamplingAttrs>();
+    static const std::unordered_map<std::string, nvinfer1::ResizeMode> op_map =
+        {{"nearest_neighbor", nvinfer1::ResizeMode::kNEAREST},
+         {"bilinear", nvinfer1::ResizeMode::kLINEAR}};
+    auto it = op_map.find(attrs->method);
+    CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
+    auto output_dims = TrtDimsToVector(input->getDimensions());
+    const int required_rank =
+        params->network->hasImplicitBatchDimension() ? 3 : 4;
+    CHECK_EQ(output_dims.size(), required_rank);
+    CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
+    int h_index = attrs->layout == "NCHW" ? 2 : 1;
+    int w_index = attrs->layout == "NCHW" ? 3 : 2;
+    if (params->network->hasImplicitBatchDimension()) {
+      h_index -= 1;
+      w_index -= 1;
+    }
+    output_dims[h_index] *= attrs->scale_h;
+    output_dims[w_index] *= attrs->scale_w;
+
+    nvinfer1::IResizeLayer* resize_layer = params->network->addResize(*input);
+    CHECK(resize_layer != nullptr);
+    resize_layer->setResizeMode(it->second);
+    resize_layer->setOutputDimensions(VectorToTrtDims(output_dims));
+    resize_layer->setAlignCorners(attrs->align_corners);
+    params->outputs.push_back(resize_layer->getOutput(0));
+  }
+};
+#endif  // TRT_VERSION_GE(6, 0, 1)
 
 }  // namespace contrib
 }  // namespace relay
