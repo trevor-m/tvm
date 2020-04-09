@@ -25,25 +25,6 @@ from tvm.relay.frontend.common import infer_type
 
 target = "target.tidl"
 
-def _register_external_op_helper(op_name, supported=True):
-    """The helper function to indicate that a given operator can be supported
-    by TIDL.
-
-    Paramters
-    ---------
-    op_name : Str
-        The name of operator that will be registered.
-
-    Returns
-    -------
-    f : callable
-        A function that returns if the operator is supported by DNNL.
-    """
-    @reg.register(op_name, "target.tidl")
-    def _func_wrapper(attrs, args):
-        return supported
-    return _func_wrapper
-
 def _merge_sequential_ops(mod):
     """Fuse sequential ops for op registration. Ops: vision.multibox_prior, nn.reshape, squeeze, transpose
     """
@@ -246,20 +227,13 @@ def _batch_flatten_fn(attrs, args):
 @reg.register("nn.batch_norm", "target.tidl")
 def _batch_norm_whitelist_fn(attrs, args):
     #These are the relay arguments... look up the operator to get the actual name...
-    data0 = args[0]
-    data1 = args[1]
+    data1 = infer_type(args[1])
     supported = True
 
-    """
     if data1.checked_type.dtype != 'float32':
         supported = False
-    elif attrs.data_layout == 'NCHW' and call_node.attrs.axis != 1:
-        #only axis along channel is supported
-        #attributes include parameters that are optional and having default values in operator arguments
+    elif attrs.axis != 1 and attrs.axis != 3:
         supported = False
-    elif attrs.data_layout == 'NHWC' and attrs.axis != 3:
-        supported = False
-    """
 
     return supported
 

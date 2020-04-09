@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 """Unit tests for graph partitioning."""
+
+import numpy as np
+
 import tvm
 import tvm.relay.testing
 from tvm import relay
@@ -63,5 +66,87 @@ def test_tidl_annotation():
     mod = transform.PartitionGraph()(mod)
     print(mod.astext(show_meta_data=False))
 
+def convert_to_list(x):
+    if not isinstance(x, list):
+        x = [x]
+    return x
+
+def test_tidl_mobilenet():
+
+    import tensorflow as tf
+    import tvm.relay.testing.tf as tf_testing
+
+    with tf.Graph().as_default():
+
+        graph_def = tf_testing.get_workload(
+            "https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.4_224.tgz",
+            "mobilenet_v2_1.4_224_frozen.pb")
+        # Call the utility to import the graph definition into default graph.
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+
+        data = np.random.uniform(size=(1, 224, 224, 3)).astype('float32')
+        out_node = 'MobilenetV2/Predictions/Reshape_1'
+        with tf.Session() as sess:
+            # Add shapes to the graph.
+            graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
+            input_data = convert_to_list(data)
+            input_node = convert_to_list('input')
+            shape_dict = {e: i.shape for e, i in zip(input_node, input_data)}
+            mod1, params = relay.frontend.from_tensorflow(graph_def,
+                                                          shape=shape_dict)
+            print('---------- Original Graph ----------')
+            mod1 = relay.transform.RemoveUnusedFunctions()(mod1)
+            print(mod1.astext(show_meta_data=False))
+            print('---------- Merge Composite Functions ----------')
+            mod3 = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod1) #Merge sequence of ops into composite functions/ops
+            print(mod3.astext(show_meta_data=False))
+            print("---------- Annotated Graph ----------")
+            mod4 = transform.AnnotateTarget("tidl")(mod3) #Looks at annotated ops and marks them in the graph with compiler.begin and compiler.end
+            print(mod4.astext(show_meta_data=False))
+            print("---------- Merge Compiler Regions ----------")
+            mod4 = transform.MergeCompilerRegions()(mod4) #Merge annotated regions together that use the same external target, combines marked regions for each target
+            print(mod4.astext(show_meta_data=False))
+            print("---------- Partioned Graph ----------")
+            mod4 = transform.PartitionGraph()(mod4)
+            print(mod4.astext(show_meta_data=False))
+
+def test_tidl_mobilenet_no_composite():
+
+    import tensorflow as tf
+    import tvm.relay.testing.tf as tf_testing
+
+    with tf.Graph().as_default():
+
+        graph_def = tf_testing.get_workload(
+            "https://storage.googleapis.com/mobilenet_v2/checkpoints/mobilenet_v2_1.4_224.tgz",
+            "mobilenet_v2_1.4_224_frozen.pb")
+        # Call the utility to import the graph definition into default graph.
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+
+        data = np.random.uniform(size=(1, 224, 224, 3)).astype('float32')
+        out_node = 'MobilenetV2/Predictions/Reshape_1'
+        with tf.Session() as sess:
+            # Add shapes to the graph.
+            graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
+            input_data = convert_to_list(data)
+            input_node = convert_to_list('input')
+            shape_dict = {e: i.shape for e, i in zip(input_node, input_data)}
+            mod1, params = relay.frontend.from_tensorflow(graph_def,
+                                                          shape=shape_dict)
+            print('---------- Original Graph ----------')
+            mod1 = relay.transform.RemoveUnusedFunctions()(mod1)
+            print(mod1.astext(show_meta_data=False))
+            print("---------- Annotated Graph ----------")
+            mod4 = transform.AnnotateTarget("tidl")(mod1) #Looks at annotated ops and marks them in the graph with compiler.begin and compiler.end
+            print(mod4.astext(show_meta_data=False))
+            print("---------- Merge Compiler Regions ----------")
+            mod4 = transform.MergeCompilerRegions()(mod4) #Merge annotated regions together that use the same external target, combines marked regions for each target
+            print(mod4.astext(show_meta_data=False))
+            print("---------- Partioned Graph ----------")
+            mod4 = transform.PartitionGraph()(mod4)
+            print(mod4.astext(show_meta_data=False))
+
 if __name__ == '__main__':
     test_tidl_annotation()
+    #test_tidl_mobilenet()
+    test_tidl_mobilenet_no_composite()
