@@ -61,7 +61,9 @@ class TensorRTModuleCodegen : public CSourceModuleCodegenBase {
     CHECK(func.defined()) << "Input error: expect a Relay function.";
     // Record the external symbol for runtime lookup.
     auto sid = GetExtSymbol(func);
-    serialized_subgraphs_[sid] = SaveJSON(func);
+    // remove ext from func
+    auto func2 = Function(func->params, func->body, func->ret_type, func->type_params, {});
+    serialized_subgraphs_[sid] = SaveJSON(func2);
   }
 
   /*!
