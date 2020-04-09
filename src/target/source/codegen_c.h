@@ -29,7 +29,6 @@
 #include <tvm/tir/function.h>
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/target/codegen.h>
-#include <tvm/tir/lowered_func.h>
 #include <tvm/runtime/container.h>
 #include <string>
 #include <vector>
@@ -256,6 +255,29 @@ class CodeGenC :
   std::unordered_map<const VarNode*, std::string> alloc_storage_scope_;
   /*! \brief the data type of allocated buffers */
   std::unordered_map<const VarNode*, DataType> handle_data_type_;
+
+  /*!
+   * \brief A RAII utility class for emitting code in a scoped region.
+   */
+  class EnterScopeRAII {
+    // The codegen context.
+    CodeGenC* cg;
+
+    // The new scope level.
+    int scope;
+
+   public:
+    explicit EnterScopeRAII(CodeGenC* cg) : cg(cg) {
+      cg->PrintIndent();
+      cg->stream << "{\n";
+      scope = cg->BeginScope();
+    }
+    ~EnterScopeRAII() {
+      cg->EndScope(scope);
+      cg->PrintIndent();
+      cg->stream << "}\n";
+    }
+  };
 
  private:
   /*! \brief whether to print in SSA form */

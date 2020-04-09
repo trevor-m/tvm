@@ -593,6 +593,17 @@ def _test_space_to_batch_nd(input_shape, block_shape, paddings, dtype='int32'):
 
         compare_tf_with_tvm(data, in_data.name, out.name)
 
+def _test_space_to_batch_nd_infer_paddings(input_shape, block_shape, dtype='int32'):
+    data = np.random.uniform(0, 5, size=input_shape).astype(dtype)
+    padding_np = np.array([0, 1]).astype(np.int32).reshape((1, 2))
+    with tf.Graph().as_default():
+        in_data = tf.placeholder(shape=input_shape, dtype=dtype)
+        const1 = tf.constant(padding_np, dtype=tf.int32)
+        # make paddings an input to tf.transpose, but not an input to the graph,
+        # so it can be extracted with infer_value_simulated
+        paddings = tf.reverse(const1, axis=[-1])
+        out = tf.space_to_batch_nd(in_data, block_shape, paddings)
+        compare_tf_with_tvm(data, in_data.name, out.name)
 
 def test_forward_space_to_batch_nd():
     # test cases: https://www.tensorflow.org/api_docs/cc/class/tensorflow/ops/space-to-batch-n-d
@@ -635,6 +646,11 @@ def test_forward_space_to_batch_nd():
         block_shape=[2],
         paddings=[[1, 0]],
         dtype='float64'
+    )
+
+    _test_space_to_batch_nd_infer_paddings(
+        input_shape=[2, 3, 2],
+        block_shape=[2]
     )
 
 #######################################################################
@@ -1114,7 +1130,7 @@ def test_read_variable_op():
                                        num_output=len(out_name))
             for i in range(len(tf_output)):
                 tvm.testing.assert_allclose(
-                    tf_output[i], tvm_output[i], atol=1e-5, rtol=1e-5)
+                    tf_output[i], tvm_output[i], atol=1e-4, rtol=1e-5)
 
         sess.close()
 
@@ -1207,6 +1223,8 @@ def test_forward_stridedslice():
     '''test StridedSlice'''
 
     _test_stridedslice((2), [1], [1], [1], 'float32', shrink_axis_mask=1)
+    _test_stridedslice((2, 1), [0], [1], [1], 'float32', shrink_axis_mask=1)
+    _test_stridedslice((2, 3, 4), [0], [1], [1], 'float32', shrink_axis_mask=8)
     _test_stridedslice((3, 4, 3), [1, -1, 0],
                        [4, -5, 3], [2, -1, 1], 'float32')
     _test_stridedslice((3, 4, 3), [1, 0], [4, 3], [
@@ -3056,7 +3074,73 @@ def test_forward_add_n():
     _test_forward_add_n(in4)
     _test_forward_add_n(in5)
 
+#######################################################################
+# Sharing params case
+# ----------------------
 
+
+def test_sharing_node():
+    """Test the sharing params case."""
+    np_data = np.random.uniform(size=(2,2,2)).astype('float32')
+    with tf.Graph().as_default():
+        in_data = tf.placeholder(tf.float32, shape=(2, 2, 2), name='in_data')
+        axis = tf.constant([-1], dtype=tf.int32, name='axis')
+        mean0 = tf.reduce_mean(in_data, axis=axis, keepdims=False, name='mean0')
+        mean1 = tf.reduce_mean(in_data, axis=axis, keepdims=False, name='mean1')
+        out = tf.add(mean0, mean1, name='out')
+        compare_tf_with_tvm([np_data], ['in_data:0'], 'out:0')
+
+#######################################################################
+# Unravel Index
+# ----------------------
+def _test_forward_unravel_index(inputs):
+    tf.reset_default_graph()
+    with tf.Graph().as_default():
+        temp = []
+        for each in inputs:
+            temp.append(tf.placeholder(shape=each.shape, dtype=each.dtype))
+        output = tf.unravel_index(temp[0], temp[1])
+        compare_tf_with_tvm([each for each in inputs], [
+            each.name for each in temp], output.name)
+
+
+def _test_forward_unravel_index_scalar(x, y, dtype="int32"):
+    tf.reset_default_graph()
+    with tf.Graph().as_default():
+        indices_1 = constant_op.constant(x, dtype=dtype)
+        dims_1 = constant_op.constant(y, dtype=dtype)
+        out_1 = array_ops.unravel_index(indices_1, dims_1)
+        compare_tf_with_tvm([], [], out_1.name)
+
+
+def test_forward_unravel_index():
+    x = np.array([0, 1, 2, 3])
+    y = np.array([2, 2])
+    _test_forward_unravel_index([x, y])
+
+    x = np.array([0, 1, 2, 5])
+    y = np.array([2, 2])
+    _test_forward_unravel_index([x, y])
+
+    x = np.array([0, 1, 2, 5])
+    y = np.array([2])
+    _test_forward_unravel_index([x, y])
+
+    x = np.array([102, 300, 16])
+    y = np.array([10, 10, 9, 6])
+    _test_forward_unravel_index([x, y])
+
+    x = np.array([100])
+    y = np.array([10, 10, 9, 6])
+    _test_forward_unravel_index([x, y])
+
+    # Test scalar input
+    _test_forward_unravel_index_scalar(13, [1, 4, 5, 2])
+
+
+#######################################################################
+# Dilation2d
+# ----------------------
 def _test_dilation2d(tensor_in_sizes, filter_in_sizes,
                      strides, dilations, padding):
     """ One iteration of dilation2d with given shapes and attributes """
@@ -3101,7 +3185,37 @@ def test_forward_dilation():
     _test_dilation2d([1, 3, 3, 1], [2, 2, 1], [1, 1, 1, 1], [1, 2, 2, 1], "SAME")
     _test_dilation2d([1, 3, 3, 1], [2, 2, 1], [1, 1, 1, 1], [1, 1, 2, 1], "VALID")
 
-# #######################################################################
+
+#######################################################################
+# infinity ops
+# ------------
+def _verify_infiniteness_ops(tf_op, name):
+    """test operator infinity ops"""
+
+    # Only float types are allowed in Tensorflow for isfinite and isinf
+    # float16 is failing on cuda
+    tf_dtypes = ["float32", "float64"]
+    for tf_dtype in tf_dtypes:
+        shape = (8, 8)
+        data = np.random.uniform(size=shape).astype(tf_dtype)
+        data.ravel()[np.random.choice(data.size, int(data.size * 0.5), replace=False)] = np.infty
+        data.ravel()[np.random.choice(data.size, int(data.size * 0.5), replace=False)] = np.nan
+
+        tf.reset_default_graph()
+        in_data = tf.placeholder(tf_dtype, shape, name="in_data")
+        tf_op(in_data, name=name)
+        compare_tf_with_tvm([data], ['in_data:0'], '{}:0'.format(name))
+
+
+def test_forward_isinf():
+    _verify_infiniteness_ops(tf.is_inf, "isinf")
+
+
+def test_forward_isfinite():
+    _verify_infiniteness_ops(tf.is_finite, "isfinite")
+
+
+#######################################################################
 # Main
 # ----
 if __name__ == '__main__':
@@ -3173,6 +3287,9 @@ if __name__ == '__main__':
     test_forward_squared_difference()
     test_forward_add_n()
     test_forward_floormod()
+    test_forward_isfinite()
+    test_forward_isinf()
+    test_forward_unravel_index()
 
     # Reductions
     test_forward_argminmax()
@@ -3225,3 +3342,6 @@ if __name__ == '__main__':
 
     # Internal misc. ops
     test_read_variable_op()
+
+    # Sharing params case using Mean ops
+    test_sharing_node()

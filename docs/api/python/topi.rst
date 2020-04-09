@@ -33,6 +33,8 @@ List of operators
    topi.round
    topi.abs
    topi.isnan
+   topi.isfinite
+   topi.isinf
    topi.exp
    topi.tanh
    topi.log
@@ -47,6 +49,7 @@ List of operators
    topi.strided_slice
    topi.expand_dims
    topi.reshape
+   topi.unravel_index
    topi.squeeze
    topi.concatenate
    topi.split
@@ -133,6 +136,8 @@ topi
 .. autofunction:: topi.round
 .. autofunction:: topi.abs
 .. autofunction:: topi.isnan
+.. autofunction:: topi.isfinite
+.. autofunction:: topi.isinf
 .. autofunction:: topi.exp
 .. autofunction:: topi.tanh
 .. autofunction:: topi.log
@@ -147,6 +152,7 @@ topi
 .. autofunction:: topi.strided_slice
 .. autofunction:: topi.expand_dims
 .. autofunction:: topi.reshape
+.. autofunction:: topi.unravel_index
 .. autofunction:: topi.squeeze
 .. autofunction:: topi.concatenate
 .. autofunction:: topi.split

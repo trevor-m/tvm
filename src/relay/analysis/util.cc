@@ -330,7 +330,7 @@ TVM_REGISTER_GLOBAL("relay.analysis.all_type_vars")
  */
 std::unordered_map<const Object*, size_t>
 GetExprRefCount(const Expr& body) {
-  class ExprRefCounter : private ExprVisitor {
+  class ExprRefCounter : private MixedModeVisitor {
    public:
     std::unordered_map<const Object*, size_t>
     Get(const Expr& body) {
@@ -433,7 +433,7 @@ Expr TypeSubst(const Expr& expr, const tvm::Map<TypeVar, Type>& subst_map) {
 
     Clause VisitClause(const Clause& c) final {
       Pattern pat = VisitPattern(c->lhs);
-      return ClauseNode::make(pat, VisitExpr(c->rhs));
+      return Clause(pat, VisitExpr(c->rhs));
     }
 
    private:
