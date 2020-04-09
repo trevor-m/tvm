@@ -131,8 +131,6 @@ def _merge_sequential_ops(mod):
 
     return relay.transform.MergeComposite(pattern_table)(mod)
 
-#TODO: Add any attr checks, not sure how they work for composite functions
-
 @reg.register("tidl.squeeze", "target.tidl")
 def _tidl_squeeze_whitelist_fn(attrs, args):
     supported = True
