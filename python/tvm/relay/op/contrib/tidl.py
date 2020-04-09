@@ -283,17 +283,8 @@ def _concatenate_whitelist_fn(attrs, args):
 @reg.register("nn.conv2d", "target.tidl")
 def _conv2d_whitelist_fn(attrs, args):
 
-    print("in conv2d")
-
     weight = infer_type(args[1])
     if weight.checked_type.dtype != 'float32':
-        temp = infer_type(weight)
-        print(temp)
-        print(type(temp))
-        print(dir(type(temp)))
-        print(temp.checked_type.dtype)
-        print(type(temp.checked_type))
-        print(dir(type(temp.checked_type)))
         return False
 
     weight_shape  = get_const_tuple(infer_shape(weight))
@@ -304,17 +295,9 @@ def _conv2d_whitelist_fn(attrs, args):
     (dh, dw) = dilation
     (kh, kw) = kernel_size
     channel_supported = (weight_shape[0] <= 2048 and weight_shape[1] <= 2048)
-    print("channel_supported")
-    print(channel_supported)
     stride_supported  = (strides[0] <= 2 and strides[1] <= 2)
-    print("stride_supported")
-    print(stride_supported)
     dilation_supported = (dh == 1 or dh == 2 or dh == 4) and (dw == 1 or dw == 2 or dw == 4)
-    print("dilation_supported")
-    print(dilation_supported)
     kernel_supported = (((kh-1)*dh+1) <= 9) and (((kw-1)*dw+1) <= 9)
-    print("kernel_supported")
-    print(kernel_supported)
     supported = channel_supported and stride_supported and dilation_supported and kernel_supported
 
     return supported
