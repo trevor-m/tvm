@@ -89,9 +89,7 @@ class SimplifySliceLike(ExprMutator):
 @transform.function_pass(opt_level=0)
 class LegalizeLayoutTranformPass:
     def transform_function(self, func, mod, _):
-        if func.attrs and func.attrs['External'] == "tensorrt":
-            return LegalizeLayoutTranform().mutate(func)
-        return func
+        return LegalizeLayoutTranform().visit(func)
 
 @transform.function_pass(opt_level=0)
 class RemoveDropoutPass:
@@ -436,15 +434,16 @@ def EnableTrt(mod, params=None, trt_version=None):
        mod['main'] = bind_params_by_name(mod['main'], params)
     # Apply passes required for TRT
     mod = transform.InferType()(mod)
-    mod['main'] = SimplifySliceLike().visit(mod['main'])
-    seq = relay.transform.Sequential([#transform.FoldConstant(),
+    seq = relay.transform.Sequential([transform.InferType(),
+                                      SimplifySliceLikePass(),
                                       RemoveDropoutPass(),
+                                      transform.RemoveUnusedFunctions(),
+                                      transform.ConvertLayout('NCHW'),
+                                      transform.FoldConstant(),
+                                      LegalizeLayoutTranformPass(),
                                       transform.AnnotateTarget('tensorrt'),
                                       transform.MergeCompilerRegions(),
                                       transform.PartitionGraph(),
-                                    #   transform.RemoveUnusedFunctions(),
-                                    #   transform.ConvertLayout('NCHW'),
-                                      #LegalizeLayoutTranformPass(),
                                       transform.InferType()])
     with relay.transform.PassContext(opt_level=3):
         mod = seq(mod)
