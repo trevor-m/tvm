@@ -51,7 +51,7 @@ def test_tidl_annotation():
 
     print("----------  Graph with composite fns ----------")
     #TODO: Uncomment after Cody refactor PR in
-    #mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod)
+    mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod)
     print(mod.astext(show_meta_data=False))
 
     print("---------- Annotated graph ----------")
@@ -148,5 +148,5 @@ def test_tidl_mobilenet_no_composite():
 
 if __name__ == '__main__':
     test_tidl_annotation()
-    #test_tidl_mobilenet()
-    test_tidl_mobilenet_no_composite()
+    test_tidl_mobilenet()
+    #test_tidl_mobilenet_no_composite()
