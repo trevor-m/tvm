@@ -217,8 +217,13 @@ class Partitioner : public ExprMutator {
         int index = GetRetIdx(region, GetRef<Call>(call));
         CHECK_NE(index, -1);
 
+        if (shared_tuplegetitem_.count(region) && shared_tuplegetitem_[region].count(index)) {
+          return shared_tuplegetitem_[region][index];
+        }
+
         auto tuple_get_item_ = TupleGetItem(sg_call, index);
         tuple_get_item_->checked_type_ = GetRef<Call>(call)->args[0]->checked_type_;
+        shared_tuplegetitem_[region][index] = tuple_get_item_;
         return std::move(tuple_get_item_);
       } else {
         // First time this region is encountered in the traversal
@@ -493,6 +498,10 @@ class Partitioner : public ExprMutator {
    * belongs to
    */
   std::unordered_map<AnnotatedRegionSet, BaseFunc, ObjectHash, ObjectEqual> regions_sets_;
+
+  /*!\brief Cache the TupleGetItem for retrieving output that is shared by different nodes. */
+  std::unordered_map<AnnotatedRegion, std::unordered_map<int, TupleGetItem>, ObjectHash, ObjectEqual>
+      shared_tuplegetitem_;
 
   /*!\brief Cache the output that is shared by different nodes. */
   std::unordered_map<Expr, std::unordered_map<AnnotatedRegion, Var, ObjectHash, ObjectEqual>, ObjectHash, ObjectEqual>
