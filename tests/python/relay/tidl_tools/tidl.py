@@ -8,12 +8,14 @@ import topi
 from topi.util import get_const_tuple
 import ctypes
 import os
+import re
 
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar
 from tvm.relay.op import Op
 from tvm.relay.function import Function
 
+from tidl_tools import tidl_utils
 
 class RelayGraphParams:
     def __init__(self):
@@ -816,68 +818,34 @@ def tidl_import_pooling(node, type):
 
     return
 
-def tidl_import_init(all_nodes):
+def tidl_import_init(data_layout, input_scale, input_signed, input_dim):
     r""" Initializing TIDL import
 
     Parameters
     ----------
-    all_nodes : dictionary 
-        Dictionary of all relay.expr.Call nodes of the graph 
-
+    data_layout: 
+    input_scale: double
+        Scaling factor to convert floating point input to 8-bit quantized input
+    input_signed: int
+        Signed (1) or unsigned (0) of input
+    input_dim: tuple
+        Input dimension CxHxW
     Returns
     -------
     True if initialization succeeds or False if initialization fails
     """
 
-    # Initializing config parameters: 
-    #    numParamBits  = 12
-    #    quantRoundAdd = 50
-    #    inQuantFactor = 128*255
-    # Other parameters depend on input dimension
-    # TODO: obtain these parameters automatically
-    config_params = TIDLconfigParams(12,50,32640,1,3,224,224)
-    #config_params = TIDLconfigParams(12,50,3782,1,32,112,112)
+    inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
+    config_params = TIDLconfigParams(12,50,inQuantFactor,input_signed,
+                                     input_dim[0], input_dim[1], input_dim[2])
 
-    # Find first node of the graph and get input tensor shape
-    for node in all_nodes:
-        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
-            # find input nodes of this node
-            in_nodes = find_input_nodes(all_nodes, node) 
-            if len(in_nodes) == 0:
-                data = node.args[0]
-                print('Found first node')
-                break
-    input_shape = get_const_tuple(data.checked_type.shape) 
-
-    # Find first conv2d node to get data layout (first node may not have this infomation)
-    for node in all_nodes:
-        if isinstance(node, relay.expr.Call): # node is tvm.relay.expr.Call
-            if node.op.name == "nn.conv2d":
-                print('Found first conv2d node')
-                break
-
-    # Fill dimension parameters for TIDL based on input tensor shape and data layout
-    if node.attrs.data_layout == "NCHW":
-        print('Data layout is NCHW')
+    if data_layout == "NCHW":
         layout = b'NCHW'
-        config_params.inNumChannels = input_shape[1]
-        config_params.inHeight      = input_shape[2]
-        config_params.inWidth       = input_shape[3]
-    elif node.attrs.data_layout == "NHWC":
-        print('Data layout is NHWC')
+    elif data_layout == "NHWC":
         layout = b'NHWC'
-        config_params.inNumChannels = input_shape[3]
-        config_params.inHeight      = input_shape[1]
-        config_params.inWidth       = input_shape[2]
     else:
         print('data layout ' + node.attrs.data_layout + ' is not supported')
         return False
-
-#    print('Data layout is NCHW')
-#    layout = b'NCHW'
-#    config_params.inNumChannels = input_shape[1]
-#    config_params.inHeight      = input_shape[2]
-#    config_params.inWidth       = input_shape[3]
 
     # Invoking C library call to initialize TIDL import
     _tidlImportInit = _tidl_mod.tidlImportInit
@@ -977,8 +945,6 @@ def relay_ir_import(mod, params):
     True if import succeeds or False if import fails    
     """
 
-    import re
-
     # Traverse Relay IR graph and generate a dictionary of all nodes
     all_nodes_main = {}
     relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes_main)) 
@@ -1014,6 +980,167 @@ def relay_ir_import(mod, params):
         _tidlImportOptimize.restype = ctypes.c_int
         if _tidlImportOptimize(subgraph_id) == -1:
             return False
+
+    return True
+
+
+def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix, data_layout):
+    r""" Obtain input/output tensor for a given subgraph
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    """
+    num_tensors = 0
+    for key, value in subgraph_tensors.items():
+        if key.find(tensor_name_prefix) != -1:
+            tensor = value
+            num_tensors += 1
+
+    # Only supports 1 input/output tensor at this moment
+    if num_tensors != 1:
+        return None
+
+    if data_layout == 'NHWC':
+        tensor = tensor.transpose(0,3,1,2)
+    elif data_layout == 'NCHW':
+        tensor = tensor
+    else:
+        return None
+
+    return tensor[0,:] # only use 1 batch for calibration
+
+def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
+                     input_scale, input_signed, output_scale, output_signed):
+    r""" Generate subgraph configuration file to be used by TIDL runtime
+        netBinFile    = "./tidl_subgraph0_net.bin"
+        paramsBinFile = "./tidl_subgraph0_params.bin"
+        inConvType  = 0
+        inIsSigned  = 1
+        inScaleF2Q  = 128.0
+        inIsNCHW    = 1
+        outConvType = 0
+        outIsSigned = 1
+        outScaleF2Q = 128.0
+        outIsNCHW   = 1
+    """
+    
+    sub_graph_cfg = artifacts_folder + "./subgraph" + str(subgraph_id) + ".cfg"
+    sub_graph_net_file = "./tidl_subgraph" + str(subgraph_id) + "_net.bin"
+    sub_graph_params_file = "./tidl_subgraph" + str(subgraph_id) + "_params.bin"
+    if data_layout=="NCHW":
+        isNCHW = 1
+    else:
+        isNCHW = 0
+    with open(sub_graph_cfg, 'w') as cfg_file:
+        cfg_file.write("netBinFile    = {}\n".format(sub_graph_net_file))
+        cfg_file.write("paramsBinFile = {}\n".format(sub_graph_params_file))
+        cfg_file.write("inConvType    = 0\n")
+        cfg_file.write("inIsSigned    = {}\n".format(input_signed))
+        cfg_file.write("inScaleF2Q    = {}\n".format(round(input_scale,2)))
+        cfg_file.write("inIsNCHW      = {}\n".format(isNCHW))
+        cfg_file.write("outConvType   = 0\n")
+        cfg_file.write("outIsSigned   = {}\n".format(output_signed))
+        cfg_file.write("outScaleF2Q   = {}\n".format(round(output_scale,2)))
+        cfg_file.write("outIsNCHW     = {}\n".format(isNCHW))
+
+
+def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
+    r""" Relay IR import to TIDL 
+
+    Parameters
+    ----------
+    mod : tvm.relay.Module 
+        Relay IR graph with subgraphs
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+    subgraph_tensors: dict
+        Input/output tensors of subgraphs obtained from TVM graph execution
+
+    Returns
+    -------
+    True:  if TIDL import succeeds or if there are no subgraphs for TIDL offload
+    False: if TIDL import fails    
+    """
+
+    # Traverse Relay IR graph and generate a dictionary of all TIDL nodes
+    # There should be a better approach to do this
+    all_nodes_main = {}
+    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes_main)) 
+    tidl_subgraphs = []
+    for node in all_nodes_main:
+        if isinstance(node, relay.expr.GlobalVar):
+            if 'tidl' in node.name_hint:
+                tidl_subgraphs.append(node.name_hint)
+
+    if len(tidl_subgraphs) == 0:
+        # There are no subgraphs for TIDL offload
+        return False
+
+    # For each TIDL subgraph, import to TIDL and calibrate 
+    for tidl_subgraph in tidl_subgraphs:
+        # Extract subgraph id and input/output tensor names from subgraph name
+        subgraph_id = int(tidl_subgraph.replace('tidl_',''))
+        in_tensor_name  = tidl_subgraph + '_i'
+        out_tensor_name = tidl_subgraph + '_o'
+
+        # Obtain input tensor from TVM graph execution
+        input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name, data_layout)
+        if input_fp is None:
+            return False
+        # Quantize input tensor into 8-bit integer
+        input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant(input_fp)
+    
+        # Initialize TIDL import
+        #if tidl_import_init(config_params,data_layout) == False:
+        if tidl_import_init(data_layout, input_scale, input_signed, input_fp.shape) == False:
+            return False
+    
+        # Scan through all relay.expr.Call nodes and import each to TIDL
+        # TODO: change this and _tidlImportOptimize to a function
+        all_nodes_tidl = {}
+        relay.analysis.post_order_visit(mod[tidl_subgraph], lambda node: traverse_expr(node, all_nodes_tidl)) 
+        for node in all_nodes_tidl:
+            if isinstance(node, relay.expr.Call):
+                result = tidl_import_node(all_nodes_tidl, node, params)
+                if result == False:
+                    return False
+    
+        # Invoke TIDL optimization of the imported graph
+        _tidlImportOptimize = _tidl_mod.tidlImportOptimize
+        _tidlImportOptimize.argtypes = (ctypes.c_char_p, ctypes.c_int)
+        _tidlImportOptimize.restype = ctypes.c_int
+        folder = artifacts_folder.encode('utf-8')
+        if _tidlImportOptimize(folder, subgraph_id) == -1:
+            return False
+
+        #_tidlImportOptimize = _tidl_mod.tidlImportOptimize
+        #_tidlImportOptimize.argtype = ctypes.c_int
+        #_tidlImportOptimize.restype = ctypes.c_int
+        #if _tidlImportOptimize(subgraph_id) == -1:
+        #    return False
+
+        # Calibrate TIDL for the imported subgraph
+        status, last_layer_q = subgraph_calibration(artifacts_folder, tidl_calib_tool, input_quant_vec, subgraph_id)
+        if status == False:
+            return False
+        
+        # Calculate scaling factor to convert output tensor to floating point
+        # Obtain output tensor from TVM graph execution
+        output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name, data_layout)
+        if output_fp is None:
+            return False
+        #output_quant, output_scale, output_signed = tidl_utils.tensor_quant(output_fp)
+        output_signed = int(np.amin(output_fp) < 0)
+        output_scale  = last_layer_q / 255.0
+        print("Output conversion: " + str(last_layer_q) + str(output_scale))
+        #print(last_layer_q
+        
+        # Generate subgraph configuration file
+        subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout, 
+                         input_scale, input_signed, output_scale, output_signed)
 
     return True
 
@@ -1055,6 +1182,91 @@ def relay_ir_import_whole_graph(mod, params, subgraph_id):
         return False
 
     return True
+
+def subgraph_calibration(artifacts_folder, calib_tool, input_quant_vec, subgraph_id):
+
+    # Save quantized input vector to a file for calib tool to read
+    # Saving as 'int8' or 'uint8' is the same
+    calib_raw_image = './calib_raw_data.bin'
+    input_quant_vec.astype('int8').tofile(calib_raw_image);
+
+    # Prepare for calibration
+    output_net_file = artifacts_folder + 'tidl_subgraph' + str(subgraph_id) + '_net.bin'
+    output_tmp_file = './tempDir/precalib_net.bin'
+    params_file = artifacts_folder + 'tidl_subgraph' + str(subgraph_id) + '_params.bin'
+    proc = subprocess.Popen(['rm', '-rf', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(['mkdir', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(['cp', output_net_file, output_tmp_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    calib_config_file = './tempDir/configFilesList.txt'
+    with open(calib_config_file, 'w') as config_file:
+        config_file.write('1 ./tempDir/quant_stats_config.txt\n')
+        config_file.write('0\n')
+
+    quant_config_file = './tempDir/quant_stats_config.txt'
+    with open(quant_config_file, 'w') as quant_file:
+        quant_file.write('rawImage    = 1\n')
+        quant_file.write('numFrames   = 1\n')
+        quant_file.write('preProcType = 0\n')
+        quant_file.write('inData      = {}\n'.format(calib_raw_image))
+        quant_file.write('outData     = {}\n'.format('./tempDir/stats_tool_out.bin'))
+        quant_file.write('traceDumpBaseName  = {}\n'.format('./tempDir/trace_dump_'))
+        quant_file.write('updateNetWithStats = 1\n')
+        quant_file.write('outputNetBinFile   = {}\n'.format(output_net_file))
+        quant_file.write('paramsBinFile      = {}\n'.format(params_file))
+        quant_file.write('netBinFile         = {}\n'.format(output_tmp_file))
+
+    # Invoke TIDL emulation to calibrate
+    try:
+        proc = subprocess.Popen([calib_tool, calib_config_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        o, e = proc.communicate()
+        console_out = o.decode('ascii')
+        error = e.decode('ascii')
+        print(console_out)
+    except:
+        print("TIDL calibration crashed")
+        return False, -1
+
+    # Find trace dump of last node - this may not be needed
+    if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
+        files = os.listdir("./tempDir")
+        last_node = -1
+        trace_dump_last_node = None        
+        for file in files:
+            if 'trace_dump_' in file and '.y' in file:
+                x = file.replace('trace_dump_','')
+                y = x.split('_')
+                node = int(y[0])
+                if node > last_node:
+                    last_node = node
+                    trace_dump_last_node = file
+        if trace_dump_last_node is None:
+            print("TIDL calibration failed - can't find last node")
+            return False, -1
+        else:
+            last_layer_ind = console_out.rfind(" Layer ")
+            if last_layer_ind == -1:
+                print("TIDL calibration failed - can't find last layer")
+                return False, -1
+            else:
+                last_line  = console_out[last_layer_ind:last_layer_ind+32]
+                last_q_ind = last_line.find(": Out Q :")
+                if last_q_ind == -1:
+                    # Last layer doesn't have Q value - use 255
+                    return True, 255
+                else:
+                    if last_line[last_q_ind+19] != ",":
+                        print("TIDL calibration failed - can't find last Q value")
+                        return False, -1
+                    else:
+                        last_q_val = last_line[last_q_ind+10:last_q_ind+19]
+                        print("TIDL calibration succeeded")
+                        return True, int(last_q_val)
+    else:
+        print("TIDL calibration failed.")
+        print(error)
+        return False, -1
+
 
 def tidl_calib(calib_tool, calib_raw_image, subgraph_id):
     r""" TIDL calibration after importing Relay IR
@@ -1146,11 +1358,21 @@ class CalibrationGraphMutator(ExprMutator):
         if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
             var_map = {}
             for arg, param in zip(call.args, call.op.params):
+                subgraph_name = "_".join(param.name_hint.split("_")[:2])
                 arg = super().visit(arg)
                 var_map[param] = arg
                 self.additional_outputs.append(arg)
                 self.name_map[len(self.additional_outputs)] = param.name_hint
-            return VarReplacer(var_map).visit(call.op.body)
+            new_body = VarReplacer(var_map).visit(call.op.body)
+            # Add subgraph outputs as well
+            if isinstance(new_body, Tuple):
+                for i, out in enumerate(new_body.fields):
+                    self.additional_outputs.append(out)
+                    self.name_map[len(self.additional_outputs)] = subgraph_name + "_o" + str(i)
+            else:
+                self.additional_outputs.append(new_body)
+                self.name_map[len(self.additional_outputs)] = subgraph_name + "_o0"
+            return new_body
         return super().visit_call(call)
 
     def make_calibration_graph(self, expr):

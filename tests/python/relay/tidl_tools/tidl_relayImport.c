@@ -883,7 +883,7 @@ void tidl_printOrigLayerparams(sTIDL_OrgNetwork_t  *tIDLNetStructure, int32_t nu
 } // tidl_printOrigLayerparams
 #endif
 
-int tidlImportOptimize(int graphId)
+int tidlImportOptimize(char * artifacts_folder, int graphId)
 {
   int32_t importStatus, i, numErrs, numUnsupportedLayers, tiLayerIndex;
   FILE    *fpNetFile;
@@ -891,7 +891,8 @@ int tidlImportOptimize(int graphId)
   char    str[30];
 
   numErrs = 0;
-  printf("TIDL import graph %d\n", graphId);
+  printf("TIDL artifacts folder: %s\n", artifacts_folder);
+  printf("TIDL import graph: %d\n", graphId);
   printf("----- Optimize TIDL -----\n");
   printf("number of layers: %d\n", tidlImpState.layerIndex);
   //for(i=0; i<tidlImpState.layerIndex; i++)
@@ -986,7 +987,7 @@ int tidlImportOptimize(int graphId)
   tidl_importEltWiseParams(&orgTIDLNetStructure, tidlImpState.layerIndex);
 
   /* Quantize and write out layer params */
-  sprintf(str, "tidl_subgraph%d_params.bin", graphId);
+  sprintf(str, "%stidl_subgraph%d_params.bin", artifacts_folder, graphId);
   fpParamsFile = fopen(str, "wb+");
   TIDL_importQuantWriteLayerParams(&orgTIDLNetStructure, tidlImpState.layerIndex, fpParamsFile);
   fclose(fpParamsFile);
@@ -1021,7 +1022,7 @@ int tidlImportOptimize(int graphId)
 
   tidl_printLayerparams(&tIDLNetStructure, tiLayerIndex, graphId);
 
-  sprintf(str, "tidl_subgraph%d_net.bin", graphId);
+  sprintf(str, "%stidl_subgraph%d_net.bin", artifacts_folder, graphId);
   fpNetFile = fopen(str, "wb+");
   fwrite(&tIDLNetStructure,1,sizeof(tIDLNetStructure),fpNetFile);
 

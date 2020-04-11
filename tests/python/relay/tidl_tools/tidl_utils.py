@@ -119,9 +119,39 @@ def float_nd_to_int8_1d(input):
     """
 
     scale = 128.0/max(abs(np.amin(input)), np.amax(input))
+    print('Input quantization scaling factor: ')
+    print(scale)
     y = np.multiply(input, scale)
     z = np.rint(y)
     z = np.clip(z,-128,127)
     output = z.flatten()
 
-    return output
+    return output, scale
+
+def tensor_quant(input_tensor):
+    r""" Convert float32 n-d array to int8 or uint8 1-d array
+    Parameters
+    ----------
+    input: float32 array in "CxHxW" format
+    output: 1 dimension int8 or uint8 array
+    """
+
+    if np.amin(input_tensor) >= 0:
+        # quantize to Uint8
+        sign  = 0
+        scale = 255.0/np.amax(input_tensor)
+        quant_min = 0
+        quant_max = 255
+    else:
+        # quantize to Int8
+        sign  = 1
+        scale = 128.0/max(abs(np.amin(input_tensor)), np.amax(input_tensor))
+        quant_min = -128
+        quant_max = 127
+        
+    y = np.multiply(input_tensor, scale)
+    z = np.rint(y)
+    z = np.clip(z, quant_min, quant_max)
+    output = z.flatten()
+
+    return output, scale, sign
