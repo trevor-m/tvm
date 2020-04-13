@@ -282,7 +282,7 @@ def test_tidl_mobilenet_no_composite():
             print(mod4.astext(show_meta_data=False))
 
 if __name__ == '__main__':
-    #test_tidl_annotation()
-    #test_tidl_mobilenet()
+    test_tidl_annotation()
+    test_tidl_mobilenet()
     #test_tidl_mobilenet_no_composite()
     test_tidl_yolo()
