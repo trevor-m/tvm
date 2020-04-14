@@ -126,11 +126,11 @@ void CodeGenCPU::Init(const std::string& module_name,
 void CodeGenCPU::AddFunction(const PrimFunc& f) {
   CodeGenLLVM::AddFunction(f);
   if (f_tvm_register_system_symbol_ != nullptr) {
-    auto global_symbol = f->GetAttr<runtime::String>(tvm::attr::kGlobalSymbol);
+    auto global_symbol = f->GetAttr<String>(tvm::attr::kGlobalSymbol);
     CHECK(global_symbol.defined())
         << "CodeGenLLVM: Expect PrimFunc to have the global_symbol attribute";
     export_system_symbols_.emplace_back(
-        std::make_pair(global_symbol.operator std::string(),
+        std::make_pair(global_symbol.value().operator std::string(),
                        builder_->CreatePointerCast(function_, t_void_p_)));
   }
   AddDebugInformation(function_);

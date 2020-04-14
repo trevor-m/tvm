@@ -114,9 +114,11 @@ class MemoryAccessVerifier final : protected StmtExprVisitor {
   /// Check if the value of a Variable comes from function argument.
   bool IsFromFunctionArgs(const VarNode *var) const {
     const VarNode *V = var;
-    while (true) {
-      CHECK(V) << "Invalid Variable\n";
+    for (auto kv : func_->buffer_map) {
+      if (V == kv.second->data.get()) return true;
+    }
 
+    while (true) {
       // Variable is from function args. Return true.
       if (V == func_->params[0].get()) return true;
 
@@ -195,7 +197,7 @@ void VerifyMemory(const IRModule& mod) {
       auto target = func->GetAttr<Target>(tvm::attr::kTarget);
       CHECK(target.defined())
           << "LowerWarpMemory: Require the target attribute";
-      MemoryAccessVerifier v(func, target->device_type);
+      MemoryAccessVerifier v(func, target.value()->device_type);
       v.Run();
       if (v.Failed()) {
         LOG(FATAL)

@@ -148,25 +148,42 @@ class Partitioner : public ExprMutator {
       CHECK_EQ(call->args.size(), 1U);
 
       // Traverse the rest graph.
-      auto input_expr = VisitExpr(call->args[0]);
+      Expr parent = call->args[0];
+      auto input_expr = VisitExpr(parent);
+
+      // Backtrace the parent to find the first ancestor node that is not a begin or end op
+      while (const auto* parent_call = parent.as<CallNode>()) {
+        if (parent_call->op == compiler_begin_op ||
+            parent_call->op == compiler_end_op) {
+          parent = parent_call->args[0];
+        } else {
+          break;
+        }
+      }
 
       AnnotatedRegion sg = GetRegion(GetRef<Call>(call));
       int index = GetArgIdx(sg, GetRef<Call>(call));
       CHECK_NE(index, -1);
-      // The type of the created variable is the same as the compiler_begin
-      // node.
-      std::string target = call->attrs.as<CompilerAttrs>()->compiler;
-      std::string varname =
-          target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
-      auto var = Var(varname, GetRef<Call>(call)->checked_type_);
 
-      auto cand = std::make_pair(var, input_expr);
-      if (std::find(region_args[sg].begin(), region_args[sg].end(), cand) ==
-          region_args[sg].end()) {
-        region_args[sg].push_back(cand);
+      if (shared_output_.count(parent) && shared_output_[parent].count(sg)) {
+        return shared_output_[parent][sg];
+      } else {
+        // The type of the created variable is the same as the compiler_begin
+        // node.
+        std::string target = call->attrs.as<CompilerAttrs>()->compiler;
+        std::string varname =
+            target + "_" + std::to_string(sg->GetID()) + "_i" + std::to_string(index);
+        auto var = Var(varname, GetRef<Call>(call)->checked_type_);
+
+        std::pair<Var, Expr> cand = std::make_pair(var, input_expr);
+
+        if (std::find(region_args[sg].begin(), region_args[sg].end(), cand) ==
+            region_args[sg].end()) {
+          region_args[sg].push_back(cand);
+        }
+        shared_output_[parent][sg] = var;
+        return std::move(var);
       }
-
-      return std::move(var);
     } else {
       CHECK_EQ(call->op, compiler_end_op);
       // The annotation node is inserted on edge so it must have only one
@@ -245,7 +262,7 @@ class Partitioner : public ExprMutator {
         global_region_func =
             WithAttr(std::move(global_region_func), attr::kPrimitive, tvm::Integer(1));
         global_region_func = WithAttr(std::move(global_region_func), attr::kCompiler,
-                                      tvm::tir::StringImmNode::make(target));
+                                      tvm::runtime::String(target));
         global_region_func =
             WithAttr(std::move(global_region_func), attr::kInline, tvm::Integer(1));
 
@@ -474,6 +491,41 @@ class Partitioner : public ExprMutator {
    * belongs to
    */
   std::unordered_map<AnnotatedRegionSet, BaseFunc, ObjectHash, ObjectEqual> regions_sets_;
+
+  /*!\brief Cache the output that is shared by different nodes. */
+  using RegionOutputMap = std::unordered_map<AnnotatedRegion, Var, ObjectHash, ObjectEqual>;
+  std::unordered_map<Expr, RegionOutputMap, ObjectHash, ObjectEqual> shared_output_;
+
+  /*!\brief The IRModule used for partitioning. */
+  IRModule module_;
+};
+
+class DefaultRemover : public ExprMutator {
+ public:
+  explicit DefaultRemover(const IRModule& module) : module_(module) {}
+
+  IRModule Remove() {
+    auto glob_funcs = module_->functions;
+    for (const auto& pair : glob_funcs) {
+      if (auto* fn = pair.second.as<FunctionNode>()) {
+        auto func = GetRef<Function>(fn);
+        func = Function(func->params, VisitExpr(func->body), func->ret_type, func->type_params,
+                        func->attrs);
+        module_->Update(pair.first, func);
+      }
+    }
+    return module_;
+  }
+
+  Expr VisitExpr_(const CallNode* call) final {
+    auto attrs = call->attrs.as<CompilerAttrs>();
+    if (attrs != nullptr && attrs->compiler == "default") {
+      return VisitExpr(call->args[0]);
+    }
+    return ExprMutator::VisitExpr_(call);
+  }
+
+ private:
   IRModule module_;
 };
 
@@ -483,7 +535,13 @@ namespace transform {
 
 Pass PartitionGraph() {
   runtime::TypedPackedFunc<IRModule(IRModule, PassContext)> part_func =
-      [=](IRModule m, PassContext pc) { return partitioning::Partitioner(m).Partition(); };
+      [=](IRModule m, PassContext pc) {
+        // TODO(@comaniac, @zhiics): We should also handle the annotation with "default" attribute
+        // by treating them as un-annotated, but we don't have it yet. This workaround pass removes
+        // all "default" annotations and should be deleted in the future.
+        auto new_m = partitioning::DefaultRemover(m).Remove();
+        return partitioning::Partitioner(new_m).Partition();
+  };
   auto partitioned = CreateModulePass(part_func, 0, "PartitionGraph", {});
   return Sequential({partitioned, InferType()});
 }
