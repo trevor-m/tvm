@@ -492,7 +492,7 @@ def find_out_nodes(all_nodes, this_node):
             args = [all_nodes[arg] for arg in next_node.args]
             if this_node_idx+1 in args:
                 output_nodes.append(node_idx+1)
-                print('Node after ' + this_node.op.name + ' is ' + next_node.op.name)
+                #print('Node after ' + this_node.op.name + ' is ' + next_node.op.name)
 
     return output_nodes
 
@@ -521,12 +521,12 @@ def find_in_out_nodes(all_nodes, this_node):
     in_out_nodes.this_node = all_nodes[this_node]
 
     in_nodes = find_input_nodes(all_nodes, this_node) # node indices of input nodes
-    print('number of input nodes: ' + str(len(in_nodes)))
+    #print('number of input nodes: ' + str(len(in_nodes)))
     if len(in_nodes) == 0:
         in_out_nodes.in_nodes = None  # this is the first node
     else:
-        for idx in range(len(in_nodes)):
-            print('input node: ' + str(in_nodes[idx]) + ', ' + node_dict_key_list[in_nodes[idx]].op.name)
+        #for idx in range(len(in_nodes)):
+        #    print('input node: ' + str(in_nodes[idx]) + ', ' + node_dict_key_list[in_nodes[idx]].op.name)
         # convert list to numpy arrary in order to pass to C library
         in_nodes_array = np.asarray(in_nodes, dtype=np.int32)
         in_out_nodes.in_nodes = ctypes.c_void_p(in_nodes_array.ctypes.data)
@@ -534,12 +534,12 @@ def find_in_out_nodes(all_nodes, this_node):
     in_out_nodes.num_in_nodes = len(in_nodes)
 
     out_nodes = find_out_nodes(all_nodes, this_node) # node indices of input nodes
-    print('number of output nodes: ' + str(len(out_nodes)))
+    #print('number of output nodes: ' + str(len(out_nodes)))
     if len(out_nodes) == 0:
         in_out_nodes.out_nodes = None # this is the last node
     else:
-        for idx in range(len(out_nodes)):
-            print('output node: ' + str(out_nodes[idx]) + ', ' + node_dict_key_list[out_nodes[idx]].op.name)
+        #for idx in range(len(out_nodes)):
+        #    print('output node: ' + str(out_nodes[idx]) + ', ' + node_dict_key_list[out_nodes[idx]].op.name)
         # convert list to numpy arrary in order to pass to C library
         out_nodes_array = np.asarray(out_nodes, dtype=np.int32)
         in_out_nodes.out_nodes = ctypes.c_void_p(out_nodes_array.ctypes.data)
@@ -586,8 +586,8 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params = Conv2dParams()
     (conv2d_params.stride_h, conv2d_params.stride_w) = strides
     (conv2d_params.dilation_h, conv2d_params.dilation_w) = dilation
-    print("Conv2d padding: ")
-    print(padding)
+    #print("Conv2d padding: ")
+    #print(padding)
     # TODO: to pass all padding values to TIDL and use strideOffsetMethod
     (pad_h_1, pad_w_1, conv2d_params.pad_h, conv2d_params.pad_w) = padding
     #(conv2d_params.pad_h, conv2d_params.pad_w) = padding
@@ -693,7 +693,7 @@ def tidl_import_add(node, params):
     """
 
     if isinstance(node.args[1], relay.expr.Var) or isinstance(node.args[1], tvm.relay.expr.Constant):
-        print('This is a bias_add operator')
+        #print('This is a bias_add operator')
         bias = node.args[1]
         if isinstance(bias, tvm.relay.expr.Constant):
             bias_params = bias.data
@@ -717,7 +717,7 @@ def tidl_import_add(node, params):
         _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
                            ctypes.c_void_p(bias_params_np.ctypes.data))
     elif isinstance(node.args[1], relay.expr.Call):
-        print('This is an add operator')
+        #print('This is an add operator')
         _tidlImportAdd = _tidl_mod.tidlImportAdd
         _tidlImportAdd.argtypes = None
         _tidlImportAdd.restype  = None
@@ -818,7 +818,7 @@ def tidl_import_pooling(node, type):
 
     return
 
-def tidl_import_init(data_layout, input_scale, input_signed, input_dim):
+def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
     r""" Initializing TIDL import
 
     Parameters
@@ -828,24 +828,26 @@ def tidl_import_init(data_layout, input_scale, input_signed, input_dim):
         Scaling factor to convert floating point input to 8-bit quantized input
     input_signed: int
         Signed (1) or unsigned (0) of input
-    input_dim: tuple
-        Input dimension CxHxW
+    input_shape: tuple
+        Input shape (N,C,H,W) or (N,H,W,C)
     Returns
     -------
     True if initialization succeeds or False if initialization fails
     """
 
-    inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
-    config_params = TIDLconfigParams(12,50,inQuantFactor,input_signed,
-                                     input_dim[0], input_dim[1], input_dim[2])
-
     if data_layout == "NCHW":
         layout = b'NCHW'
+        (channel, height, width) = input_shape[1:4]
     elif data_layout == "NHWC":
         layout = b'NHWC'
+        (channel, height, width) = (input_shape[3],input_shape[1],input_shape[2])
     else:
         print('data layout ' + node.attrs.data_layout + ' is not supported')
         return False
+
+    inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
+    config_params = TIDLconfigParams(12,50,inQuantFactor,input_signed,
+                                     channel, height, width)
 
     # Invoking C library call to initialize TIDL import
     _tidlImportInit = _tidl_mod.tidlImportInit
@@ -872,7 +874,7 @@ def tidl_import_node(all_nodes, this_node, params):
     True if import succeeds or False if import fails    
     """
 
-    print('----- Node ' + str(all_nodes[this_node]) + ', ' + this_node.op.name + '-----')
+    #print('----- Node ' + str(all_nodes[this_node]) + ', ' + this_node.op.name + '-----')
 
     status = True
     if this_node.op.name == 'nn.conv2d':
@@ -984,7 +986,7 @@ def relay_ir_import(mod, params):
     return True
 
 
-def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix, data_layout):
+def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph
 
     Parameters
@@ -1003,14 +1005,7 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix, data_layout):
     if num_tensors != 1:
         return None
 
-    if data_layout == 'NHWC':
-        tensor = tensor.transpose(0,3,1,2)
-    elif data_layout == 'NCHW':
-        tensor = tensor
-    else:
-        return None
-
-    return tensor[0,:] # only use 1 batch for calibration
+    return tensor
 
 def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
                      input_scale, input_signed, output_scale, output_signed):
@@ -1087,17 +1082,17 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         out_tensor_name = tidl_subgraph + '_o'
 
         # Obtain input tensor from TVM graph execution
-        input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name, data_layout)
+        input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
         if input_fp is None:
             return False
         # Quantize input tensor into 8-bit integer
-        input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant(input_fp)
-    
+        input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant_flatten(input_fp, data_layout)
+
         # Initialize TIDL import
         #if tidl_import_init(config_params,data_layout) == False:
         if tidl_import_init(data_layout, input_scale, input_signed, input_fp.shape) == False:
             return False
-    
+
         # Scan through all relay.expr.Call nodes and import each to TIDL
         # TODO: change this and _tidlImportOptimize to a function
         all_nodes_tidl = {}
@@ -1116,26 +1111,19 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         if _tidlImportOptimize(folder, subgraph_id) == -1:
             return False
 
-        #_tidlImportOptimize = _tidl_mod.tidlImportOptimize
-        #_tidlImportOptimize.argtype = ctypes.c_int
-        #_tidlImportOptimize.restype = ctypes.c_int
-        #if _tidlImportOptimize(subgraph_id) == -1:
-        #    return False
-
         # Calibrate TIDL for the imported subgraph
-        status, last_layer_q = subgraph_calibration(artifacts_folder, tidl_calib_tool, input_quant_vec, subgraph_id)
+        status, last_layer_q = subgraph_calibration(artifacts_folder, tidl_calib_tool, input_quant_vec, input_signed, subgraph_id)
         if status == False:
             return False
         
         # Calculate scaling factor to convert output tensor to floating point
         # Obtain output tensor from TVM graph execution
-        output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name, data_layout)
+        output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
         if output_fp is None:
             return False
-        #output_quant, output_scale, output_signed = tidl_utils.tensor_quant(output_fp)
         output_signed = int(np.amin(output_fp) < 0)
-        output_scale  = last_layer_q / 255.0
-        print("Output conversion: " + str(last_layer_q) + str(output_scale))
+        output_scale  = last_layer_q / 255.0  # 255 is TIDL implementation specific
+        print("Output conversion: " + str(last_layer_q) + ", " + str(output_scale))
         #print(last_layer_q
         
         # Generate subgraph configuration file
@@ -1183,12 +1171,15 @@ def relay_ir_import_whole_graph(mod, params, subgraph_id):
 
     return True
 
-def subgraph_calibration(artifacts_folder, calib_tool, input_quant_vec, subgraph_id):
+def subgraph_calibration(artifacts_folder, calib_tool, input_quant_vec, input_signed, subgraph_id):
 
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
     calib_raw_image = './calib_raw_data.bin'
-    input_quant_vec.astype('int8').tofile(calib_raw_image);
+    if input_signed == 1:
+        input_quant_vec.astype('int8').tofile(calib_raw_image);
+    else:
+        input_quant_vec.astype('uint8').tofile(calib_raw_image);
 
     # Prepare for calibration
     output_net_file = artifacts_folder + 'tidl_subgraph' + str(subgraph_id) + '_net.bin'

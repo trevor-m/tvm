@@ -18,6 +18,7 @@
 import os
 import sys
 import numpy as np
+import subprocess
 
 import tvm
 import tvm.relay.testing
@@ -30,6 +31,7 @@ from tvm.relay.expr_functor import ExprMutator
 from tvm.contrib import cc
 from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
+import tvm.relay.op.contrib.tidl
 
 from tidl_tools import tidl
 from tidl_tools import tidl_utils
@@ -132,6 +134,8 @@ def test_extern_tidl():
 #    #============= Generate subgraph boundary tensors ==============
 #    input_tensors, output_tensors = subgraph_tensors_generate(mod2, params2)
 
+    target = "llvm -target=armv7l-linux-gnueabihf"
+
     #============= Constructing a simple graph ==============
     dtype = 'float32'
     data_layout = 'NCHW'
@@ -177,7 +181,6 @@ def test_extern_tidl():
     #============= Build the graph to run on ARM =============
     print('Build the graph to run on ARM')
     with relay.build_config(opt_level=3):
-        target = "llvm -target=armv7l-linux-gnueabihf"
         graph, lib, params = relay.build_module.build(mod1, target=target, params=params0)
 
     artifacts_folder = "./artifacts_arm/"
@@ -253,7 +256,6 @@ def test_extern_tidl():
     #======================== Import the graph to TIDL ========================
     mod2 = mod_subgraph_tidl
     #mod2 = mod_whole_graph_tidl
-    artifacts_folder = "./artifacts/"
     if tidl.import_relay_ir(mod2, params0, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder) == True:
         print('Heterogeneous execution with TIDL.')
         graph, lib, params = relay.build_module.build(mod2, target=target, params=params0)
@@ -278,117 +280,131 @@ def test_extern_tidl():
 import tensorflow as tf
 from tvm.relay.testing import tf as tf_testing
 
-def test_extern_tidl_mobilenet():
-    dtype = 'float32'
-    input_shape    = (1, 3, 224, 224) # NCHW
-    tidl_input_dim = (input_shape[2],input_shape[3],input_shape[1]) # HxWxC
-    #============= Load MobileNetV1 model ==============
-#    mod, params_mod = relay.testing.mobilenet.get_workload(batch_size=1, dtype='float32')
+def create_relay_graph(model, input_node, input_shape, layout):
 
-    model      = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
-    out_node   = 'MobilenetV1/Predictions/Reshape_1'
-    #model      = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
-    #out_node   = 'MobilenetV2/Predictions/Reshape_1'
-    input_node = "input"
-    model_input_shape = (224,224,3)
-    data_shape_input = list(model_input_shape)
-    data_shape_input.insert(0,1)
-    data_shape_input = tuple(data_shape_input) # Prepend batch size
-    print(data_shape_input)
-
-    layout = None
-    with tf.gfile.GFile(model, 'rb') as f:
-        # Import tensorflow graph definition to relay frontend.
-        graph_def = tf.GraphDef()
-        graph_def.ParseFromString(f.read())
-        graph = tf.import_graph_def(graph_def, name='')
-        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
-        
-        # Add shapes to the graph.
-        with tf.Session() as sess:
-            graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
-
-        shape_dict = {input_node : data_shape_input}
-        print("Inut node shape dict:" + str(shape_dict))
-        mod, params_mod = relay.frontend.from_tensorflow(graph_def,
-                                                         layout=layout,
-                                                         shape=shape_dict, 
-                                                         outputs=None)
-        print("Tensorflow protobuf imported to relay frontend.")
-   
-    print('-------- Original MobileNetV1 model --------')
-    print(mod.astext(show_meta_data=False))
-
-    #============= Build the graph to run on ARM =============
-    print('Build the graph to run on ARM')
-    with relay.build_config(opt_level=3):
-        target = "llvm -target=armv7l-linux-gnueabihf"
-        graph, lib, params = relay.build_module.build(mod, target=target, params=params_mod)
-
-    #artifacts_folder = "./artifacts_arm/"
-    #path_lib    = artifacts_folder + "deploy_lib.so"
-    #path_graph  = artifacts_folder + "deploy_graph.json"
-    #lib.export_library(path_lib, cc=arm_gcc)
-    #path_params = artifacts_folder + "deploy_param.params"
-    lib.export_library('./mnet1_arm.tar')
-
-    # TIDL annotation pass:
-    #    - mark each operator either supported (True) or unsupported (False) by TIDL
-    op_annotations = tidl.annotation(mod)
+    if model == "MobileNetV1" or model == "MobileNetV2":
+        if model == "MobileNetV1":
+            model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
+            out_node = 'MobilenetV1/Predictions/Reshape_1'
+        else:
+            model    = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
+            out_node = 'MobilenetV2/Predictions/Reshape_1'
+        #if layout == "NCHW":
+        #    input_shape = (input_shape[0],input_shape[2],input_shape[3],input_shape[1])
+        with tf.gfile.GFile(model, 'rb') as f:
+            # Import tensorflow graph definition to relay frontend.
+            graph_def = tf.GraphDef()
+            graph_def.ParseFromString(f.read())
+            graph = tf.import_graph_def(graph_def, name='')
+            graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+            
+            # Add shapes to the graph.
+            with tf.Session() as sess:
+                graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
     
-    # Check if whole graph can offload to TIDL (no graph partitioning for now)
-    full_graph_tidl = True
-    for node in op_annotations:
-        print(f'Operator {node.op.name}: {op_annotations[node]}')
-        if op_annotations[node] == False:
-            full_graph_tidl= False
-            break
+            shape_dict = {input_node : input_shape}
+            print("Inut node shape dict:" + str(shape_dict))
+            mod, params = relay.frontend.from_tensorflow(graph_def,
+                                                         layout = None,  # default: NHWC
+                                                         shape  = shape_dict, 
+                                                         outputs= None)
+            mod = relay.transform.RemoveUnusedFunctions()(mod)
+            print("Tensorflow model imported to Relay IR.")
+    
+    return mod, params
 
-    if full_graph_tidl == True:
-        print("Try to import this model to TIDL")
-        #============= Annotating the graph to run on TIDL ==============
-        mod['main'] = bind_params_by_name(mod['main'], params_mod)
-        # whole graph offload to TIDL
-        mod_tidl = tvm.IRModule()
-        mod_tidl['main'] = WholeGraphAnnotator('tidl').visit(mod['main'])
-        print('---------- Whole graph annotated ----------')
-        print(mod_tidl.astext(show_meta_data=False))
-        mod_tidl = relay.transform.PartitionGraph()(mod_tidl)
-        print('---------- Whole graph annotated and partitioned ----------')
-        print(mod_tidl.astext(show_meta_data=False))
 
-        #if tidl.relay_ir_import_whole_graph(mod, params_mod, 0) == False:
-        if tidl.relay_ir_import(mod_tidl, params_mod) == False:
-            print('Importing this model to TIDL failed!')
-            model_imported_to_TIDL = False
-        else:
-            # TIDL calibration pass:
-            subgraph_id = 0
-            calibration_image = './tidl_tools/airshow.jpg'
-            raw_image = 'raw_calib_image.bin'
-            tidl_utils.tf_image_preprocess(calibration_image, raw_image, tidl_input_dim)
-            tidl_calib_status, last_node_dim = tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
+def generate_subgraph_tensors(mod, params, input_node, input_data):
+    """
+    """
 
-            if tidl_calib_status == False:
-                print('TIDL calibration for this model failed!')
-                model_imported_to_TIDL = False
-            else:
-                print('TIDL Calibration for this model succeeded!')
-                model_imported_to_TIDL = True
-    else:
-        print("Run this model on ARM")
+    # TODO: find layout from mod
+    mod_layout = "NHWC"   # Tensorflow
 
-    # Compile the graph (with or without TIDL offload)
+    # From partitioned module, create a "calibration model" which can be
+    # executed on CPU and will give additional outputs for boundary tensors.
+    mod_tvm = relay.transform.InferType()(mod)
+    mod_tvm = relay.transform.Inline()(mod_tvm)
+    my_mutator = tidl.CalibrationGraphMutator("tidl")
+    mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
+    #print("Calibration module:", mod_tvm)
+    print("Input map:", my_mutator.name_map)
+
+    # Build and execute calibration graph to get outputs
     with relay.build_config(opt_level=3):
-        target = "llvm -target=armv7l-linux-gnueabihf"
-        if full_graph_tidl == True and model_imported_to_TIDL == True:
-            #graph, lib, params = relay.build_module.build(mod_tidl, target=target, params=params_mod)
-            graph, lib, params = relay.build_module.build(mod_tidl, target=target)
-        else:
-            graph, lib, params = relay.build_module.build(mod, target=target, params=params_mod)
-        print(lib)
+        graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod.set_input(input_node, input_data)
+    mod.set_input(**params)
+    mod.run()
+    #mod.run(data=input_data, weight1=params_w1, weight2=params_w2)
 
-    artifacts_folder = "./artifacts/"
+    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
+    np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
+
+    # We now have subgraph inputs
+    # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
+    subgraph_tensors = {}
+    for i in range(len(results)):
+        if i in my_mutator.name_map:
+            subgraph_tensors[my_mutator.name_map[i]]=results[i]
+            #print("Subgraph input: ", my_mutator.name_map[i], " tensor: ", results[i])
+            file_name = my_mutator.name_map[i] + ".txt"
+            np.savetxt(file_name, results[i].flatten(), fmt='%10.5f')
+
+    for key, value in subgraph_tensors.items():
+        print("Subgraph tensor: ", key, value.shape)
+
+    return subgraph_tensors
+
+def test_extern_tidl_mobilenet():
+    target = "llvm -target=armv7l-linux-gnueabihf"
+    dtype = "float32"
+    data_layout = "NHWC"
+    input_shape = (1, 224, 224, 3)
+    x = np.load('./tidl_tools/dog.npy')  # "NCHW"
+    x = x.transpose(0,2,3,1)  # TF uses "NHWC" layout
+    if x.shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    # Normalize input data to (-1,1)
+    input_data = x/np.amax(np.abs(x))
+    input_node = "input"
+
+    #============= Create a Relay graph for MobileNet model ==============
+    mod0, params0 = create_relay_graph(model="MobileNetV2",
+                                       input_node  = input_node,
+                                       input_shape = input_shape,
+                                       layout      = data_layout)
+    #print('-------- Original MobileNetV1 model --------')
+    #print(mod.astext(show_meta_data=False))
+
+    #============= Annotate the graph ==============
+    # Looks at annotated ops and marks them in the graph with compiler.begin 
+    # and compiler.end.
+    # Merges annotated regions together that use the same external target, 
+    # and combines marked regions for each target
+    mod0['main'] = bind_params_by_name(mod0['main'], params0)
+    mod1 = transform.AnnotateTarget("tidl")(mod0)
+    mod1 = transform.MergeCompilerRegions()(mod1)
+    #print(mod1.astext(show_meta_data=False))
+
+    #============= Partition the graph ==============
+    mod2 = transform.PartitionGraph()(mod1)
+    print(mod2.astext(show_meta_data=False))
+
+    #============= Generate subgraph boundary tensors ==============
+    subgraph_tensors = generate_subgraph_tensors(mod2, params0, input_node, input_data)
+
+    #======================== Import the graph to TIDL ========================
+    if tidl.import_relay_ir(mod2, params0, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder) == True:
+        print('Heterogeneous execution with TIDL.')
+        graph, lib, params = relay.build_module.build(mod2, target=target, params=params0)
+    else:
+        print("Full graph compilation with LLVM.")
+        # Future optimization: if not all subgraphs failed with TIDL import, re-partition
+        # the graph to have only TIDL subgraphs with successful TIDL import. 
+        graph, lib, params = relay.build_module.build(mod0, target=target, params=params0)
+
     path_lib    = artifacts_folder + "deploy_lib.so"
     path_graph  = artifacts_folder + "deploy_graph.json"
     #lib.save(path_lib) # for whole graph execute on TIDL
@@ -400,6 +416,7 @@ def test_extern_tidl_mobilenet():
     with open(path_params, "wb") as fo:
       fo.write(relay.save_param_dict(params))
 
+
 if __name__ == '__main__':
     if os.getenv("TIDL_PLSDK") is None:
       plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
@@ -409,7 +426,10 @@ if __name__ == '__main__':
     print("PLSDK DEVKIT path set to: " + plsdk_devkit)
     tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
     arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+    artifacts_folder = "./artifacts/"
+    filelist = [ f for f in os.listdir(artifacts_folder)]
+    for file in filelist:
+        os.remove(os.path.join(artifacts_folder, file))
 
-    #test_extern_tidl_prototype()
-    #test_extern_tidl_mobilenet()
-    test_extern_tidl()
+    test_extern_tidl_mobilenet()
+    #test_extern_tidl()

@@ -708,6 +708,52 @@ int32_t tidl_removeMergedLayersFromNet(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure
   return TIDL_IMPORT_NO_ERR;
 }
 
+int32_t tidl_convertIpLayerInputShape(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t layerIndex)
+{
+  int32_t i1, i2, i3, i4;
+  for (i1 = 0; i1 < layerIndex; i1++)
+  {
+    if (pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType == TIDL_InnerProductLayer)
+    {
+      sTIDL_LayerPC_t *TIDLPCLayers = &pOrgTIDLNetStructure->TIDLPCLayers[i1];
+      int32_t  inIdx = tidl_getInLayer(pOrgTIDLNetStructure, layerIndex, pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0].dataId);
+      if (inIdx == -1)
+      {
+        printf("Error in converting InnerProduct layer input shape: could not find input layer: %s!\n",
+               pOrgTIDLNetStructure->TIDLPCLayers[i1].inDataNames[0]);
+        return TIDL_IMPORT_ERR_INPUT_LAYER_NOT_FOUND;
+      }
+      sTIDL_LayerPC_t *TIDLPCLayersIn = &pOrgTIDLNetStructure->TIDLPCLayers[inIdx];
+
+      if ((TIDLPCLayersIn->layerType == TIDL_PoolingLayer) && (TIDLPCLayersIn->layerParams.poolParams.poolingType == TIDL_AveragePooling) && (TIDLPCLayersIn->outConsumerCnt[0] == 1))
+      {
+        if (TIDLPCLayersIn->layerType == TIDL_PoolingLayer)
+        {
+          TIDLPCLayersIn->layerParams.poolParams.kernelW = 0;
+          TIDLPCLayersIn->layerParams.poolParams.kernelH = 0;
+        }
+
+        TIDLPCLayersIn->outData[0].dimValues[3] = TIDLPCLayersIn->outData[0].dimValues[1] * TIDLPCLayersIn->outData[0].dimValues[2] * TIDLPCLayersIn->outData[0].dimValues[3];
+        TIDLPCLayers->inData[0].dimValues[3] = TIDLPCLayers->inData[0].dimValues[1] * TIDLPCLayers->inData[0].dimValues[2] * TIDLPCLayers->inData[0].dimValues[3];
+        TIDLPCLayersIn->outData[0].dimValues[1] = 1;
+        TIDLPCLayersIn->outData[0].dimValues[2] = 1;
+        TIDLPCLayers->inData[0].dimValues[1]    = 1;
+        TIDLPCLayers->inData[0].dimValues[2]    = 1;
+
+      }
+      else
+      {
+        if ((TIDLPCLayersIn->outData[0].dimValues[1] != 1) || (TIDLPCLayersIn->outData[0].dimValues[2] != 1))
+        {
+          printf("TIDL limitation: Input of TIDL_InnerProductLayer layer needs to be flattened. Please add Flatten layer to import this model. \n");
+          return TIDL_IMPORT_ERR_IP_INPUT_NOT_FLATTENED;
+        }
+      }
+    }
+  }
+
+  return TIDL_IMPORT_NO_ERR;
+}
 
 int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t layerIndex, sTIDL_outRehapeMap_t * sTIDL_outRehapeTable)
 {
@@ -718,6 +764,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
     {
       sTIDL_LayerPC_t *TIDLPCLayers = &pOrgTIDLNetStructure->TIDLPCLayers[i1];
       sTIDL_ConvParams_t *convParams = &pOrgTIDLNetStructure->TIDLPCLayers[i1].layerParams.convParams;
+      printf("Checking if any Conv2d layer can be converted to Inner Product layer...\n");
       if ((convParams->kernelW == 1) && (convParams->kernelH == 1) && (TIDLPCLayers->inData[0].dimValues[2] == 1) && (TIDLPCLayers->inData[0].dimValues[3] == 1))
       {
         int32_t  inIdx = tidl_getInLayer(pOrgTIDLNetStructure, layerIndex, pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0].dataId);
@@ -728,6 +775,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
           return TIDL_IMPORT_ERR_INPUT_LAYER_NOT_FOUND;
         }
         sTIDL_LayerPC_t *TIDLPCLayersIn = &pOrgTIDLNetStructure->TIDLPCLayers[inIdx];
+        printf("Layer %d meets criteria.\n");
 
         if ((TIDLPCLayersIn->layerType == TIDL_PoolingLayer) && (TIDLPCLayersIn->layerParams.poolParams.poolingType == TIDL_AveragePooling) && (TIDLPCLayersIn->outConsumerCnt[0] == 1))
         {
@@ -737,6 +785,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
           {
             TIDLPCLayersOut = &pOrgTIDLNetStructure->TIDLPCLayers[outIdx];
           }
+          printf("outIdx is %d, out layer type is %d\n", outIdx, TIDLPCLayersOut->layerType);
           if ((outIdx == -1) || (TIDLPCLayersOut->layerType == TIDL_InnerProductLayer) ||
             (TIDLPCLayersOut->layerType == TIDL_SoftMaxLayer) || (TIDLPCLayersOut->layerType == TIDL_FlattenLayer) || (TIDLPCLayersOut->layerType == TIDL_ReshapeLayer))
           {
@@ -793,6 +842,7 @@ int32_t tidl_mergeFlattenLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_
         TIDLPCLayers->outConsumerCnt[0] = pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0];
         pOrgTIDLNetStructure->TIDLPCLayers[i1].numInBufs = -1;
         pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs = -1;
+        printf("Flatten layer merged.\n");
       }
     }
   }

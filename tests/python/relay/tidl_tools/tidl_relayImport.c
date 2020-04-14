@@ -959,19 +959,29 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
   tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
 
-  importStatus = tidl_convertConv2DToIpLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
-  if(importStatus != TIDL_IMPORT_NO_ERR)
-  {
-    printf("\n Import error: Conv2D layer cannot be converted into Inner Product layer.\n");
-    numErrs++;
-  }
+  //printf("Updating out data shapes.\n");
+  //tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
+  //printf("Out data shapes updated.\n");
 
+  //printf("Converting Conv2D to IP layer\n");
+  //importStatus = tidl_convertConv2DToIpLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
+  //if(importStatus != TIDL_IMPORT_NO_ERR)
+  //{
+  //  printf("\n Import error: Conv2D layer cannot be converted into Inner Product layer.\n");
+  //  numErrs++;
+  //}
+
+  printf("Merging flatten layer.\n");  
   importStatus = tidl_mergeFlattenLayer(&orgTIDLNetStructure, tidlImpState.layerIndex);
   if(importStatus != TIDL_IMPORT_NO_ERR)
   {
     printf("\n Import error: Flatten layer cannot be merged.\n");
     numErrs++;
   }
+
+  printf("Updating out data shapes.\n");
+  tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
+  printf("Out data shapes updated.\n");
 
   importStatus = tidl_mergeReshapeLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
   if(importStatus != TIDL_IMPORT_NO_ERR)
@@ -983,6 +993,8 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   tidl_removeMergedLayersFromNet(&orgTIDLNetStructure, &tempTIDLNetStructure, tidlImpState.layerIndex);
   tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
   tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
+
+  importStatus = tidl_convertIpLayerInputShape(&orgTIDLNetStructure, tidlImpState.layerIndex);
 
   tidl_importEltWiseParams(&orgTIDLNetStructure, tidlImpState.layerIndex);
 

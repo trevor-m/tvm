@@ -128,13 +128,20 @@ def float_nd_to_int8_1d(input):
 
     return output, scale
 
-def tensor_quant(input_tensor):
+def tensor_quant_flatten(input_tensor, data_layout):
     r""" Convert float32 n-d array to int8 or uint8 1-d array
     Parameters
     ----------
-    input: float32 array in "CxHxW" format
+    input: float32 array 
+    data_layout: "NCHW" or "NHWC"
     output: 1 dimension int8 or uint8 array
     """
+
+    # only use 1 batch for calibration
+    input_tensor = input_tensor[0,:]
+    # change layout to CxHxW to use numpy.flattern to change to 1-d array
+    if data_layout == "NHWC":
+        input_tensor = input_tensor.transpose(2,0,1)
 
     if np.amin(input_tensor) >= 0:
         # quantize to Uint8
@@ -152,6 +159,6 @@ def tensor_quant(input_tensor):
     y = np.multiply(input_tensor, scale)
     z = np.rint(y)
     z = np.clip(z, quant_min, quant_max)
-    output = z.flatten()
+    output = z.flatten()   # works only if z is in "CxHxW" format
 
     return output, scale, sign
