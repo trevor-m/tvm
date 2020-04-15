@@ -32,7 +32,11 @@ download_testdata.__test__ = False
 from tvm.relay.testing.darknet import LAYERTYPE
 from tvm.relay.testing.darknet import __darknetffi__
 from tvm.relay.frontend.darknet import ACTIVATION
+import mxnet as mx
+from gluoncv import model_zoo, data, utils
+from tidl_prune_subgraphs_example_v2 import PruneSubgraphs
 
+# Darknet
 REPO_URL = 'https://github.com/dmlc/web-data/blob/master/darknet/'
 
 DARKNET_LIB = 'libdarknet_mac2.0.so'
@@ -53,6 +57,12 @@ LIB = __darknetffi__.dlopen(download_testdata(DARKNETLIB_URL, DARKNET_LIB, modul
 DARKNET_TEST_IMAGE_NAME = 'dog.jpg'
 DARKNET_TEST_IMAGE_URL = REPO_URL + 'data/' + DARKNET_TEST_IMAGE_NAME +'?raw=true'
 DARKNET_TEST_IMAGE_PATH = download_testdata(DARKNET_TEST_IMAGE_URL, DARKNET_TEST_IMAGE_NAME, module='data')
+
+# MxNet
+im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                             'gluoncv/detection/street_small.jpg?raw=true',
+                             'street_small.jpg', module='data')
+
 
 def test_tidl_annotation():
 
@@ -243,7 +253,61 @@ def test_tidl_yolo():
     print("---------- Partioned Graph ----------")
     mod = transform.PartitionGraph()(mod)
     print(mod.astext(show_meta_data=False))
+    print("---------- Pruned Graph ----------")
+    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4)
+    print(mod.astext(show_meta_data=False))
 
+def test_mxnet_mobilenet_ssd():
+
+    #model = 'ssd_512_mobilenet1.0_coco'
+    model = 'ssd_512_mobilenet1.0_voc'
+    image_size = 512
+
+    input_name = 'data'
+    input_shape = (1, 3, image_size, image_size)
+    dtype = 'float32'
+    x, img = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
+    block = model_zoo.get_model(model, pretrained=True)
+
+    block.hybridize()
+    block.forward(x)
+    block.export('temp')
+    #with open('temp-symbol.json') as f:
+    #    model_json = json.load(f)
+    #model_json["heads"] = [[700, 0, 0]]
+    #with open('temp-symbol.json', 'w') as json_file:
+    #    json.dump(model_json, json_file)
+
+    model_json = mx.symbol.load('temp-symbol.json')
+    save_dict = mx.ndarray.load('temp-0000.params')
+    arg_params = {}
+    aux_params = {}
+    for k, v in save_dict.items():
+        tp, name = k.split(':', 1)
+        if tp == 'arg':
+            arg_params[name] = v
+        elif tp == 'aux':
+            aux_params[name] = v
+    mod, params = relay.frontend.from_mxnet(model_json, {input_name: input_shape}, arg_params=arg_params, aux_params=aux_params)
+
+    print('---------- Original Graph ----------')
+    mod = relay.transform.RemoveUnusedFunctions()(mod)
+    print(mod.astext(show_meta_data=False))
+    print('---------- Merge Composite Functions ----------')
+    mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod) #Merge sequence of ops into composite functions/ops
+    print(mod.astext(show_meta_data=False))
+    print("---------- Annotated Graph ----------")
+    mod = transform.AnnotateTarget("tidl")(mod) #Looks at annotated ops and marks them in the graph with compiler.begin and compiler.end
+    print(mod.astext(show_meta_data=False))
+    print("---------- Merge Compiler Regions ----------")
+    mod = transform.MergeCompilerRegions()(mod) #Merge annotated regions together that use the same external target, combines marked regions for each target
+    print(mod.astext(show_meta_data=False))
+    print("---------- Partioned Graph ----------")
+    mod = transform.PartitionGraph()(mod)
+    print(mod.astext(show_meta_data=False))
+    print("---------- Pruned Graph ----------")
+    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4)
+    print(mod.astext(show_meta_data=False))
 
 def test_tidl_mobilenet_no_composite():
 
@@ -282,7 +346,8 @@ def test_tidl_mobilenet_no_composite():
             print(mod4.astext(show_meta_data=False))
 
 if __name__ == '__main__':
-    test_tidl_annotation()
+    #test_tidl_annotation()
     test_tidl_mobilenet()
     #test_tidl_mobilenet_no_composite()
     test_tidl_yolo()
+    test_mxnet_mobilenet_ssd()
