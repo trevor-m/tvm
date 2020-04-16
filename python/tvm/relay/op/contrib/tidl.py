@@ -211,8 +211,7 @@ def _avg_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides = get_const_tuple(attrs.strides)
     supported = (pool_size[0] <= 9 and pool_size[1] <= 9 and strides[0] <= 3 and strides[1] <=2)
-    #return supported
-    return False  # manually force AvgPool to be unsupported to test mobilenet heterogeneous
+    return supported
 
 @reg.register("nn.batch_flatten", "target.tidl")
 def _batch_flatten_fn(attrs, args):
