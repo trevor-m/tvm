@@ -113,9 +113,13 @@
 #ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
 #define TIDL_IMPORT_DBG_PRINT(dbg_msg) printf(dbg_msg)
 #define TIDL_IMPORT_DBG_PRINT2(dbg_msg, var) printf(dbg_msg, var)
+#define TIDL_IMPORT_DBG_PRINT3(dbg_msg, var1, var2) printf(dbg_msg, var1, var2)
+#define TIDL_IMPORT_DBG_PRINT4(dbg_msg, var1, var2, var3) printf(dbg_msg, var1, var2, var3)
 #else
 #define TIDL_IMPORT_DBG_PRINT(dbg_msg)
 #define TIDL_IMPORT_DBG_PRINT2(dbg_msg, var)
+#define TIDL_IMPORT_DBG_PRINT3(dbg_msg, var1, var2)
+#define TIDL_IMPORT_DBG_PRINT4(dbg_msg, var1, var2, var3)
 #endif
 
 

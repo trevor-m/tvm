@@ -360,14 +360,3 @@ def _softmax_whitelist_fn(attrs, args):
 def _split_whitelist_fn(attrs, args):
     supported = True
     return supported
-
-#TODO: Remove these ops after composite functions work with mergecompilerregions
-@reg.register("squeeze", "target.tidl")
-def _softmax_whitelist_fn(attrs, args):
-    supported = (attrs.axis != 2)
-    return supported
-
-@reg.register("reshape", "target.tidl")
-def _split_whitelist_fn(attrs, args):
-    supported = True
-    return supported

@@ -120,7 +120,7 @@ int32_t tidl_isAllInsAvailable(sTIDL_LayerPC_t    *orgLayer,
       {
         if (strcmp((const char *)ptempTIDLNetStructure->TIDLPCLayers[i1].outDataNames[i2], (const char *)orgLayer->inDataNames[i0]) == 0)
         {
-          printf("i1 = %d, i2 = %d, i0 = %d\n", i1, i2, i0);
+          //printf("i1 = %d, i2 = %d, i0 = %d\n", i1, i2, i0);
           availableIns++;
         }
       }
@@ -131,7 +131,7 @@ int32_t tidl_isAllInsAvailable(sTIDL_LayerPC_t    *orgLayer,
 
   if ((orgLayer->numInBufs <= availableIns) || (orgLayer->numInBufs == -1))
   {
-    printf("numInBufs: %d, available: %d\n", orgLayer->numInBufs, availableIns);
+    //printf("numInBufs: %d, available: %d\n", orgLayer->numInBufs, availableIns);
     status = 1;
   }
   return(status);
@@ -151,12 +151,12 @@ int32_t tidl_sortLayersInProcOrder(sTIDL_OrgNetwork_t *pOrgTIDLNetStructure,
   status = TIDL_IMPORT_NO_ERR;
 
   /* Sort layers in processing order according to inputs and outputs of each layer */
-  printf("Sorting layers in processing order...\n");
-  printf("number of layers: %d\n", numLayers);
-  //for(i=0; i<numLayers; i++)
-  //{
-  //  printf("Layer %d, numInBufs = %d\n", i, orgTIDLNetStructure.TIDLPCLayers[i].numInBufs);
-  //}
+  TIDL_IMPORT_DBG_PRINT("Sorting layers in processing order...\n");
+  TIDL_IMPORT_DBG_PRINT2("number of layers: %d\n", numLayers);
+  for(i=0; i<numLayers; i++)
+  {
+    TIDL_IMPORT_DBG_PRINT3("Layer %d, numInBufs = %d\n", i, orgTIDLNetStructure.TIDLPCLayers[i].numInBufs);
+  }
 
   newNetIdx = 0;
   while (newNetIdx < numLayers)
@@ -167,11 +167,11 @@ int32_t tidl_sortLayersInProcOrder(sTIDL_OrgNetwork_t *pOrgTIDLNetStructure,
     {
       if (isAddedToList[i0] == 0)
       {
-        printf("Number of inBuffs: %d\n", pOrgTIDLNetStructure->TIDLPCLayers[i0].numInBufs);
+        TIDL_IMPORT_DBG_PRINT2("Number of inBuffs: %d\n", pOrgTIDLNetStructure->TIDLPCLayers[i0].numInBufs);
         if (tidl_isAllInsAvailable(&pOrgTIDLNetStructure->TIDLPCLayers[i0], 
                                    ptempTIDLNetStructure, newNetIdx))
         {
-          printf("newNetIdx = %d, i0 = %d\n", newNetIdx, i0);
+          TIDL_IMPORT_DBG_PRINT3("newNetIdx = %d, i0 = %d\n", newNetIdx, i0);
           ptempTIDLNetStructure->TIDLPCLayers[newNetIdx] = pOrgTIDLNetStructure->TIDLPCLayers[i0];
           newNetIdx++;
           isAddedToList[i0] = 1;
@@ -191,7 +191,7 @@ int32_t tidl_sortLayersInProcOrder(sTIDL_OrgNetwork_t *pOrgTIDLNetStructure,
 
   my_free(isAddedToList);
   ptempTIDLNetStructure->numLayers = newNetIdx;
-  printf("Number of layers after sorting is: %d\n", newNetIdx);
+  TIDL_IMPORT_DBG_PRINT2("Number of layers after sorting is: %d\n", newNetIdx);
 
   // save network structure after sorting
   memset((void *)pOrgTIDLNetStructure, 0, sizeof(sTIDL_OrgNetwork_t));
@@ -213,7 +213,7 @@ int32_t tidl_fillInDataLayerShape(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, tid
   {
     if ((pOrgTIDLNetStructure->TIDLPCLayers[i].layerType == TIDL_DataLayer) && (pOrgTIDLNetStructure->TIDLPCLayers[i].numOutBufs > 0))
     {
-      printf("Input data layer found at layer %d\n", i);
+      TIDL_IMPORT_DBG_PRINT2("Input data layer found at layer %d\n", i);
       pOrgTIDLNetStructure->TIDLPCLayers[i].outData[0].dimValues[0] = 1;
       if (overWritefirstNode)
       {
@@ -253,7 +253,7 @@ int32_t tidl_sortDataIds(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t laye
   int32_t currId = 0;
   int32_t oldId = 0;
 
-  printf("Sorting data ids ...\n");
+  TIDL_IMPORT_DBG_PRINT("Sorting data ids ...\n");
   for (i1 = 0; i1 < layerIndex; i1++)
   {
     for (i2 = 0; i2 < pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs; i2++)
@@ -294,7 +294,7 @@ int32_t tidl_updateOutDataShape(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure,
   int32_t i1, i2, i3, i4;
   int32_t status = 0;
 
-  printf("Updating out data shapes ...\n");
+  TIDL_IMPORT_DBG_PRINT("Updating out data shapes ...\n");
 
   for (i1 = startIdx; i1 < layerIndex; i1++)
   {
@@ -310,8 +310,8 @@ int32_t tidl_updateOutDataShape(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure,
           {
             if (pOrgTIDLNetStructure->TIDLPCLayers[i3].inData[i4].dataId == pOrgTIDLNetStructure->TIDLPCLayers[i1].outData[i2].dataId)
             {
-              printf("Update out data shape for %s: TIDLPCLayers[%d].inData[%d] = TIDLPCLayers[%d].outData[%d]\n", 
-                     TIDL_LayerString[pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType], i3, i4, i1, i2);
+              //printf("Update out data shape for %s: TIDLPCLayers[%d].inData[%d] = TIDLPCLayers[%d].outData[%d]\n", 
+              //       TIDL_LayerString[pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType], i3, i4, i1, i2);
               pOrgTIDLNetStructure->TIDLPCLayers[i3].inData[i4] = pOrgTIDLNetStructure->TIDLPCLayers[i1].outData[i2];
             }
           }
@@ -594,6 +594,7 @@ int32_t tidl_mergePadLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t la
       padW = padW < padL ? padL : padW;
       padH = padH < padT ? padT : padH;
 
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
       printf("Merging padding with conv2d: %d, %d, %d, %d, %d, %d, %d, %d\n", 
              pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0],
              TIDLPCLayersIn->outConsumerCnt[0],
@@ -608,6 +609,7 @@ int32_t tidl_mergePadLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t la
       }
       printf("\n");
       printf("Out consumer counts: %d, %d\n", pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0], TIDLPCLayersIn->outConsumerCnt[0]);
+#endif
       if ((TIDLPCLayersOut->layerType == TIDL_ConvolutionLayer) &&
         (pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0] == 1) &&
         /*(TIDLPCLayersIn->outConsumerCnt[0] == 1) &&
@@ -764,7 +766,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
     {
       sTIDL_LayerPC_t *TIDLPCLayers = &pOrgTIDLNetStructure->TIDLPCLayers[i1];
       sTIDL_ConvParams_t *convParams = &pOrgTIDLNetStructure->TIDLPCLayers[i1].layerParams.convParams;
-      printf("Checking if any Conv2d layer can be converted to Inner Product layer...\n");
+      TIDL_IMPORT_DBG_PRINT("Checking if any Conv2d layer can be converted to Inner Product layer...\n");
       if ((convParams->kernelW == 1) && (convParams->kernelH == 1) && (TIDLPCLayers->inData[0].dimValues[2] == 1) && (TIDLPCLayers->inData[0].dimValues[3] == 1))
       {
         int32_t  inIdx = tidl_getInLayer(pOrgTIDLNetStructure, layerIndex, pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0].dataId);
@@ -775,7 +777,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
           return TIDL_IMPORT_ERR_INPUT_LAYER_NOT_FOUND;
         }
         sTIDL_LayerPC_t *TIDLPCLayersIn = &pOrgTIDLNetStructure->TIDLPCLayers[inIdx];
-        printf("Layer %d meets criteria.\n");
+        TIDL_IMPORT_DBG_PRINT2("Layer %d meets criteria.\n", i1);
 
         if ((TIDLPCLayersIn->layerType == TIDL_PoolingLayer) && (TIDLPCLayersIn->layerParams.poolParams.poolingType == TIDL_AveragePooling) && (TIDLPCLayersIn->outConsumerCnt[0] == 1))
         {
@@ -785,7 +787,7 @@ int32_t tidl_convertConv2DToIpLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, i
           {
             TIDLPCLayersOut = &pOrgTIDLNetStructure->TIDLPCLayers[outIdx];
           }
-          printf("outIdx is %d, out layer type is %d\n", outIdx, TIDLPCLayersOut->layerType);
+          TIDL_IMPORT_DBG_PRINT3("outIdx is %d, out layer type is %d\n", outIdx, TIDLPCLayersOut->layerType);
           if ((outIdx == -1) || (TIDLPCLayersOut->layerType == TIDL_InnerProductLayer) ||
             (TIDLPCLayersOut->layerType == TIDL_SoftMaxLayer) || (TIDLPCLayersOut->layerType == TIDL_FlattenLayer) || (TIDLPCLayersOut->layerType == TIDL_ReshapeLayer))
           {
@@ -842,7 +844,7 @@ int32_t tidl_mergeFlattenLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_
         TIDLPCLayers->outConsumerCnt[0] = pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0];
         pOrgTIDLNetStructure->TIDLPCLayers[i1].numInBufs = -1;
         pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs = -1;
-        printf("Flatten layer merged.\n");
+        TIDL_IMPORT_DBG_PRINT("Flatten layer merged.\n");
       }
     }
   }
@@ -859,7 +861,7 @@ int32_t tidl_mergeReshapeLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_
     if (pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType == TIDL_ReshapeLayer)
     {
       int32_t  idx = tidl_getInLayer(pOrgTIDLNetStructure, layerIndex, pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0].dataId);
-      printf("Merging Reshape layer:\n");
+      TIDL_IMPORT_DBG_PRINT("Merging Reshape layer:\n");
       if (idx == -1)
       {
         printf("Error in merging Reshape layer: could not find input layer: %s!\n",
@@ -893,11 +895,11 @@ int32_t tidl_mergeReshapeLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_
           TIDLPCLayersOut->inData[0] = TIDLPCLayers->outData[0];
           tidl_updateOutDataShape(pOrgTIDLNetStructure, outIdx, layerIndex, sTIDL_outRehapeTable);
         }
-        printf("Reshape layer merged.\n");
+        TIDL_IMPORT_DBG_PRINT("Reshape layer merged.\n");
       }
       else if (pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs == -1) 
       {
-        printf("This reshape layer is the last layer, simply remove it.\n");
+        TIDL_IMPORT_DBG_PRINT("This reshape layer is the last layer, simply remove it.\n");
         pOrgTIDLNetStructure->TIDLPCLayers[i1].numInBufs = -1;
       }
       else
@@ -1006,15 +1008,15 @@ int32_t TIDL_QuantizeUnsignedMax(uint8_t * params, float * data, int32_t dataSiz
     }
   }
   float absRange = fabs(max - min);
-
   float quantPrec = ((1.0*(1 << numBits)) / absRange);
   float pData;
   int32_t param;
-
   int32_t offset;
-  
+
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
   printf("max = %e, min = %e, absRange = %e, numBits = %d, quantPrec = %e\n",
          max, min, absRange, numBits, quantPrec);
+#endif
   if ((quantPrec * 256) > INT32_MAX)
   {
     quantPrec = INT32_MAX / 256;
@@ -1113,23 +1115,25 @@ void TIDL_importQuantWriteLayerParams(sTIDL_OrgNetwork_t   *pOrgTIDLNetStructure
             }
             fclose(fp_w);
           }
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
           printf("Layer %d, first 10 weights in quantization: \n", i);
           for(ii=0; ii<10; ii++) 
           {
             printf("%f, ", data[ii]);
           }
           printf("weightsElementSizeInBits = %d\n", weightsElementSizeInBits);
+#endif
         }
 
         pTIDLPCLayers->layerParams.convParams.weightsQ = 
           TIDL_QuantizeUnsignedMax((uint8_t *)params, data, dataSize, min , max, 
                                    NUM_WHGT_BITS, weightsElementSizeInBits, &zeroWeightValue);
         pTIDLPCLayers->layerParams.convParams.zeroWeightValue = zeroWeightValue;
-
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
         printf("dataSize = %d, min = %e, max = %e\n", dataSize, min , max);
         printf("NUM_WHGT_BITS = %d, weightsElementSizeInBits = %d\n", NUM_WHGT_BITS, weightsElementSizeInBits);
         printf("weightsQ = %d, zeroWeightValue = %d\n", pTIDLPCLayers->layerParams.convParams.weightsQ, zeroWeightValue);
-
+#endif
         if(i==1) 
         {
           int ii;
@@ -1679,7 +1683,7 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
 
   if(tIDLNetStructure->TIDLLayers[tiLayerIndex-1].layerType == TIDL_DataLayer)
   { // if last layer is already DataLayer, overwrite it
-    printf("Last layer is already data layer.\n");
+    TIDL_IMPORT_DBG_PRINT("Last layer is already data layer.\n");
     tiLayerIndex -= 1;
   }
 
@@ -1690,10 +1694,10 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
 
   for (i = 0; i < tiLayerIndex; i++)
   {
-    printf("Layer %d begin: ", i);
+    TIDL_IMPORT_DBG_PRINT2("Layer %d begin: ", i);
     if (tIDLNetStructure->TIDLLayers[i].layerType != TIDL_DataLayer)
     {
-      printf("not a data layer, numOutBufs = %d. ",tIDLNetStructure->TIDLLayers[i].numOutBufs);
+      TIDL_IMPORT_DBG_PRINT2("not a data layer, numOutBufs = %d. ",tIDLNetStructure->TIDLLayers[i].numOutBufs);
       if(tIDLNetStructure->TIDLLayers[i].numOutBufs == -1) 
       {
         // This is the last layer - add data layer after it.
@@ -1701,7 +1705,7 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
       }
       for (j = 0; j < tIDLNetStructure->TIDLLayers[i].numOutBufs; j++)
       {
-        printf("out data id: %d ", tIDLNetStructure->TIDLLayers[i].outData[j].dataId);
+        TIDL_IMPORT_DBG_PRINT2("out data id: %d ", tIDLNetStructure->TIDLLayers[i].outData[j].dataId);
         if (!TIDL_isDataBufUsed(tIDLNetStructure->TIDLLayers[i].outData[j].dataId, tIDLNetStructure, tiLayerIndex))
         {
           tIDLNetStructure->TIDLLayers[tiLayerIndex].inData[tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs] = tIDLNetStructure->TIDLLayers[i].outData[j];
@@ -1709,24 +1713,25 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
         }
       }
     }
-    printf("Layer %d end.\n", i);
+    TIDL_IMPORT_DBG_PRINT2("Layer %d end.\n", i);
   }
-
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
   printf("Added data layer, numInBufs = %d, numOutBufs = %d, input and output dimensions: ", 
          tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs,
          tIDLNetStructure->TIDLLayers[tiLayerIndex].numOutBufs);
-      for (j = 0; j < TIDL_DIM_MAX; j++)
-      {
-        printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].inData[0].dimValues[j]);
-      }
-      printf("|");
-
-      for (j = 0; j < TIDL_DIM_MAX; j++)
-      {
-        printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].outData[0].dimValues[j]);
-      }
-  printf("End of data layer.\n");
+  for (j = 0; j < TIDL_DIM_MAX; j++)
+  {
+    printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].inData[0].dimValues[j]);
+  }
+  printf("|");
   
+  for (j = 0; j < TIDL_DIM_MAX; j++)
+  {
+    printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].outData[0].dimValues[j]);
+  }
+  printf("End of data layer.\n");
+#endif
+
   tIDLNetStructure->numLayers = tiLayerIndex + 1;
   return TIDL_IMPORT_NO_ERR;
 }

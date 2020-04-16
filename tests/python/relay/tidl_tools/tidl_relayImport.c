@@ -41,15 +41,6 @@
 #include "ti_dl.h"
 #include "tidl_import_utils.h"
 
-#define TIDL_IMPORT_ENABLE_DBG_PRINT
-#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
-#define TIDL_IMPORT_DBG_PRINT(dbg_msg) printf(dbg_msg)
-#define TIDL_IMPORT_DBG_PRINT2(dbg_msg, var) printf(dbg_msg, var)
-#else
-#define TIDL_IMPORT_DBG_PRINT(dbg_msg)
-#define TIDL_IMPORT_DBG_PRINT2(dbg_msg, var)
-#endif
-
 typedef struct tidlImportState
 {
   int layerIndex;
@@ -128,7 +119,7 @@ void tidlImportInit(tidlImpConfig * cfg, char * layout)
 {
   int i;
 
-  printf("Initializing TIDL import...\n");
+  TIDL_IMPORT_DBG_PRINT("Initializing TIDL import...\n");
 
   gParams.numParamBits  = cfg->numParamBits;
   gParams.quantRoundAdd = cfg->quantRoundAdd;
@@ -146,13 +137,13 @@ void tidlImportInit(tidlImpConfig * cfg, char * layout)
     gParams.conv2dKernelType[i] = -1;
   }
 
-  printf("numParamBits  = %d\n", gParams.numParamBits );
-  printf("quantRoundAdd = %d\n", gParams.quantRoundAdd);
-  printf("inQuantFactor = %d\n", gParams.inQuantFactor);
-  printf("inElementType = %d\n", gParams.inElementType);
-  printf("inNumChannels = %d\n", gParams.inNumChannels);
-  printf("inHeight      = %d\n", gParams.inHeight     );
-  printf("inWidth       = %d\n", gParams.inWidth      );
+  TIDL_IMPORT_DBG_PRINT2("numParamBits  = %d\n", gParams.numParamBits );
+  TIDL_IMPORT_DBG_PRINT2("quantRoundAdd = %d\n", gParams.quantRoundAdd);
+  TIDL_IMPORT_DBG_PRINT2("inQuantFactor = %d\n", gParams.inQuantFactor);
+  TIDL_IMPORT_DBG_PRINT2("inElementType = %d\n", gParams.inElementType);
+  TIDL_IMPORT_DBG_PRINT2("inNumChannels = %d\n", gParams.inNumChannels);
+  TIDL_IMPORT_DBG_PRINT2("inHeight      = %d\n", gParams.inHeight     );
+  TIDL_IMPORT_DBG_PRINT2("inWidth       = %d\n", gParams.inWidth      );
   
   if(strcmp(layout, "NCHW") == 0) {
     //tidlImpState.gloab_data_format = TIDL_DATA_FORMAT_NCHW;
@@ -201,7 +192,7 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
   sTIDL_ConvParams_t *convParams;
 
   TIDL_IMPORT_DBG_PRINT("----- Importing conv2d layer ----- \n");
-  printf("Layer index is: %d\n", tidlImpState.layerIndex);
+  TIDL_IMPORT_DBG_PRINT2("Layer index is: %d\n", tidlImpState.layerIndex);
   layer = GET_LAYER_PTR;
   layer->numOutBufs = 1;
 
@@ -228,11 +219,11 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
 
   num_weights =  conv2dInfo->num_in_channels * conv2dInfo->num_out_channels
                * conv2dInfo->kernel_h * conv2dInfo->kernel_w;
-  printf("Number of weights: %d\n",num_weights);
-  printf("Weights type: %s\n", conv2dInfo->weights_type);
+  TIDL_IMPORT_DBG_PRINT2("Number of weights: %d\n",num_weights);
+  TIDL_IMPORT_DBG_PRINT2("Weights type: %s\n", conv2dInfo->weights_type);
   if(strcmp(conv2dInfo->weights_type, "float32") == 0) {
     size = sizeof(float)*(size_t)num_weights;
-    printf("float32, size is %ld\n", size);
+    TIDL_IMPORT_DBG_PRINT2("float32, size is %ld\n", size);
   }
   //else if(strcmp(conv2dInfo->weights_type, "int8") == 0) {
   //  size = sizeof(int8_t)*num_weights;
@@ -246,26 +237,26 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
   layer->weights.bufSize = num_weights;
   memcpy(layer->weights.ptr, conv2dInfo->weights_array, size);
 
-  printf("TIDL conv2d parameters: \n");
-  printf("Stride accross width: %d\n",    conv2dInfo->stride_w);
-  printf("Stride accross height: %d\n",   conv2dInfo->stride_h);
-  printf("Padding accross width: %d\n",    conv2dInfo->pad_w);
-  printf("Padding accross height: %d\n",   conv2dInfo->pad_h);
-  printf("Dilation accross width: %d\n",  conv2dInfo->dilation_w);
-  printf("Dilation accross height: %d\n", conv2dInfo->dilation_h);
-  printf("Kernel width: %d\n",            conv2dInfo->kernel_w);
-  printf("Kernel height: %d\n",           conv2dInfo->kernel_h);
-  printf("Weights array type: %s\n",      conv2dInfo->weights_type);
-  printf("Weights array size: %ld\n",     size);
+  TIDL_IMPORT_DBG_PRINT("TIDL conv2d parameters: \n");
+  TIDL_IMPORT_DBG_PRINT2("Stride accross width: %d\n",    conv2dInfo->stride_w);
+  TIDL_IMPORT_DBG_PRINT2("Stride accross height: %d\n",   conv2dInfo->stride_h);
+  TIDL_IMPORT_DBG_PRINT2("Padding accross width: %d\n",    conv2dInfo->pad_w);
+  TIDL_IMPORT_DBG_PRINT2("Padding accross height: %d\n",   conv2dInfo->pad_h);
+  TIDL_IMPORT_DBG_PRINT2("Dilation accross width: %d\n",  conv2dInfo->dilation_w);
+  TIDL_IMPORT_DBG_PRINT2("Dilation accross height: %d\n", conv2dInfo->dilation_h);
+  TIDL_IMPORT_DBG_PRINT2("Kernel width: %d\n",            conv2dInfo->kernel_w);
+  TIDL_IMPORT_DBG_PRINT2("Kernel height: %d\n",           conv2dInfo->kernel_h);
+  TIDL_IMPORT_DBG_PRINT2("Weights array type: %s\n",      conv2dInfo->weights_type);
+  TIDL_IMPORT_DBG_PRINT2("Weights array size: %ld\n",     size);
 
   {
-    printf("First 10 weights: \n");
+    TIDL_IMPORT_DBG_PRINT("First 10 weights: \n");
     float * weights = (float *)layer->weights.ptr;
     for(i=0; i<9; i++) 
     {
-      printf("%f, ", weights[i]);
+      TIDL_IMPORT_DBG_PRINT2("%f, ", weights[i]);
     }
-    printf("%f\n", weights[i]);
+    TIDL_IMPORT_DBG_PRINT2("%f\n", weights[i]);
   }
 }
 
@@ -327,7 +318,7 @@ void tidlImportBatchNorm(BatchNormParams * bn_params, void * ptr_unused)
                        bn_params->num_params, bn_params->mean, bn_params->var, 
                        bn_params->gama, bn_params->beta, bn_params->epsilon);
 
-/*
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
   printf("Number of BN parameters: %d\n", bn_params->num_params); 
   printf("BN parameter data type: %s\n", bn_params->params_dtype); 
   
@@ -354,7 +345,7 @@ void tidlImportBatchNorm(BatchNormParams * bn_params, void * ptr_unused)
   
   printf("BN epsilon: %f\n", bn_params->epsilon); 
   printf("BN center: %d, scale: %d\n", bn_params->center_enable, bn_params->scale_enable); 
-*/  
+#endif
 } /* tidlImportBatchNorm */
 
 void tidlImportPooling(PoolingParams *params, char * pooling_type)
@@ -381,11 +372,11 @@ void tidlImportPooling(PoolingParams *params, char * pooling_type)
   else {
     layer->layerParams.poolParams.poolingType = TIDL_MaxPooling;
   }
-
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
   printf("Pooling type: %s\n", pooling_type);
   printf("Params: (%d, %d), (%d, %d), (%d, %d)\n", params->kernelH, params->kernelW,
           params->strideH, params->strideW, params->padH, params->padW);
-  
+#endif
   return;
 }
 
@@ -428,15 +419,15 @@ void tidlImportSoftmax()
 void tidlImportPad(int size, void *padTensor)
 {
   sTIDL_LayerPC_t *layer;
-
-   int i;
+  int i;
   int32_t *pad_tensor = (int32_t *)padTensor;
-  printf("Padding tensor: [");
+
+  TIDL_IMPORT_DBG_PRINT("Padding tensor: [");
   for(i=0; i<size; i++)
   {
-    printf("%d ", pad_tensor[i]);
+    TIDL_IMPORT_DBG_PRINT2("%d ", pad_tensor[i]);
   }
-  printf("]\n");
+  TIDL_IMPORT_DBG_PRINT("]\n");
 
   TIDL_IMPORT_DBG_PRINT("----- Importing pad layer ----- \n");
 
@@ -446,12 +437,12 @@ void tidlImportPad(int size, void *padTensor)
 
   memcpy((void*)layer->layerPCParams.padParams.padTensor, padTensor, size*sizeof(int));
 
-   printf("Padding tensor after import: [");
+  TIDL_IMPORT_DBG_PRINT("Padding tensor after import: [");
   for(i=0; i<size; i++)
   {
-    printf("%d ", layer->layerPCParams.padParams.padTensor[i]);
+    TIDL_IMPORT_DBG_PRINT2("%d ", layer->layerPCParams.padParams.padTensor[i]);
   }
-  printf("]\n");
+  TIDL_IMPORT_DBG_PRINT("]\n");
  
   //return TIDL_IMPORT_NO_ERR;
 }
@@ -480,13 +471,15 @@ void tidlImportBiasAdd(int numParams, char *dtype, void *biasParams)
   layer = GET_LAYER_PTR;
 
   if(strcmp(dtype, "float32") == 0) {
-    //printf("BiasAdd params are float32, number of params is %d\n", numParams);
-    //for(i=0;i<numParams;i++)
-    //{
-    //  float * params = (float *)biasParams;
-    //  printf("%f, ", params[i]);
-    //}
-    //printf("\n");
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
+    printf("BiasAdd params are float32, number of params is %d\n", numParams);
+    for(i=0;i<numParams;i++)
+    {
+      float * params = (float *)biasParams;
+      printf("%f, ", params[i]);
+    }
+    printf("\n");
+#endif
     // Allocate memory to store weights. To be freed after writing weights to file.
     size = (size_t)numParams*sizeof(float);
     layer->bias.bufSize = numParams;
@@ -513,7 +506,7 @@ void tidlImportRelu(char * reluType)
 
   if(strcmp(reluType, "Relu6") == 0) {
     layer->layerParams.reluParams.reluType = TIDL_RelU6;
-    printf("Relu6\n");
+    TIDL_IMPORT_DBG_PRINT("Relu6\n");
   }
 }
 
@@ -534,9 +527,9 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
   int32_t *in_nodes;
   char str[10];
 
-  printf("----- Fill tensor names for layer %d -----\n", inOutNodes->this_node);
-  //printf("Number of input nodes: %d\n", inOutNodes->num_in_nodes);
-  //printf("Number of output nodes: %d\n", inOutNodes->num_out_nodes);
+  TIDL_IMPORT_DBG_PRINT2("----- Fill tensor names for layer %d -----\n", inOutNodes->this_node);
+  TIDL_IMPORT_DBG_PRINT2("Number of input nodes: %d\n", inOutNodes->num_in_nodes);
+  TIDL_IMPORT_DBG_PRINT2("Number of output nodes: %d\n", inOutNodes->num_out_nodes);
 
   layer = GET_LAYER_PTR;
   
@@ -552,18 +545,18 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
       // input data name is the name of the input node 
       sprintf(str, "%d", in_nodes[i]);
       strcpy((char*)layer->inDataNames[i], str);
-      printf("Layer %d's input node %d name: %s\n", inOutNodes->this_node, i, str);
+      TIDL_IMPORT_DBG_PRINT4("Layer %d's input node %d name: %s\n", inOutNodes->this_node, i, str);
     }
   }
   else {
-    printf("Number of input nodes is 0. This is the first layer after input data layer.\n");
+    TIDL_IMPORT_DBG_PRINT("Number of input nodes is 0. This is the first layer after input data layer.\n");
     if(tidlImpState.layerIndex > 1) {
-      printf("Error! This should be the first node.\n");
+      TIDL_IMPORT_DBG_PRINT("Error! This should be the first node.\n");
       exit(0);
     }
     
     // Connect to first layer which should be a data layer
-    printf("Frist layer is %s\n", (char*)orgTIDLNetStructure.TIDLPCLayers[0].outDataNames[0]);
+    TIDL_IMPORT_DBG_PRINT2("Frist layer is %s\n", (char*)orgTIDLNetStructure.TIDLPCLayers[0].outDataNames[0]);
     strcpy((char*)layer->inDataNames[0], (char*)orgTIDLNetStructure.TIDLPCLayers[0].outDataNames[0]);
     orgTIDLNetStructure.TIDLPCLayers[0].outConsumerCnt[0] = 1;
   }
@@ -573,7 +566,7 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
     // output data name is the name of this node 
     sprintf(str, "%d", inOutNodes->this_node);
     strcpy((char*)layer->outDataNames[0], str);
-    printf("Layer %d's output node 0 name: %s\n", inOutNodes->this_node, str);
+    TIDL_IMPORT_DBG_PRINT3("Layer %d's output node 0 name: %s\n", inOutNodes->this_node, str);
     layer->outConsumerLinked[0] = 0; // initialized to 0
     for(i=1; i<layer->numOutBufs; i++)
     {
@@ -582,14 +575,14 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
       strcat((char*)layer->outDataNames[i], "_");
       sprintf(numberStr, "%d", i);
       strcat((char*)layer->outDataNames[i], numberStr);
-      printf("Layer %d's output node %d name: %s\n", inOutNodes->this_node, i, layer->outDataNames[i]);
+      TIDL_IMPORT_DBG_PRINT4("Layer %d's output node %d name: %s\n", inOutNodes->this_node, i, layer->outDataNames[i]);
       layer->outConsumerLinked[i] = 0; // initialized to 0
     }
     layer->outConsumerCnt[0] = inOutNodes->num_out_nodes;
-    printf("outConsumerCnt[0] = %d\n", layer->outConsumerCnt[0]);
+    TIDL_IMPORT_DBG_PRINT2("outConsumerCnt[0] = %d\n", layer->outConsumerCnt[0]);
   }
   else {
-    printf("Number of output nodes is 0. This is the last node.\n");
+    TIDL_IMPORT_DBG_PRINT("Number of output nodes is 0. This is the last node.\n");
     layer->numOutBufs = -1;
     layer->outConsumerCnt[0] = 0;   
     // a TIDL output data layer needs to be added as output to this operator
@@ -602,9 +595,9 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
   tidl_linkInputTensors(&orgTIDLNetStructure,  tidlImpState.layerIndex);
   tidl_linkOutputTensors(&orgTIDLNetStructure, tidlImpState.layerIndex);
   
-  printf("Layer %d's numInBufs: %d\n", tidlImpState.layerIndex, orgTIDLNetStructure.TIDLPCLayers[tidlImpState.layerIndex].numInBufs);
+  TIDL_IMPORT_DBG_PRINT3("Layer %d's numInBufs: %d\n", tidlImpState.layerIndex, orgTIDLNetStructure.TIDLPCLayers[tidlImpState.layerIndex].numInBufs);
   tidlImpState.layerIndex++;
-  printf("Number of layers imported to TIDL: %d\n", tidlImpState.layerIndex);
+  TIDL_IMPORT_DBG_PRINT2("Number of layers imported to TIDL: %d\n", tidlImpState.layerIndex);
 } // tidlImportLinkNodes()
 
 
@@ -685,10 +678,6 @@ void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int32_t numLayers
          tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[1],   
          tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[2],   
          tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[3]);
-         
-      //printf("Transpose input: \n");
-      //tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[3] = tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[1];
-      //tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[1] = 1;
     }
 
     if(tIDLNetStructure->TIDLLayers[i].layerType == TIDL_SoftMaxLayer)
@@ -818,10 +807,6 @@ void tidl_printOrigLayerparams(sTIDL_OrgNetwork_t  *tIDLNetStructure, int32_t nu
          tIDLNetStructure->TIDLPCLayers[i].outData[0].dimValues[1],   
          tIDLNetStructure->TIDLPCLayers[i].outData[0].dimValues[2],   
          tIDLNetStructure->TIDLPCLayers[i].outData[0].dimValues[3]);
-         
-      //printf("Transpose input: \n");
-      //tIDLNetStructure->TIDLPCLayers[i].inData[0].dimValues[3] = tIDLNetStructure->TIDLPCLayers[i].inData[0].dimValues[1];
-      //tIDLNetStructure->TIDLPCLayers[i].inData[0].dimValues[1] = 1;
     }
 
     if(tIDLNetStructure->TIDLPCLayers[i].layerType == TIDL_SoftMaxLayer)
@@ -891,14 +876,16 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   char    str[30];
 
   numErrs = 0;
-  printf("TIDL artifacts folder: %s\n", artifacts_folder);
-  printf("TIDL import graph: %d\n", graphId);
-  printf("----- Optimize TIDL -----\n");
-  printf("number of layers: %d\n", tidlImpState.layerIndex);
-  //for(i=0; i<tidlImpState.layerIndex; i++)
-  //{
-  //  printf("Layer %d, numInBufs = %d\n", i, orgTIDLNetStructure.TIDLPCLayers[i].numInBufs);
-  //}
+  TIDL_IMPORT_DBG_PRINT2("TIDL artifacts folder: %s\n", artifacts_folder);
+  TIDL_IMPORT_DBG_PRINT2("TIDL import graph: %d\n", graphId);
+  TIDL_IMPORT_DBG_PRINT("----- Optimize TIDL -----\n");
+  TIDL_IMPORT_DBG_PRINT2("number of layers: %d\n", tidlImpState.layerIndex);
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
+  for(i=0; i<tidlImpState.layerIndex; i++)
+  {
+    printf("Layer %d, numInBufs = %d\n", i, orgTIDLNetStructure.TIDLPCLayers[i].numInBufs);
+  }
+#endif
 
   importStatus = tidl_sortLayersInProcOrder(&orgTIDLNetStructure, &tempTIDLNetStructure, tidlImpState.layerIndex);
   tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
@@ -912,9 +899,9 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   tidl_fillInDataLayerShape(&orgTIDLNetStructure, &gParams, tidlImpState.layerIndex);
   tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
   
-  printf("Updating out data shapes.\n");
+  TIDL_IMPORT_DBG_PRINT("Updating out data shapes.\n");
   tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
-  printf("Out data shapes updated.\n");
+  TIDL_IMPORT_DBG_PRINT("Out data shapes updated.\n");
 
   importStatus = tidl_mergeBiasLayer(&orgTIDLNetStructure, tidlImpState.layerIndex);
   if(importStatus != TIDL_IMPORT_NO_ERR)
@@ -959,11 +946,7 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
   tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
 
-  //printf("Updating out data shapes.\n");
-  //tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
-  //printf("Out data shapes updated.\n");
-
-  //printf("Converting Conv2D to IP layer\n");
+  //TIDL_IMPORT_DBG_PRINT("Converting Conv2D to IP layer\n");
   //importStatus = tidl_convertConv2DToIpLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
   //if(importStatus != TIDL_IMPORT_NO_ERR)
   //{
@@ -971,7 +954,7 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   //  numErrs++;
   //}
 
-  printf("Merging flatten layer.\n");  
+  TIDL_IMPORT_DBG_PRINT("Merging flatten layer.\n");  
   importStatus = tidl_mergeFlattenLayer(&orgTIDLNetStructure, tidlImpState.layerIndex);
   if(importStatus != TIDL_IMPORT_NO_ERR)
   {
@@ -979,9 +962,9 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
     numErrs++;
   }
 
-  printf("Updating out data shapes.\n");
+  TIDL_IMPORT_DBG_PRINT("Updating out data shapes.\n");
   tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
-  printf("Out data shapes updated.\n");
+  TIDL_IMPORT_DBG_PRINT("Out data shapes updated.\n");
 
   importStatus = tidl_mergeReshapeLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
   if(importStatus != TIDL_IMPORT_NO_ERR)
@@ -1042,43 +1025,3 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
 
   return TIDL_IMPORT_SUCCESS;
 } // tidlImportOptimize()
-
-
-////////////////////// testing and prototyping code ////////////////////////////
-Conv2dParams test_conv2dParams;
-
-void tidlInitConv2dParams()
-{
-  printf("Initialize conv2d params.\n");
-
-  test_conv2dParams.stride_w = 0;
-  test_conv2dParams.stride_h = 0;
-  test_conv2dParams.dilation_w = 0;
-  test_conv2dParams.dilation_h = 0;
-  test_conv2dParams.kernel_w = 0;
-  test_conv2dParams.kernel_h = 0;
-}
-
-void tidlSetConv2dParams(Conv2dParams * conv2dInfo, tidlImpConfig *config)
-{
-  int i;
-  char str[10];
-
-  printf("\n =============== TIDL import conv2d ===================\n");
-  printf("Stride accross width: %d\n",    conv2dInfo->stride_w);
-  printf("Stride accross height: %d\n",   conv2dInfo->stride_h);
-  printf("Dilation accross width: %d\n",  conv2dInfo->dilation_w);
-  printf("Dilation accross height: %d\n", conv2dInfo->dilation_h);
-  printf("Kernel width: %d\n",            conv2dInfo->kernel_w);
-  printf("Kernel height: %d\n",           conv2dInfo->kernel_h);
-  printf("Weights array type: %s\n",      conv2dInfo->weights_type);
-  printf("First 10 weights: \n");
-  for(i=0; i<10; i++) 
-  {
-    float * weights = (float *)conv2dInfo->weights_array;
-    printf("%f\t", weights[i]);
-  }
-
-  sprintf(str, "%d", 100);
-  printf("\nConvert integer 100 to string: %s", str);
-}

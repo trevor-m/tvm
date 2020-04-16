@@ -318,9 +318,6 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     """
     """
 
-    # TODO: find layout from mod
-    mod_layout = "NHWC"   # Tensorflow
-
     # From partitioned module, create a "calibration model" which can be
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
@@ -384,12 +381,20 @@ def test_extern_tidl_mobilenet():
     # Merges annotated regions together that use the same external target, 
     # and combines marked regions for each target
     mod0['main'] = bind_params_by_name(mod0['main'], params0)
-    mod1 = transform.AnnotateTarget("tidl")(mod0)
+    #Merge sequence of ops into composite functions/ops
+    print("---------- Merge Composite Functions ----------")
+    mod1 = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod0) 
+    mod1 = transform.AnnotateTarget("tidl")(mod1)
     mod1 = transform.MergeCompilerRegions()(mod1)
     #print(mod1.astext(show_meta_data=False))
 
     #============= Partition the graph ==============
     mod2 = transform.PartitionGraph()(mod1)
+    print("---------- Partition the graph ----------")
+    print(mod2.astext(show_meta_data=False))
+
+    mod2 = tidl.UnpackComposites(mod2, "tidl")
+    print("---------- Unpack composite ops in the graph ----------")
     print(mod2.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============

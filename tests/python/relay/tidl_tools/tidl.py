@@ -1089,7 +1089,6 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant_flatten(input_fp, data_layout)
 
         # Initialize TIDL import
-        #if tidl_import_init(config_params,data_layout) == False:
         if tidl_import_init(data_layout, input_scale, input_signed, input_fp.shape) == False:
             return False
 
@@ -1331,6 +1330,27 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
+def UnpackComposites(mod, compiler="tidl"):
+    class Unpacker(ExprMutator):
+        def __init__(self):
+            ExprMutator.__init__(self)
+
+        def visit_call(self, call):
+            if isinstance(call.op, Function):
+                if call.op.attrs and call.op.attrs['Composite'] != "":
+                    # unpack the function back into new main function.
+                    var_map = {}
+                    for arg, param in zip(call.args, call.op.params):
+                        var_map[param] = super().visit(arg)
+                    return VarReplacer(var_map).visit(call.op.body)
+            return super().visit_call(call)
+
+    for func in mod.get_global_vars():
+        name = func.name_hint
+        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+            continue
+        mod[name] = Unpacker().visit(mod[name])
+    return mod
 
 class CalibrationGraphMutator(ExprMutator):
     """This mutator should be called after partioning to produce a module which
