@@ -31,6 +31,7 @@
 #include <tvm/relay/attrs/transform.h>
 #include <tvm/relay/attrs/vision.h>
 
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -930,7 +931,8 @@ class StridedSliceOpConverter : public TrtOpConverter {
     const bool default_strides =
         !attrs->strides.defined() || attrs->strides.size() == 0;
     if (params->network->hasImplicitBatchDimension()) {
-      CHECK(default_strides || !attrs->strides[0].defined() || attrs->strides[0].as<IntImmNode>()->value == 1);
+      CHECK(default_strides || !attrs->strides[0].defined() ||
+            attrs->strides[0].as<IntImmNode>()->value == 1);
     }
 
     auto process_slice_index = [](Integer x, int default_value, int dim_value) {
@@ -944,9 +946,13 @@ class StridedSliceOpConverter : public TrtOpConverter {
         params->network->hasImplicitBatchDimension() ? 1 : 0;
     std::vector<int> start, size, strides;
     for (size_t i = start_index; i < attrs->begin.size(); ++i) {
-      const int begin_value = process_slice_index(attrs->begin[i], 0, input_dims[i - start_index]);
-      const int end_value = process_slice_index(attrs->end[i], input_dims[i - start_index], input_dims[i - start_index]);
-      const int stride_value = (default_strides || i >= attrs->strides.size() || !attrs->strides[i].defined())
+      const int begin_value =
+          process_slice_index(attrs->begin[i], 0, input_dims[i - start_index]);
+      const int end_value =
+          process_slice_index(attrs->end[i], input_dims[i - start_index],
+                              input_dims[i - start_index]);
+      const int stride_value = (default_strides || i >= attrs->strides.size() ||
+                                !attrs->strides[i].defined())
                                    ? 1
                                    : attrs->strides[i].as<IntImmNode>()->value;
       CHECK_GT(stride_value, 0);
@@ -1056,7 +1062,8 @@ class NmsOpConverter : public TrtOpConverter {
     auto relay_nms = func->body.as<CallNode>();
     CHECK(relay_nms != nullptr);
     auto nms_attrs = relay_nms->attrs.as<NonMaximumSuppressionAttrs>();
-    auto relay_get_valid_counts = Downcast<TupleGetItem>(relay_nms->args[0])->tuple.as<CallNode>();
+    auto relay_get_valid_counts =
+        Downcast<TupleGetItem>(relay_nms->args[0])->tuple.as<CallNode>();
     CHECK(relay_get_valid_counts != nullptr);
     auto get_valid_counts_attrs = relay_get_valid_counts->attrs.as<GetValidCountsAttrs>();
     CHECK(nms_attrs->score_index == get_valid_counts_attrs->score_index);
@@ -1073,18 +1080,26 @@ class NmsOpConverter : public TrtOpConverter {
     scores_begin[params_index] = nms_attrs->score_index;
     scores_size[params_index] = 1;
     std::vector<int> strides(input_dims.size(), 1);
-    auto scores = params->network->addSlice(*input, VectorToTrtDims(scores_begin), VectorToTrtDims(scores_size), VectorToTrtDims(strides))->getOutput(0);
+    auto scores =
+        params->network
+            ->addSlice(*input, VectorToTrtDims(scores_begin),
+                       VectorToTrtDims(scores_size), VectorToTrtDims(strides))
+            ->getOutput(0);
     std::vector<int> boxes_begin(input_dims.size(), 0);
     std::vector<int> boxes_size(input_dims.begin(), input_dims.end());
     boxes_begin[params_index] = nms_attrs->coord_start;
     boxes_size[params_index] = 4;
-    auto boxes = params->network->addSlice(*input, VectorToTrtDims(boxes_begin), VectorToTrtDims(boxes_size), VectorToTrtDims(strides))->getOutput(0);
+    auto boxes =
+        params->network
+            ->addSlice(*input, VectorToTrtDims(boxes_begin),
+                       VectorToTrtDims(boxes_size), VectorToTrtDims(strides))
+            ->getOutput(0);
     // Insert 1 for classes
     boxes_size.insert(boxes_size.begin() + params_index, 1);
     boxes = Reshape(params, boxes, boxes_size);
 
     nvinfer1::plugin::NMSParameters nms_params;
-    nms_params.shareLocation = true; // if num_classes = 1
+    nms_params.shareLocation = true;  // if num_classes = 1
     nms_params.backgroundLabelId = -1;
     nms_params.numClasses = 1;
     nms_params.topK = nms_attrs->top_k == -1 ? num_boxes : std::min(num_boxes, nms_attrs->top_k);
@@ -1096,12 +1111,11 @@ class NmsOpConverter : public TrtOpConverter {
     std::vector<nvinfer1::ITensor*> nms_inputs = {boxes, scores};
     nvinfer1::IPluginV2Layer* nms_layer = params->network->addPluginV2(
         nms_inputs.data(), nms_inputs.size(), *nms_plugin);
-    //auto num_valid = nms_layers->getOutput(0);
     auto output_boxes = nms_layer->getOutput(1);
     auto output_scores = nms_layer->getOutput(2);
     output_scores = Reshape(params, output_scores, {1, num_boxes, 1});
     std::vector<nvinfer1::ITensor*> concat_inputs = {output_scores, output_boxes};
-     nvinfer1::IConcatenationLayer* concat_layer =
+    nvinfer1::IConcatenationLayer* concat_layer =
         params->network->addConcatenation(concat_inputs.data(),
                                           concat_inputs.size());
     concat_layer->setAxis(2);
@@ -1130,8 +1144,8 @@ class SplitOpConverter : public TrtOpConverter {
     for (int i = 0; i < sections; ++i) {
       start[axis] = i * size[axis];
       auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
-                                                  VectorToTrtDims(size),
-                                                  VectorToTrtDims(strides));
+                                                   VectorToTrtDims(size),
+                                                   VectorToTrtDims(strides));
 
       params->outputs.push_back(slice_layer->getOutput(0));
     }
@@ -1155,7 +1169,8 @@ class SliceLikeOpConverter : public TrtOpConverter {
     const auto* attrs = params->call->attrs.as<SliceLikeAttrs>();
     if (attrs->axes.defined()) {
       for (int i = 0; i < attrs->axes.size(); i++) {
-        const int axis = ConvertAxis(params, attrs->axes[i].as<IntImmNode>()->value, input_dims.size());
+        const int axis = ConvertAxis(
+            params, attrs->axes[i].as<IntImmNode>()->value, input_dims.size());
         input_dims[axis] = new_dims[axis];
       }
     } else {

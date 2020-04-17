@@ -354,11 +354,13 @@ void TensorRTBuilder::VisitExpr_(const VarNode* node) {
     }
     // Update network_input_names_
     network_input_names_.erase(network_input_names_.begin() + original_index);
-    network_input_names_.insert(network_input_names_.begin() + original_index, new_names.begin(), new_names.end());
+    network_input_names_.insert(network_input_names_.begin() + original_index,
+                                new_names.begin(), new_names.end());
     // Update network_input_is_baked_
     bool is_baked = network_input_is_baked_[original_index];
     network_input_is_baked_.erase(network_input_is_baked_.begin() + original_index);
-    network_input_is_baked_.insert(network_input_is_baked_.begin() + original_index, new_names.size(), is_baked);
+    network_input_is_baked_.insert(network_input_is_baked_.begin() + original_index,
+                                   new_names.size(), is_baked);
   } else if (node->checked_type().as<TensorTypeNode>()) {
     // Standard TensorType case.
     const std::string& tensor_name = node->name_hint();

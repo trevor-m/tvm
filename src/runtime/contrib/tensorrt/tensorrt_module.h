@@ -44,4 +44,4 @@ Module TensorRTModuleCreate(
 }  // namespace runtime
 }  // namespace tvm
 
-#endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
+#endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_MODULE_H_
