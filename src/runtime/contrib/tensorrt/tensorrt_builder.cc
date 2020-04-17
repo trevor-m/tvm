@@ -103,8 +103,8 @@ GetOpConverters() {
   return map;
 }
 
-TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
-    : execution_args_(args) {
+TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args, size_t max_workspace_size)
+    : execution_args_(args), max_workspace_size_(max_workspace_size) {
   // Create TRT builder and network.
   static runtime::TensorRTLogger logger;
 #if TRT_VERSION_GE(6, 0, 1)
@@ -118,9 +118,7 @@ TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args)
   // Use INetwork with implicit batch.
   batch_size_ = args[0]->shape[0];
   builder_->setMaxBatchSize(batch_size_);
-  const size_t workspace_size =
-      dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
-  builder_->setMaxWorkspaceSize(workspace_size);
+  builder_->setMaxWorkspaceSize(max_workspace_size_);
   const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
   builder_->setFp16Mode(use_fp16);
   network_ = builder_->createNetwork();
@@ -170,9 +168,7 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
 // Build engine.
 #if TRT_VERSION_GE(6, 0, 1)
   auto config = builder_->createBuilderConfig();
-  const size_t workspace_size =
-      dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
-  config->setMaxWorkspaceSize(workspace_size);
+  config->setMaxWorkspaceSize(max_workspace_size_);
   if (dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false)) {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
   }

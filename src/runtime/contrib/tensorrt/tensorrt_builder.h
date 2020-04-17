@@ -96,7 +96,7 @@ class TensorRTBuilder : public ExprVisitor {
    * \brief Create TensorRT builder.
    * \param args Inputs to this execution.
    */
-  explicit TensorRTBuilder(const std::vector<DLTensor*>& args);
+  explicit TensorRTBuilder(const std::vector<DLTensor*>& args, size_t max_workspace_size);
 
   void VisitExpr_(const VarNode* node) final;
 
@@ -176,6 +176,9 @@ class TensorRTBuilder : public ExprVisitor {
 
   /*! \brief Batch size of inputs from this invocation. */
   int batch_size_;
+
+  /*! \brief Max workspace size in bytes for TRT. */
+  size_t max_workspace_size_;
 
   /*! \brief Input names in same order as execution args during runtime. Some of
    * these are not actual input bindings in the TRT engine - use

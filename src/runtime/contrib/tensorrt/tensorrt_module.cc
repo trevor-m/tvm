@@ -38,27 +38,6 @@
 #include "tensorrt_builder.h"
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
-inline std::string ToJSON(
-    const std::unordered_map<std::string, std::string>& serialized_subgraphs) {
-  std::ostringstream os;
-  dmlc::JSONWriter writer(&os);
-  writer.BeginObject();
-  writer.WriteObjectKeyValue("subgraphs", serialized_subgraphs);
-  writer.EndObject();
-  return os.str();
-}
-
-inline std::unordered_map<std::string, std::string> FromJSON(
-    const std::string& str) {
-  std::unordered_map<std::string, std::string> serialized_subgraphs;
-  std::istringstream is(str);
-  dmlc::JSONReader reader(&is);
-  dmlc::JSONObjectReadHelper helper;
-  helper.DeclareField("subgraphs", &serialized_subgraphs);
-  helper.ReadAllFields(&reader);
-  return serialized_subgraphs;
-}
-
 namespace tvm {
 namespace runtime {
 
@@ -67,7 +46,9 @@ class TensorRTModule : public runtime::ModuleNode {
  public:
   explicit TensorRTModule(
       const std::unordered_map<std::string, std::string>& serialized_subgraphs)
-      : serialized_subgraphs_(serialized_subgraphs) {}
+      : serialized_subgraphs_(serialized_subgraphs) {
+    max_workspace_size_ = dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
+  }
 
   ~TensorRTModule() {
 #if TVM_GRAPH_RUNTIME_TENSORRT
@@ -96,7 +77,7 @@ class TensorRTModule : public runtime::ModuleNode {
         auto func = Downcast<relay::Function>(
             LoadJSON(this->serialized_subgraphs_[name]));
         auto inputs = ConvertInputs(args);
-        relay::contrib::TensorRTBuilder builder(inputs);
+        relay::contrib::TensorRTBuilder builder(inputs, max_workspace_size_);
         auto engine_and_context = builder.BuildEngine(func);
         LOG(INFO) << "Finished building engine";
         this->trt_engine_cache_[name] = engine_and_context;
@@ -118,33 +99,36 @@ class TensorRTModule : public runtime::ModuleNode {
                   const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
-    SaveBinaryToFile(file_name, ToJSON(serialized_subgraphs_));
+    SaveBinaryToFile(file_name, SerializeModuleToString());
   }
 
   void SaveToBinary(dmlc::Stream* stream) final {
-    stream->Write(ToJSON(serialized_subgraphs_));
+    stream->Write(SerializeModuleToString());
   }
 
   static Module LoadFromFile(const std::string& path) {
     std::ifstream filep(path);
     filep.seekg(0, std::ios::end);
     size_t size = filep.tellg();
-    std::string serialized_subgraphs(size, ' ');
+    std::string serialized_module(size, ' ');
     filep.seekg(0);
-    filep.read(&serialized_subgraphs[0], size);
-    return TensorRTModuleCreate(FromJSON(serialized_subgraphs));
+    filep.read(&serialized_module[0], size);
+    return CreateModuleFromString(serialized_module);
   }
 
   static Module LoadFromBinary(void* strm) {
     dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
-    std::string serialized_subgraphs;
-    stream->Read(&serialized_subgraphs);
-    return TensorRTModuleCreate(FromJSON(serialized_subgraphs));
+    std::string serialized_module;
+    stream->Read(&serialized_module);
+    return CreateModuleFromString(serialized_module);
   }
 
  private:
   /*! \brief Relay program serialized using SaveJSON */
   std::unordered_map<std::string, std::string> serialized_subgraphs_;
+
+  /*! \brief Max workspace size for TensorRT */
+  size_t max_workspace_size_;
 
 #if TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Map of function name to TRT engine if built already. */
@@ -231,6 +215,32 @@ class TensorRTModule : public runtime::ModuleNode {
     *rv = bindings[num_bindings - num_outputs];
   }
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
+
+  std::string SerializeModuleToString() {
+    std::ostringstream os;
+    dmlc::JSONWriter writer(&os);
+    writer.BeginObject();
+    writer.WriteObjectKeyValue("subgraphs", serialized_subgraphs_);
+    writer.WriteObjectKeyValue("max_workspace_size", max_workspace_size_);
+    writer.EndObject();
+    return os.str();
+  }
+
+  static Module CreateModuleFromString(const std::string& str) {
+    std::unordered_map<std::string, std::string> serialized_subgraphs;
+    size_t max_workspace_size = 0;
+    std::istringstream is(str);
+    dmlc::JSONReader reader(&is);
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareField("subgraphs", &serialized_subgraphs);
+    helper.DeclareOptionalField("max_workspace_size", &max_workspace_size);
+    helper.ReadAllFields(&reader);
+    auto n = make_object<TensorRTModule>(serialized_subgraphs);
+    if (max_workspace_size != 0) {
+      n->max_workspace_size_ = max_workspace_size;
+    }
+    return Module(n);
+  }
 };
 
 Module TensorRTModuleCreate(
