@@ -19,17 +19,14 @@
 Relay TensorRT codegen.
 """
 import tvm
+import tvm.relay.transform as transform
 from tvm import relay
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar
-import tvm.relay.transform as transform
 from tvm.relay.build_module import bind_params_by_name
-
+from tvm.relay import op as reg
 from tvm.relay.transform import _ffi_api
-from .expr_functor import ExprMutator
-from tvm.relay.op.annotation import compiler_begin, compiler_end
 from tvm.relay.expr_functor import ExprMutator
 
-from tvm.relay import op as reg
 
 class LegalizeLayoutTranform(ExprMutator):
     """
@@ -77,14 +74,13 @@ class SimplifySliceLike(ExprMutator):
                 shape1 = expr.args[1].checked_type.shape
                 for axis in axes:
                     if shape1[int(axis)] is None:
-                        return visit
+                        return super().visit_call(expr)
                     end[int(axis)] = shape1[int(axis)]
             begin = [0] * len(end)
             arg = super().visit(expr.args[0])
             x = relay.strided_slice(arg, begin=begin, end=end)
             return x
-        visit = super().visit_call(expr)
-        return visit
+        return super().visit_call(expr)
 
 @transform.function_pass(opt_level=0)
 class LegalizeLayoutTranformPass:
@@ -151,26 +147,23 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper("split")
     #_register_external_op_helper("slice_like")
     _register_external_op_helper("nn.upsampling")
-    # TODO(trevmorr): Consider whether adaptive pool should only be supported for output size (1, 1).
-    _register_external_op_helper("contrib.adaptive_max_pool2d")
-    _register_external_op_helper("contrib.adaptive_avg_pool2d")
 
     @reg.register("nn.batch_norm", "target.tensorrt")
-    def batch_norm_whitelist_fn(attrs, args):
+    def batch_norm_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if int(attrs.axis) != 1 and int(attrs.axis) != 3:
             print("nn.batch_norm: axis is {} but must be 1 or 3.".format(int(attrs.axis)))
             return False
         return True
 
     @reg.register("nn.softmax", "target.tensorrt")
-    def softmax_whitelist_fn(attrs, args):
-        if int(attrs.axis) == 0:
+    def softmax_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if trt_version < (6, 0, 1) and int(attrs.axis) == 0:
             print("nn.softmax: can't modify batch dimension.")
             return False
         return True
 
     @reg.register("nn.conv2d", "target.tensorrt")
-    def conv2d_whitelist_fn(attrs, args):
+    def conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.data_layout != "NCHW":
             print("nn.conv2d: data_layout is {} but must be NCHW.".format(attrs.data_layout))
             return False
@@ -183,7 +176,7 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("nn.dense", "target.tensorrt")
-    def dense_whitelist_fn(attrs, args):
+    def dense_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         input_rank = len(args[0].checked_type.shape)
         weight_rank = len(args[1].checked_type.shape)
         if input_rank < 2 or input_rank > 4:
@@ -195,7 +188,7 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("nn.bias_add", "target.tensorrt")
-    def bias_add_whitelist_fn(attrs, args):
+    def bias_add_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         # TODO(trevmorr): BiasAddSimplifier creates a pattern which cannot be
         # converted to TRT without binding params and constant folding.
         # if trt_version < (6, 0, 1):
@@ -207,19 +200,20 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("nn.max_pool2d", "target.tensorrt")
-    def max_pool_2d_whitelist_fn(attrs, args):
+    def max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.layout != "NCHW":
             print("nn.max_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
         return True
-    
+
     @reg.register("nn.avg_pool2d", "target.tensorrt")
-    def avg_pool_2d_whitelist_fn(attrs, args):
+    def avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.layout != "NCHW":
             print("nn.avg_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
         if attrs.count_include_pad and len(attrs.padding) == 4:
-            print("nn.avg_pool2d: inclusive-counted blended or average pooling is not supported in combination with asymmetric padding")
+            print("nn.avg_pool2d: inclusive-counted blended or average "
+                  "pooling is not supported in combination with asymmetric padding")
             return False
         if attrs.ceil_mode and trt_version < (5, 1, 5):
             print("nn.avg_pool2d: ceil_mode=True requires TensorRT 5.1.5 or greater.")
@@ -227,21 +221,21 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("nn.global_max_pool2d", "target.tensorrt")
-    def global_max_pool_2d_whitelist_fn(attrs, args):
+    def global_max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.layout != "NCHW":
             print("nn.global_max_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
         return True
-    
+
     @reg.register("nn.global_avg_pool2d", "target.tensorrt")
-    def global_avg_pool_2d_whitelist_fn(attrs, args):
+    def global_avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.layout != "NCHW":
             print("nn.global_avg_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
         return True
 
     @reg.register("expand_dims", "target.tensorrt")
-    def expand_dims_whitelist_fn(attrs, args):
+    def expand_dims_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if args[0].checked_type.dtype != "float32":
             print("expand_dims: only fp32 inputs are supported.")
             return False
@@ -251,17 +245,17 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("squeeze", "target.tensorrt")
-    def squeeze_whitelist_fn(attrs, args):
+    def squeeze_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if not attrs.axis:
             print("squeeze: must explicitly set axis.")
             return False
         if trt_version < (6, 0, 1) and any([axis == 0 for axis in map(int, attrs.axis)]):
-                print("squeeze: can't modify batch dimension.")
-                return False
+            print("squeeze: can't modify batch dimension.")
+            return False
         return True
 
     @reg.register("concatenate", "target.tensorrt")
-    def concatenate_whitelist_fn(attrs, args):
+    def concatenate_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if trt_version >= (6, 0, 1):
             return True
         if int(attrs.axis) == 0:
@@ -270,20 +264,23 @@ def register_tensorrt_annotations(trt_version):
         if isinstance(args[0], Tuple):
             for tuple_input in args[0].fields:
                 if isinstance(tuple_input, Constant):
-                    print("concatenate: can't concatenate tensors with constants.".format(op.name))
+                    print("concatenate: can't concatenate tensors with constants.")
                     return False
         return True
 
     @reg.register("nn.conv2d_transpose", "target.tensorrt")
-    def conv2d_transpose_whitelist_fn(attrs, args):
+    def conv2d_transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.data_layout != "NCHW":
-            print("nn.conv2d_transpose: data_layout is {} but must be NCHW.".format(attrs.data_layout))
+            print("nn.conv2d_transpose: data_layout is {} but must be NCHW.".format(
+                attrs.data_layout))
             return False
         if attrs.kernel_layout != "OIHW":
-            print("nn.conv2d_transpose: kernel_layout is {} but must be OIHW.".format(attrs.kernel_layout))
+            print("nn.conv2d_transpose: kernel_layout is {} but must be OIHW.".format(
+                attrs.kernel_layout))
             return False
         if attrs.out_layout and attrs.out_layout != "NCHW":
-            print("nn.conv2d_transpose: out_layout is {} but must be NCHW.".format(attrs.out_layout))
+            print("nn.conv2d_transpose: out_layout is {} but must be NCHW.".format(
+                attrs.out_layout))
             return False
         if attrs.dilation and any([rate != 1 for rate in map(int, attrs.dilation)]):
             print("nn.conv2d_transpose: dilation rate must be 1.")
@@ -291,21 +288,21 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("transpose", "target.tensorrt")
-    def transpose_whitelist_fn(attrs, args):
+    def transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if trt_version < (6, 0, 1) and int(attrs.axes[0]) != 0:
             print("transpose: can't modify batch dimension.")
             return False
         return True
 
     @reg.register("reshape", "target.tensorrt")
-    def reshape_whitelist_fn(attrs, args):
+    def reshape_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if any([x < -1 for x in map(int, attrs.newshape)]):
             print("reshape: new shape dims must be explicit.")
             return False
         return True
 
     @reg.register("nn.pad", "target.tensorrt")
-    def pad_whitelist_fn(attrs, args):
+    def pad_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if attrs.pad_mode != "constant":
             print("nn.pad: pad mode is {} but must be constant.".format(attrs.pad_mode))
             return False
@@ -325,7 +322,7 @@ def register_tensorrt_annotations(trt_version):
             print("{}: can't modify batch dimension.".format(op_name))
             return False
         return True
-    
+
     _register_external_op_helper_func("sum", reduce_whitelist_fn, trt_version)
     _register_external_op_helper_func("prod", reduce_whitelist_fn, trt_version)
     _register_external_op_helper_func("max", reduce_whitelist_fn, trt_version)
@@ -337,7 +334,7 @@ def register_tensorrt_annotations(trt_version):
             print("{}: requires TensorRT version 5.1.5 or higher.".format(op_name))
             return False
         return True
-    
+
     _register_external_op_helper_func("nn.leaky_relu", trt_5_1_5_whitelist_fn, trt_version)
     _register_external_op_helper_func("sin", trt_5_1_5_whitelist_fn, trt_version)
     _register_external_op_helper_func("cos", trt_5_1_5_whitelist_fn, trt_version)
@@ -346,7 +343,7 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper_func("floor", trt_5_1_5_whitelist_fn, trt_version)
 
     @reg.register("strided_slice", "target.tensorrt")
-    def strided_slice_whitelist_fn(attrs, args):
+    def strided_slice_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if trt_version < (5, 1, 5):
             print("strided_slice: requires TensorRT version 5.1.5 or higher.")
             return False
@@ -355,7 +352,8 @@ def register_tensorrt_annotations(trt_version):
             return False
         if trt_version < (6, 0, 1):
             batch_dim_begin_modified = attrs.begin[0] is not None and int(attrs.begin[0]) != 0
-            batch_dim_end_modified = attrs.end[0] is not None and int(attrs.end[0]) != -1 and int(attrs.end[0]) != int(args[0].checked_type.shape[0])
+            batch_dim_end_modified = attrs.end[0] is not None and int(attrs.end[0]) != -1 and \
+                                     int(attrs.end[0]) != int(args[0].checked_type.shape[0])
             if batch_dim_begin_modified or batch_dim_end_modified:
                 print("strided_slice: can't modify batch dimension.")
                 return False
@@ -365,13 +363,27 @@ def register_tensorrt_annotations(trt_version):
         return True
 
     @reg.register("image.resize", "target.tensorrt")
-    def resize_whitelist_fn(attrs, args):
+    def resize_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if trt_version < (6, 0, 1):
-            print("strided_slice: requires TensorRT version 6.0.1 or higher.")
+            print("image.resize: requires TensorRT version 6.0.1 or higher.")
             return False
         if attrs.method != "nearest_neighbor" and attrs.method != "bilinear":
             return False
         # TODO(trevmorr): coordinate transform method
+        return True
+
+    @reg.register("contrib.adaptive_max_pool2d", "target.tensorrt")
+    def adapative_max_pool2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if len(attrs.output_size) == 0 or any([size != 1 for size in map(int, attrs.output_size)]):
+            print("contrib.adaptive_max_pool2d: output size must be (1, 1).")
+            return False
+        return True
+
+    @reg.register("contrib.adaptive_avg_pool2d", "target.tensorrt")
+    def adapative_avg_pool2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if len(attrs.output_size) == 0 or any([size != 1 for size in map(int, attrs.output_size)]):
+            print("contrib.adaptive_avg_pool2d: output size must be (1, 1).")
+            return False
         return True
 
     # def nms_whitelist_fn(call, trt_version):
@@ -487,8 +499,8 @@ def EnableTrt(mod, params=None, trt_version=None, prune_subgraphs=False):
     assert len(trt_version) == 3
 
     if params:
-       # Bind params so that we can use FoldConstant.
-       mod['main'] = bind_params_by_name(mod['main'], params)
+        # Bind params so that we can use FoldConstant.
+        mod['main'] = bind_params_by_name(mod['main'], params)
     # Apply passes required for TRT
     mod = transform.InferType()(mod)
     seq = tvm.transform.Sequential([transform.InferType(),

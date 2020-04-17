@@ -34,6 +34,8 @@ def should_skip():
     return False
 
 def test_tensorrt_simple():
+    if should_skip():
+        return
     dtype = 'float32'
     xshape = (1, 3, 2, 2)
     yshape = (1, 3,  1,  1)
