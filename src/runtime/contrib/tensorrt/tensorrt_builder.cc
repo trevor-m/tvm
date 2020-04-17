@@ -92,6 +92,7 @@ GetOpConverters() {
   map->emplace("floor", std::make_shared<UnaryOpConverter>());
   map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
   map->emplace("split", std::make_shared<SplitOpConverter>());
+  // map->emplace("tensorrt.nms", std::make_shared<NmsOpConverter>());
 #else
   map->emplace("clip", std::make_shared<ClipLegacyOpConverter>());
 #endif
@@ -99,7 +100,6 @@ GetOpConverters() {
   map->emplace("image.resize", std::make_shared<ResizeOpConverter>());
   map->emplace("nn.upsampling", std::make_shared<UpsamplingOpConverter>());
 #endif
-  map->emplace("tensorrt.nms", std::make_shared<NmsOpConverter>());
   return map;
 }
 

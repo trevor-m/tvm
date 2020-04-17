@@ -35,7 +35,7 @@
 #include <unordered_map>
 #include <vector>
 #include "NvInfer.h"
-#include "NvInferPlugin.h"
+// #include "NvInferPlugin.h"
 #include "utils.h"
 
 namespace tvm {
@@ -1044,6 +1044,7 @@ class ResizeOpConverter : public TrtOpConverter {
 };
 #endif  // TRT_VERSION_GE(6, 0, 1)
 
+#if 0 && TRT_VERSION_GE(5, 1, 5)
 class NmsOpConverter : public TrtOpConverter {
  public:
   NmsOpConverter() : TrtOpConverter({kTensor}) {}
@@ -1107,6 +1108,7 @@ class NmsOpConverter : public TrtOpConverter {
     params->outputs.push_back(concat_layer->getOutput(0));
   }
 };
+#endif  // TRT_VERSION_GE(5, 1, 5)
 
 #if TRT_VERSION_GE(5, 1, 5)
 class SplitOpConverter : public TrtOpConverter {
@@ -1135,10 +1137,12 @@ class SplitOpConverter : public TrtOpConverter {
     }
   }
 };
-#endif
+#endif  // TRT_VERSION_GE(5, 1, 5)
 
 #if TRT_VERSION_GE(5, 1, 5)
-// TODO(trevmorr): Not needed.
+// TODO(trevmorr): Not needed due to SimplifySliceLike which converts slice_like
+// to strided_slice. slice_like has a false dependency on the second input
+// tensor since only the shape is needed. This confuses TRT.
 class SliceLikeOpConverter : public TrtOpConverter {
  public:
   SliceLikeOpConverter() : TrtOpConverter({kTensor, kTensor}) {}
@@ -1170,7 +1174,7 @@ class SliceLikeOpConverter : public TrtOpConverter {
     params->outputs.push_back(slice_layer->getOutput(0));
   }
 };
-#endif
+#endif  // TRT_VERSION_GE(5, 1, 5)
 
 #if TRT_VERSION_GE(6, 0, 1)
 class UpsamplingOpConverter : public TrtOpConverter {
