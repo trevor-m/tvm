@@ -288,7 +288,7 @@ def test_tensorrt_ops():
             y = relay.const(np.ones(y_shape).astype('float32'))
             out = op(x, y)
             f = relay.Function([x], out)
-            return f, {'x': x_shape}
+            return f, {'x': x_shape}, []
         y = relay.var('y', shape=(y_shape), dtype='float32')
         out = op(x, y)
         f = relay.Function([x, y], out)
@@ -344,14 +344,14 @@ def test_tensorrt_ops():
                     run_and_verify(test_conv2d(k_shape=k_shape, groups=groups, padding=padding,
                                                strides=strides, dilation=dilation))
     # Disabled due to incorrect results from TVM.
-    # run_and_verify(test_conv2d_const_weights())
+    run_and_verify(test_conv2d_const_weights())
     run_and_verify(test_dense())
     run_and_verify(test_dense_from_pytorch())
-    #run_and_verify(test_bias_add())
-    #run_and_verify(test_bias_add((1, 6, 3, 4), 6))
+    run_and_verify(test_bias_add())
+    run_and_verify(test_bias_add((1, 6, 3, 4), 6))
     for op in [relay.add, relay.subtract, relay.multiply, relay.divide, relay.power]:
         # Disabled y_is_const=True due to incorrect results from TVM.
-        for y_is_const in [False]: # [True, False]:
+        for y_is_const in [True, False]:
             run_and_verify(test_binary(op, (1, 8, 3, 3), (1, 8, 3, 3), y_is_const))
             run_and_verify(test_binary(op, (1, 8, 1, 3), (1, 8, 3, 1), y_is_const))
             run_and_verify(test_binary(op, (1, 10), (10,), y_is_const))
@@ -405,7 +405,6 @@ def test_tensorrt_ops():
     run_and_verify(test_strided_slice((1, 10), (0, 0), (1, 10), (1, 2)))
     for op in [relay.nn.adaptive_max_pool2d, relay.nn.adaptive_avg_pool2d]:
         run_and_verify(test_adaptive_pool2d(op))
-        # run_and_verify(test_adaptive_pool2d(op, out_size=(6, 6)))
     # for x_shape, layout in [((1, 3, 16, 16), 'NCHW'), ((1, 16, 16, 3), 'NHWC')]:
     #     for out_size in [(32, 32), (40, 40), (5, 21)]:
     #         for method in ['nearest_neighbor', 'bilinear']:
