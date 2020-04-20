@@ -90,9 +90,7 @@ class LegalizeLayoutTranformPass:
 @transform.function_pass(opt_level=0)
 class RemoveDropoutPass:
     def transform_function(self, func, mod, _):
-        #print('GOT FUNC', func)
         return RemoveDropout().visit(func)
-        #return func
 
 @transform.function_pass(opt_level=0)
 class SimplifySliceLikePass:
@@ -128,6 +126,10 @@ def _register_external_op_helper_func(op_name, func, trt_version):
     return _func_wrapper
 
 def register_tensorrt_annotations(trt_version):
+    if hasattr(register_tensorrt_annotations, "registered"):
+        # Can't register annotations more than once.
+        return
+    register_tensorrt_annotations.registered = True
     # Ops which are always supported
     _register_external_op_helper("nn.relu")
     _register_external_op_helper("sigmoid")
@@ -386,27 +388,6 @@ def register_tensorrt_annotations(trt_version):
             return False
         return True
 
-    # def nms_whitelist_fn(call, trt_version):
-    #     return True
-
-def ReconstructNms(mod):
-    """Fuse get_valid_count and non_max_suppression into a single composite
-    function which can be partitioned and converted to TRT.
-    """
-    def make_nms_pattern():
-        x = relay.var('x')
-        ret = relay.vision.get_valid_counts(x, score_threshold=0)
-        nms_out = relay.vision.non_max_suppression(ret[1], ret[0])
-        return nms_out
-
-    pattern_table = [
-        ('tensorrt.nms', make_nms_pattern())
-    ]
-    return relay.transform.MergeComposite(pattern_table)(mod)
-
-
-register_tensorrt_annotations((6, 0, 1))
-
 class VarReplacer(ExprMutator):
     def __init__(self, var_map):
         ExprMutator.__init__(self)
@@ -497,6 +478,8 @@ def EnableTrt(mod, params=None, trt_version=None, prune_subgraphs=False):
             trt_version = (6, 0, 1)
     assert isinstance(trt_version, (list, tuple))
     assert len(trt_version) == 3
+
+    register_tensorrt_annotations(trt_version)
 
     if params:
         # Bind params so that we can use FoldConstant.

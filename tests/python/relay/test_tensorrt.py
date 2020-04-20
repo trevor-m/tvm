@@ -326,24 +326,7 @@ def test_tensorrt_ops():
         out = relay.Tuple((z, w))
         f = relay.Function([x, y], out)
         return f, {'x': (1, 3), 'y': (1, 3)}, []
-    
-    def test_nms():
-        x = relay.var('x', shape=(1, 3840, 5), dtype='float32')
-        ret = relay.vision.get_valid_counts(x, score_threshold=0,
-                                      id_index=-1, score_index=0)
-        nms_out = relay.vision.non_max_suppression(ret[1], ret[0],
-                                                iou_threshold=0.7,
-                                                force_suppress=True,
-                                                top_k=6000,
-                                                coord_start=1,
-                                                score_index=0,
-                                                id_index=-1,
-                                                return_indices=False,
-                                                invalid_to_bottom=True)
-        f = relay.Function([x], nms_out)
-        return f, {'x': (1, 3840, 5)}, []
 
-    # run_and_verify(test_nms())
     run_and_verify(test_float_const())
     run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
