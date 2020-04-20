@@ -1388,4 +1388,12 @@ class CalibrationGraphMutator(ExprMutator):
 
     def make_calibration_graph(self, expr):
         visit_body = super().visit(expr.body)
-        return relay.Function(expr.params, relay.Tuple([visit_body] + self.additional_outputs))
+        # Get original output(s)
+        outputs = []
+        if isinstance(visit_body, Tuple):
+            for out in visit_body.fields:
+                outputs.append(out)
+        else:
+            outputs.append(out)
+        # Create new function with added subgraph inputs + outputs
+        return relay.Function(expr.params, relay.Tuple(outputs + self.additional_outputs))
