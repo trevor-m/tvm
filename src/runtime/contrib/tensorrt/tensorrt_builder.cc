@@ -102,13 +102,13 @@ GetOpConverters() {
   return map;
 }
 
-TensorRTBuilder::TensorRTBuilder(const std::vector<DLTensor*>& args, size_t max_workspace_size)
+TensorRTBuilder::TensorRTBuilder(runtime::TensorRTLogger* logger,
+    const std::vector<DLTensor*>& args, size_t max_workspace_size)
     : execution_args_(args), max_workspace_size_(max_workspace_size) {
   // Create TRT builder and network.
-  static runtime::TensorRTLogger logger;
+  builder_ = nvinfer1::createInferBuilder(*logger);
 #if TRT_VERSION_GE(6, 0, 1)
   // Use INetworkV2 with explicit batch.
-  builder_ = nvinfer1::createInferBuilder(logger);
   const auto flags =
       1U << static_cast<uint32_t>(
           nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
@@ -312,7 +312,7 @@ nvinfer1::ITensor* TensorRTBuilder::AddInput(const std::string& tensor_name, con
   if (network_->hasImplicitBatchDimension() && shape.size() > 1) {
     shape.erase(shape.begin());
   }
-  LOG(INFO) << "Added TRT network input: " << tensor_name << " "
+  DLOG(INFO) << "Added TRT network input: " << tensor_name << " "
              << DebugString(shape);
   nvinfer1::Dims dims = VectorToTrtDims(shape);
   auto type_node = type.as<TensorTypeNode>();

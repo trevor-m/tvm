@@ -48,6 +48,9 @@ class TensorRTModule : public runtime::ModuleNode {
       const std::unordered_map<std::string, std::string>& serialized_subgraphs)
       : serialized_subgraphs_(serialized_subgraphs) {
     max_workspace_size_ = dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", size_t(1) << 31);
+#if TVM_GRAPH_RUNTIME_TENSORRT
+    GetCachedEnginesFromDisk();
+#endif
   }
 
   ~TensorRTModule() {
@@ -77,9 +80,10 @@ class TensorRTModule : public runtime::ModuleNode {
         auto func = Downcast<relay::Function>(
             LoadJSON(this->serialized_subgraphs_[name]));
         auto inputs = ConvertInputs(args);
-        relay::contrib::TensorRTBuilder builder(inputs, max_workspace_size_);
+        relay::contrib::TensorRTBuilder builder(&logger_, inputs, max_workspace_size_);
         auto engine_and_context = builder.BuildEngine(func);
-        LOG(INFO) << "Finished building engine";
+        CacheEngineToDisk(name, engine_and_context);
+        LOG(INFO) << "Finished building TensorRT engine for subgraph " << name;
         this->trt_engine_cache_[name] = engine_and_context;
         this->ExecuteEngine(engine_and_context, args, rv);
       } else {
@@ -133,6 +137,9 @@ class TensorRTModule : public runtime::ModuleNode {
 #if TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Map of function name to TRT engine if built already. */
   std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
+
+  /*! \brief TensorRT object used to log warnings and errors. */
+  TensorRTLogger logger_;
 
   /*!
    * \brief Convert TVMArgs to make compatible with VM or graph runtime.
@@ -214,8 +221,76 @@ class TensorRTModule : public runtime::ModuleNode {
 #endif
     *rv = bindings[num_bindings - num_outputs];
   }
+
+  /*! \brief If TVM_TENSORRT_CACHE_DIR is set, will check that directory for
+   * already built TRT engines and load into trt_engine_cache_ so they don't
+   * have to be built at first inference.
+   */
+  void GetCachedEnginesFromDisk() {
+    std::string cache_dir = dmlc::GetEnv("TVM_TENSORRT_CACHE_DIR", std::string(""));
+    if (cache_dir.empty()) return;
+    for (auto it : serialized_subgraphs_) {
+      std::string key = std::to_string(std::hash<std::string>()(it.second));
+      std::string path = cache_dir + "/" + key + ".plan";
+      // Check if engine is in the cache.
+      std::ifstream infile(path, std::ios::binary);
+      if (!infile.good()) continue;
+      LOG(INFO) << "Loading cached TensorRT engine from " << path;
+      infile.close();
+      std::string serialized_engine;
+      LoadBinaryFromFile(path, &serialized_engine);
+      // Deserialize engine
+      nvinfer1::IRuntime* runtime = nvinfer1::createInferRuntime(logger_);
+      TrtEngineAndContext engine_and_context;
+      engine_and_context.engine = runtime->deserializeCudaEngine(
+          &serialized_engine[0], serialized_engine.size(), nullptr);;
+      engine_and_context.context = engine_and_context.engine->createExecutionContext();
+      // Load metadata
+      std::string meta_path = cache_dir + "/" + key + ".meta";
+      std::string serialized_meta;
+      LoadBinaryFromFile(meta_path, &serialized_meta);
+      std::istringstream is(serialized_meta);
+      dmlc::JSONReader reader(&is);
+      dmlc::JSONObjectReadHelper helper;
+      helper.DeclareField("inputs", &engine_and_context.inputs);
+      helper.DeclareField("input_is_baked", &engine_and_context.input_is_baked);
+      helper.DeclareField("outputs", &engine_and_context.outputs);
+      helper.ReadAllFields(&reader);
+      trt_engine_cache_[it.first] = engine_and_context;
+    }
+  }
+
+  /*! \brief If TVM_TENSORRT_CACHE_DIR is set, will save the engine to that
+   * directory so it can be loaded later. A hash of the source relay function is
+   * used as the key for the file name.
+   * \param name Subgraph name
+   * \param engine_and_context Engine to cache
+   */
+  void CacheEngineToDisk(const std::string& name, const TrtEngineAndContext& engine_and_context) {
+    std::string cache_dir = dmlc::GetEnv("TVM_TENSORRT_CACHE_DIR", std::string(""));
+    if (cache_dir.empty()) return;
+    std::string key = std::to_string(std::hash<std::string>()(serialized_subgraphs_[name]));
+    std::string path = cache_dir + "/" + key + ".plan";
+    LOG(INFO) << "Caching TensorRT engine to " << path;
+    // Serialize engine to disk
+    nvinfer1::IHostMemory* serialized_engine = engine_and_context.engine->serialize();
+    SaveBinaryToFile(path, std::string(static_cast<const char*>(serialized_engine->data()),
+                                       serialized_engine->size()));
+    serialized_engine->destroy();
+    // Serialize metadata
+    std::ostringstream os;
+    dmlc::JSONWriter writer(&os);
+    writer.BeginObject();
+    writer.WriteObjectKeyValue("inputs", engine_and_context.inputs);
+    writer.WriteObjectKeyValue("input_is_baked", engine_and_context.input_is_baked);
+    writer.WriteObjectKeyValue("outputs", engine_and_context.outputs);
+    writer.EndObject();
+    std::string meta_path = cache_dir + "/" + key + ".meta";
+    SaveBinaryToFile(meta_path, os.str());
+  }
 #endif  // TVM_GRAPH_RUNTIME_TENSORRT
 
+  /*! \brief Serialize this module to a string. To be used during codegen. */
   std::string SerializeModuleToString() {
     std::ostringstream os;
     dmlc::JSONWriter writer(&os);
@@ -226,6 +301,7 @@ class TensorRTModule : public runtime::ModuleNode {
     return os.str();
   }
 
+  /*! \brief Load serialized module from string created by SerializeModuleToString. */
   static Module CreateModuleFromString(const std::string& str) {
     std::unordered_map<std::string, std::string> serialized_subgraphs;
     size_t max_workspace_size = 0;

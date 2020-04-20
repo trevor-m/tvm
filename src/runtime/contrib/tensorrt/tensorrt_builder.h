@@ -40,6 +40,8 @@
   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
   NV_TENSORRT_PATCH >= patch))
 
+#include "tensorrt_logger.h"
+
 namespace tvm {
 namespace runtime {
 
@@ -96,7 +98,8 @@ class TensorRTBuilder : public ExprVisitor {
    * \brief Create TensorRT builder.
    * \param args Inputs to this execution.
    */
-  explicit TensorRTBuilder(const std::vector<DLTensor*>& args, size_t max_workspace_size);
+  explicit TensorRTBuilder(runtime::TensorRTLogger* logger, const std::vector<DLTensor*>& args,
+                           size_t max_workspace_size);
 
   void VisitExpr_(const VarNode* node) final;
 
