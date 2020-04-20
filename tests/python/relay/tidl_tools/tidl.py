@@ -1365,6 +1365,10 @@ class CalibrationGraphMutator(ExprMutator):
         # Will map index in output to subgraph param name.
         self.name_map = {}
 
+    def add_new_output(self, name, expr):
+        self.name_map[self.num_original_outputs + len(self.additional_outputs)] = name
+        self.additional_outputs.append(expr)
+
     def visit_call(self, call):
         if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
             var_map = {}
@@ -1372,21 +1376,21 @@ class CalibrationGraphMutator(ExprMutator):
                 subgraph_name = "_".join(param.name_hint.split("_")[:2])
                 arg = super().visit(arg)
                 var_map[param] = arg
-                self.additional_outputs.append(arg)
-                self.name_map[len(self.additional_outputs)] = param.name_hint
+                self.add_new_output(param.name_hint, arg)
             new_body = VarReplacer(var_map).visit(call.op.body)
             # Add subgraph outputs as well
             if isinstance(new_body, Tuple):
                 for i, out in enumerate(new_body.fields):
-                    self.additional_outputs.append(out)
-                    self.name_map[len(self.additional_outputs)] = subgraph_name + "_o" + str(i)
+                    self.add_new_output(subgraph_name + "_o" + str(i), out)
             else:
-                self.additional_outputs.append(new_body)
-                self.name_map[len(self.additional_outputs)] = subgraph_name + "_o0"
+                self.add_new_output(subgraph_name + "_o0", new_body)
             return new_body
         return super().visit_call(call)
 
     def make_calibration_graph(self, expr):
+        self.num_original_outputs = 1
+        if isinstance(expr.body, Tuple):
+            self.num_original_outputs = len(expr.body.fields)
         visit_body = super().visit(expr.body)
         # Get original output(s)
         outputs = []
