@@ -1439,8 +1439,8 @@ class CalibrationGraphMutator(ExprMutator):
 
     def make_calibration_graph(self, expr):
         self.num_original_outputs = 1
-        if isinstance(expr.body, Tuple):
-            self.num_original_outputs = len(expr.body.fields)    
+        if isinstance(expr.body.checked_type, relay.TupleType):
+            self.num_original_outputs = len(expr.body.checked_type.fields)
         visit_body = super().visit(expr.body)
         # Get original output(s)
         outputs = []
