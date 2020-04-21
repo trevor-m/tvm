@@ -16,7 +16,10 @@
 # under the License.
 """Unit tests for graph partitioning."""
 
+import os
+import sys
 import numpy as np
+import subprocess
 
 import tvm
 import tvm.relay.testing
@@ -24,6 +27,8 @@ from tvm import relay
 from tvm.relay import transform
 import tvm.relay.op.contrib.tidl
 from tvm.relay.build_module import bind_params_by_name
+from tvm.contrib import graph_runtime
+
 from tidl_tools import tidl
 
 # For darknet tests
@@ -307,8 +312,9 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     mod_tvm = relay.transform.Inline()(mod_tvm)
     my_mutator = tidl.CalibrationGraphMutator("tidl")
     mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
-    #print("Calibration module:", mod_tvm)
-    print("Input map:", my_mutator.name_map)
+    print("---------- Calibration module: ---------", mod_tvm)
+    print(mod_tvm)
+    print("Input/output map:", my_mutator.name_map)
 
     # Build and execute calibration graph to get outputs
     with relay.build_config(opt_level=3):
@@ -375,6 +381,9 @@ def test_mxnet_mobilenet_ssd():
     print(mod.astext(show_meta_data=False))
     mod['main'] = bind_params_by_name(mod['main'], params)
     mod0 = mod
+    #with relay.build_config(opt_level=3):
+    #    graph, lib, params = relay.build(mod0, "llvm", params=params)
+
     print('---------- Merge Composite Functions ----------')
     mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod) #Merge sequence of ops into composite functions/ops
     print(mod.astext(show_meta_data=False))
@@ -393,7 +402,11 @@ def test_mxnet_mobilenet_ssd():
     print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
-    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, img)
+#    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, img)
+
+    #======================== Import the graph to TIDL ========================
+    if tidl.import_relay_ir(mod, params, None, "NCHW", "", "") == True:
+        print('Heterogeneous execution with TIDL.')
 
 
 def test_tidl_mobilenet_no_composite():
@@ -432,9 +445,108 @@ def test_tidl_mobilenet_no_composite():
             mod4 = transform.PartitionGraph()(mod4)
             print(mod4.astext(show_meta_data=False))
 
+def relay_graph_create(layout):
+    #============= Constructing a simple graph ==============
+    dtype = "float32"
+    input_shape    = (1, 3, 224, 224) # NCHW
+
+    #Get weights
+    w1_shape    = (32, 3, 3, 3)    # OIHW
+    w2_shape    = (1, 32, 3, 3)    # OIHW
+    mnet1_conv2d_0 = np.load('MobilenetV1_Conv2d_0_weights.npy').astype(np.float32)
+    mnet1_conv2d_1 = np.load('MobilenetV1_Conv2d_1_weights.npy').astype(np.float32) # HWIO
+    # change layout from HWIO to OIHW
+    w1 = mnet1_conv2d_0.transpose(3,2,0,1)
+    w2 = mnet1_conv2d_1.transpose(3,2,0,1)
+    params_w1 = tvm.nd.array(w1)
+    params_w2 = tvm.nd.array(w2)
+
+    data = relay.var('data', shape=(input_shape), dtype=dtype)
+    weight1 = relay.var('weight1', shape=(w1_shape), dtype=dtype)
+    conv2d_1 = relay.nn.conv2d(data,
+                               weight1,
+                               kernel_size=(3, 3),
+                               padding=(1, 1),
+                               strides=(2,2),
+                               data_layout = layout,
+                               kernel_layout = 'OIHW')
+    weight2 = relay.var('weight2', shape=(w2_shape), dtype=dtype)
+    conv2d_2 = relay.nn.conv2d(conv2d_1,
+                               weight2,
+                               kernel_size=(3, 3),
+                               padding=(1, 1),
+                               data_layout = layout,
+                               kernel_layout = 'OIHW')
+    conv2d_3 = relay.nn.conv2d(conv2d_1,
+                               weight2,
+                               kernel_size=(3, 3),
+                               padding=(1, 1),
+                               data_layout = layout,
+                               kernel_layout = 'OIHW')
+    conv2d_4 = relay.nn.conv2d(conv2d_1,
+                               weight2,
+                               kernel_size=(3, 3),
+                               padding=(1, 1),
+                               data_layout = layout,
+                               kernel_layout = 'OIHW')
+    concat = relay.concatenate((conv2d_2,conv2d_3,conv2d_4), axis=1)
+    #out = concat
+    out = relay.expr.Tuple([conv2d_2,conv2d_3,conv2d_4])
+    f = relay.Function([data, weight1, weight2], out)
+    mod = tvm.IRModule.from_expr(f)
+    params = {'weight1':params_w1, 'weight2':params_w2} 
+
+    return mod, params
+
+def test_extern_tidl():
+    layout = "NCHW"
+    #============= Create a Relay graph ==============
+    mod, params = relay_graph_create(layout)
+    print('---------- Original graph ----------')
+    print(mod.astext(show_meta_data=False))
+    mod['main'] = bind_params_by_name(mod['main'], params)
+    print("---------- Annotated Graph ----------")
+    mod = transform.AnnotateTarget("tidl")(mod) 
+    print(mod.astext(show_meta_data=False))
+    print("---------- Merge Compiler Regions ----------")
+    mod = transform.MergeCompilerRegions()(mod) #Merge annotated regions together that use the same external target, combines marked regions for each target
+    print(mod.astext(show_meta_data=False))
+    print("---------- Partioned Graph ----------")
+    mod = transform.PartitionGraph()(mod)
+    print(mod.astext(show_meta_data=False))
+    mod = UnpackComposites(mod, "tidl")
+    print("---------- Pruned Graph ----------")
+    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=1)
+    print(mod.astext(show_meta_data=False))
+
+    #============= Generate subgraph boundary tensors ==============
+    x = np.load('./tidl_tools/dog.npy') # (1,3,224,224)
+    input_data = x/np.amax(np.abs(x))
+    subgraph_tensors = generate_subgraph_tensors(mod, params, "data", input_data)
+
+    #======================== Import the graph to TIDL ========================
+    if tidl.import_relay_ir(mod, params, subgraph_tensors, layout, tidl_calib_tool, artifacts_folder) == True:
+        print('Heterogeneous execution with TIDL.')
+
+
 if __name__ == '__main__':
+    if os.getenv("TIDL_PLSDK") is None:
+        plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+    else: 
+        plsdk = os.getenv('TIDL_PLSDK')
+    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
+    #tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
+    tidl_calib_tool  = "./tidl_tools/eve_test_dl_algo.out"
+    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+    artifacts_folder = "./artifacts/"
+    filelist = [ f for f in os.listdir(artifacts_folder)]
+    for file in filelist:
+        os.remove(os.path.join(artifacts_folder, file))
+
     #test_tidl_annotation()
     #test_tidl_mobilenet()
     #test_tidl_mobilenet_no_composite()
     #test_tidl_yolo()
-    test_mxnet_mobilenet_ssd()
+    #test_mxnet_mobilenet_ssd()
+    test_extern_tidl()

@@ -449,16 +449,19 @@ def find_input_nodes(all_nodes, this_node):
     """
 
     input_nodes = []
-    node_dict_key_list = list(all_nodes.keys())
-    node_dict_val_list = list(all_nodes.values())
-    args = [all_nodes[arg] for arg in this_node.args]
-    for idx in args:
-        in_node = node_dict_key_list[node_dict_val_list.index(idx)]
-        if isinstance(in_node, relay.expr.TupleGetItem):
-            input_nodes.append(idx-1)
-        elif isinstance(in_node, relay.expr.Call):
-            input_nodes.append(idx)
-             
+    if isinstance(this_node, relay.expr.Call):
+        for in_node in this_node.args:
+            if isinstance(in_node, relay.expr.Tuple):
+                for i in range(len(in_node.fields)):
+                    input_nodes.append(all_nodes[in_node.fields[i]])
+            elif isinstance(in_node, relay.expr.TupleGetItem):
+                input_nodes.append(all_nodes[in_node.tuple_value])
+            elif isinstance(in_node, relay.expr.Call):
+                input_nodes.append(all_nodes[in_node])
+            #else: ignore all other types of nodes: var, const, etc.
+    elif isinstance(this_node, relay.expr.Tuple):
+        for in_node in this_node.fields:
+            input_nodes.append(all_nodes[in_node])
     return input_nodes
 
 def find_out_nodes(all_nodes, this_node):
@@ -478,21 +481,23 @@ def find_out_nodes(all_nodes, this_node):
     """
 
     output_nodes = []
-    node_dict_key_list = list(all_nodes.keys())
-    node_dict_val_list = list(all_nodes.values())
-    this_node_idx = all_nodes[this_node]
     for node, node_idx in all_nodes.items():
         if isinstance(node, relay.expr.Call):
-            args = [all_nodes[arg] for arg in node.args]
-            if this_node_idx in args:
+            if this_node in node.args:
                 output_nodes.append(node_idx)
-
-        if isinstance(node, relay.expr.TupleGetItem):
-            next_node = node_dict_key_list[node_dict_val_list.index(node_idx+1)]
-            args = [all_nodes[arg] for arg in next_node.args]
-            if this_node_idx+1 in args:
-                output_nodes.append(node_idx+1)
-                #print('Node after ' + this_node.op.name + ' is ' + next_node.op.name)
+        elif isinstance(node, relay.expr.TupleGetItem):
+            if this_node == node.tuple_value:
+                output_nodes = output_nodes + find_out_nodes(all_nodes, node)
+        elif isinstance(node, relay.expr.Tuple):
+            for i in range(len(node.fields)):
+                if this_node == node.fields[i]:
+                    tuple_node_outs = find_out_nodes(all_nodes, node)
+                    if len(tuple_node_outs) == 0:
+                        # this is an output node
+                        output_nodes.append(all_nodes[node])
+                    else:
+                        # this is an input node to another node
+                        output_nodes = output_nodes + tuple_node_outs
 
     return output_nodes
 
@@ -533,7 +538,7 @@ def find_in_out_nodes(all_nodes, this_node):
 
     in_out_nodes.num_in_nodes = len(in_nodes)
 
-    out_nodes = find_out_nodes(all_nodes, this_node) # node indices of input nodes
+    out_nodes = find_out_nodes(all_nodes, this_node) # node indices of output nodes
     #print('number of output nodes: ' + str(len(out_nodes)))
     if len(out_nodes) == 0:
         in_out_nodes.out_nodes = None # this is the last node
@@ -818,6 +823,16 @@ def tidl_import_pooling(node, type):
 
     return
 
+def tidl_import_concat(all_nodes, node):
+
+    in_nodes = find_input_nodes(all_nodes, node) # node indices of input nodes
+    print("Importing concatenate layer, number of input nodes: " + str(len(in_nodes)))
+    _tidlImportConcat = _tidl_mod.tidlImportConcat
+    _tidlImportConcat.argtype = ctypes.c_int
+    _tidlImportConcat.restype = None
+    _tidlImportConcat(len(in_nodes))
+
+
 def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
     r""" Initializing TIDL import
 
@@ -907,9 +922,11 @@ def tidl_import_node(all_nodes, this_node, params):
         _tidlImportSoftmax.argtype = None
         _tidlImportSoftmax.restype = None
         _tidlImportSoftmax()
-
-    #else:
-    #    status = False
+    elif this_node.op.name == 'concatenate':
+        print("Importing concatenate node")
+        status = tidl_import_concat(all_nodes, this_node)
+    else:
+        status = False
 
     if status == False:
         return False
@@ -1042,6 +1059,30 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outIsNCHW     = {}\n".format(isNCHW))
 
 
+def tidl_import_tuple_node(all_nodes, node):
+
+    out_nodes = find_out_nodes(all_nodes, node)
+    if len(out_nodes) == 0:
+        # this is the last node of the graph - import this to out data layer
+        in_nodes = find_input_nodes(all_nodes, node)
+        print("Importing out data layer, number of input nodes: " + str(len(in_nodes)))
+        _tidlImportOutData = _tidl_mod.tidlImportOutData
+        _tidlImportOutData.argtype = ctypes.c_int
+        _tidlImportOutData.restype = None
+        _tidlImportOutData(len(in_nodes))
+
+        # TODO: remove duplications with tidl_import_node
+        in_out_nodes = find_in_out_nodes(all_nodes, node)
+
+        _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
+        _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+        _tidlImportLinkNodes.restype = None
+        _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
+        return True
+    else:
+        # this is not the last node of the graph - ignore it
+        return True
+
 def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
     r""" Relay IR import to TIDL 
 
@@ -1099,6 +1140,15 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         for node in all_nodes_tidl:
             if isinstance(node, relay.expr.Call):
                 result = tidl_import_node(all_nodes_tidl, node, params)
+                if result == False:
+                    return False
+        # Import expr.Tuple node after importing all expr.call nodes
+        for node in all_nodes_tidl:
+            if isinstance(node, relay.expr.Tuple):
+                #node.fields: array of expr.call nodes
+                #len(node.fields)
+                print("This is a TupleNode")
+                result = tidl_import_tuple_node(all_nodes_tidl, node)
                 if result == False:
                     return False
     
@@ -1365,6 +1415,10 @@ class CalibrationGraphMutator(ExprMutator):
         # Will map index in output to subgraph param name.
         self.name_map = {}
 
+    def add_new_output(self, name, expr):
+        self.name_map[self.num_original_outputs + len(self.additional_outputs)] = name
+        self.additional_outputs.append(expr)
+
     def visit_call(self, call):
         if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
             var_map = {}
@@ -1372,21 +1426,21 @@ class CalibrationGraphMutator(ExprMutator):
                 subgraph_name = "_".join(param.name_hint.split("_")[:2])
                 arg = super().visit(arg)
                 var_map[param] = arg
-                self.additional_outputs.append(arg)
-                self.name_map[len(self.additional_outputs)] = param.name_hint
+                self.add_new_output(param.name_hint, arg)
             new_body = VarReplacer(var_map).visit(call.op.body)
             # Add subgraph outputs as well
             if isinstance(new_body, Tuple):
                 for i, out in enumerate(new_body.fields):
-                    self.additional_outputs.append(out)
-                    self.name_map[len(self.additional_outputs)] = subgraph_name + "_o" + str(i)
+                    self.add_new_output(subgraph_name + "_o" + str(i), out)
             else:
-                self.additional_outputs.append(new_body)
-                self.name_map[len(self.additional_outputs)] = subgraph_name + "_o0"
+                self.add_new_output(subgraph_name + "_o0", new_body)
             return new_body
         return super().visit_call(call)
 
     def make_calibration_graph(self, expr):
+        self.num_original_outputs = 1
+        if isinstance(expr.body, Tuple):
+            self.num_original_outputs = len(expr.body.fields)    
         visit_body = super().visit(expr.body)
         # Get original output(s)
         outputs = []
@@ -1394,6 +1448,6 @@ class CalibrationGraphMutator(ExprMutator):
             for out in visit_body.fields:
                 outputs.append(out)
         else:
-            outputs.append(out)
+            outputs.append(visit_body)
         # Create new function with added subgraph inputs + outputs
         return relay.Function(expr.params, relay.Tuple(outputs + self.additional_outputs))

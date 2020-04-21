@@ -510,6 +510,33 @@ void tidlImportRelu(char * reluType)
   }
 }
 
+void tidlImportConcat(int num_inputs)
+{
+  sTIDL_LayerPC_t *layer;
+
+  TIDL_IMPORT_DBG_PRINT("----- Importing Concatenate layer ----- \n");
+  TIDL_IMPORT_DBG_PRINT2("Number of inputs to concatenate: %d\n", num_inputs);
+
+  layer = GET_LAYER_PTR;
+  layer->layerType = TIDL_ConcatLayer;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+  layer->numInBufs = num_inputs;
+}
+
+void tidlImportOutData(int num_inputs)
+{
+  sTIDL_LayerPC_t *layer;
+
+  TIDL_IMPORT_DBG_PRINT("----- Importing OutData layer ----- \n");
+  TIDL_IMPORT_DBG_PRINT2("Number of inputs to OutData layer: %d\n", num_inputs);
+
+  layer = GET_LAYER_PTR;
+  layer->layerType = TIDL_DataLayer;
+  layer->numInBufs = num_inputs;
+  layer->numOutBufs= -1;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+}
+
 /*==============================================================================
  * Link this node with other nodes that have been imported so far
  *
@@ -601,9 +628,9 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
 } // tidlImportLinkNodes()
 
 
-void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int32_t numLayers, int graphId)
+void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int graphId)
 {
-  int i;
+  int i, j;
   char    str[30];
   FILE *fp_params;
   
@@ -619,7 +646,7 @@ void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int32_t numLayers
                      tIDLNetStructure->interElementSize,
                      tIDLNetStructure->quantizationStyle);
 
-  for(i=0; i<numLayers; i++)
+  for(i=0; i<tIDLNetStructure->numLayers; i++)
   {
     fprintf(fp_params, "Layer %d parameters: %d, %d, %d, %d, %d, %d, %d\n", i, 
                        tIDLNetStructure->TIDLLayers[i].layerType,
@@ -630,35 +657,42 @@ void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int32_t numLayers
                        tIDLNetStructure->TIDLLayers[i].weightsElementSizeInBits,
                        tIDLNetStructure->TIDLLayers[i].strideOffsetMethod);
 
-    fprintf(fp_params, "inData parameters: %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n", 
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dataId,
-                       tIDLNetStructure->TIDLLayers[i].inData[0].elementType,    
-                       tIDLNetStructure->TIDLLayers[i].inData[0].numDim,
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dataQ,
-                       tIDLNetStructure->TIDLLayers[i].inData[0].minValue,
-                       tIDLNetStructure->TIDLLayers[i].inData[0].maxValue,
-                       tIDLNetStructure->TIDLLayers[i].inData[0].pitch[0],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].pitch[1],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].pitch[2],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[0],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[1],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[2],
-                       tIDLNetStructure->TIDLLayers[i].inData[0].dimValues[3]);
-    fprintf(fp_params, "outData parameters: %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n", 
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dataId,
-                       tIDLNetStructure->TIDLLayers[i].outData[0].elementType,    
-                       tIDLNetStructure->TIDLLayers[i].outData[0].numDim,
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dataQ,
-                       tIDLNetStructure->TIDLLayers[i].outData[0].minValue,
-                       tIDLNetStructure->TIDLLayers[i].outData[0].maxValue,
-                       tIDLNetStructure->TIDLLayers[i].outData[0].pitch[0],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].pitch[1],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].pitch[2],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[0],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[1],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[2],
-                       tIDLNetStructure->TIDLLayers[i].outData[0].dimValues[3]);
-
+    for(j=0; j<tIDLNetStructure->TIDLLayers[i].numInBufs; j++)
+    {
+      fprintf(fp_params, "inData[%d] parameters: %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n", 
+                       j,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dataId,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].elementType,    
+                       tIDLNetStructure->TIDLLayers[i].inData[j].numDim,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dataQ,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].minValue,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].maxValue,
+                       tIDLNetStructure->TIDLLayers[i].inData[j].pitch[0],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].pitch[1],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].pitch[2],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dimValues[0],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dimValues[1],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dimValues[2],
+                       tIDLNetStructure->TIDLLayers[i].inData[j].dimValues[3]);
+    }
+    for(j=0; j<tIDLNetStructure->TIDLLayers[i].numOutBufs; j++)
+    {
+      fprintf(fp_params, "outData[%d] parameters: %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n", 
+                       j,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dataId,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].elementType,    
+                       tIDLNetStructure->TIDLLayers[i].outData[j].numDim,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dataQ,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].minValue,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].maxValue,
+                       tIDLNetStructure->TIDLLayers[i].outData[j].pitch[0],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].pitch[1],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].pitch[2],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dimValues[0],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dimValues[1],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dimValues[2],
+                       tIDLNetStructure->TIDLLayers[i].outData[j].dimValues[3]);
+    }
     if(tIDLNetStructure->TIDLLayers[i].layerType == TIDL_DataLayer)
     {
       sTIDL_DataLayerParams_t * dataParams = &tIDLNetStructure->TIDLLayers[i].layerParams.dataLayerParams;
@@ -739,7 +773,7 @@ void tidl_printLayerparams(sTIDL_Network_t  *tIDLNetStructure, int32_t numLayers
 }
 
 #if 0
-void tidl_printOrigLayerparams(sTIDL_OrgNetwork_t  *tIDLNetStructure, int32_t numLayers, int graphId)
+void tidl_printOrigLayerparams(sTIDL_OrgNetwork_t  *tIDLNetStructure, int graphId)
 {
   int i;
   char    str[30];
@@ -750,7 +784,7 @@ void tidl_printOrigLayerparams(sTIDL_OrgNetwork_t  *tIDLNetStructure, int32_t nu
 
   fprintf(fp_params, "Network parameters: %d\n", tIDLNetStructure->numLayers);
 
-  for(i=0; i<numLayers; i++)
+  for(i=0; i<tIDLNetStructure->numLayers; i++)
   {
     fprintf(fp_params, "Layer %d parameters: %d, %d, %d, %d, %d\n", i, 
                        tIDLNetStructure->TIDLPCLayers[i].layerType,
@@ -1015,7 +1049,7 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
 
   tidl_addOutDataLayer(&tIDLNetStructure, tiLayerIndex);
 
-  tidl_printLayerparams(&tIDLNetStructure, tiLayerIndex, graphId);
+  tidl_printLayerparams(&tIDLNetStructure, graphId);
 
   sprintf(str, "%stidl_subgraph%d_net.bin", artifacts_folder, graphId);
   fpNetFile = fopen(str, "wb+");

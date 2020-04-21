@@ -247,7 +247,7 @@ def _clip_whitelist_fn(attrs, args):
     supported = (a_min == 0 and a_max == 6)
     return supported
 
-@reg.register("nn.concatenate", "target.tidl")
+@reg.register("concatenate", "target.tidl")
 def _concatenate_whitelist_fn(attrs, args):
     supported = (attrs.axis == 1)
     return supported

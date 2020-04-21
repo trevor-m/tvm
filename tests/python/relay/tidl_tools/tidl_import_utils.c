@@ -49,19 +49,25 @@ int32_t tidl_linkInputTensors(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t
   sTIDL_LayerPC_t *pSearchLayer;
 
   pCurrentLayer = &pOrgTIDLNetStructure->TIDLPCLayers[layerIndex];
+  printf("Linking input tensors for layer %d. There are %d inbufs.\n", layerIndex, pCurrentLayer->numInBufs);
   for (i0 = 0; i0 < pCurrentLayer->numInBufs; i0++)
   {
     for (i1 = layerIndex - 1; i1 >= 0; i1--)
     {
       pSearchLayer = &pOrgTIDLNetStructure->TIDLPCLayers[i1];
+      printf("search layer %d's numOutBufs is %d\n", i1, pSearchLayer->numOutBufs);
       for (i2 = 0; i2 < pSearchLayer->numOutBufs; i2++)
       {
+        printf("CurrentLayer inDataNames[%d]: %s, searchLayer outDataNames[%d]: %s\n", 
+               i0, pCurrentLayer->inDataNames[i0], i2, pSearchLayer->outDataNames[i2]);
         if (pSearchLayer->outConsumerLinked[i2] < pSearchLayer->outConsumerCnt[i2])
         {
           if (strcmp((const char *)pCurrentLayer->inDataNames[i0], 
                      (const char *)pSearchLayer->outDataNames[i2]) == 0)
           {
             pCurrentLayer->inData[i0].dataId = pSearchLayer->outData[i2].dataId;
+            printf("Found layer %d's input tensor, inData[%d].dataId = layer %d's outData[%d].dataId: %d\n", 
+                   layerIndex, i0, i1, i2, pSearchLayer->outData[i2].dataId);
             pSearchLayer->outConsumerLinked[i2]++;
           }
         }
@@ -1679,12 +1685,16 @@ int32_t TIDL_isDataBufUsed(int32_t           dataId,
 
 int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayerIndex)
 {
-  int32_t i, j;
+  int32_t i, j, tiLayerIndexNew;
 
   if(tIDLNetStructure->TIDLLayers[tiLayerIndex-1].layerType == TIDL_DataLayer)
   { // if last layer is already DataLayer, overwrite it
     TIDL_IMPORT_DBG_PRINT("Last layer is already data layer.\n");
-    tiLayerIndex -= 1;
+    //tiLayerIndex -= 1;
+    tIDLNetStructure->TIDLLayers[tiLayerIndex-1].numOutBufs = -1;
+    tIDLNetStructure->TIDLLayers[tiLayerIndex-1].coreID = 255;
+    tIDLNetStructure->numLayers = tiLayerIndex;
+    return TIDL_IMPORT_NO_ERR;
   }
 
   tIDLNetStructure->TIDLLayers[tiLayerIndex].layerType = TIDL_DataLayer;
@@ -1715,6 +1725,7 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
     }
     TIDL_IMPORT_DBG_PRINT2("Layer %d end.\n", i);
   }
+
 #ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
   printf("Added data layer, numInBufs = %d, numOutBufs = %d, input and output dimensions: ", 
          tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs,
@@ -1729,10 +1740,62 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
   {
     printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].outData[0].dimValues[j]);
   }
-  printf("End of data layer.\n");
+  printf("\nEnd of data layer.\n");
 #endif
 
   tIDLNetStructure->numLayers = tiLayerIndex + 1;
+
+/*
+  tiLayerIndexNew = tiLayerIndex;
+  for (i = 0; i < tiLayerIndex; i++)
+  {
+    TIDL_IMPORT_DBG_PRINT2("Layer %d begin: ", i);
+    if (tIDLNetStructure->TIDLLayers[i].layerType != TIDL_DataLayer)
+    {
+      TIDL_IMPORT_DBG_PRINT2("not a data layer, numOutBufs = %d. ",tIDLNetStructure->TIDLLayers[i].numOutBufs);
+      if(tIDLNetStructure->TIDLLayers[i].numOutBufs == -1) 
+      {
+        // This is the last layer - add data layer after it.
+        tIDLNetStructure->TIDLLayers[i].numOutBufs = 1; 
+        tIDLNetStructure->TIDLLayers[tiLayerIndexNew].layerType = TIDL_DataLayer;
+        tIDLNetStructure->TIDLLayers[tiLayerIndexNew].numInBufs = 0;
+        tIDLNetStructure->TIDLLayers[tiLayerIndexNew].numOutBufs= 1;
+        tIDLNetStructure->TIDLLayers[tiLayerIndexNew].coreID    = 255;
+
+        TIDL_IMPORT_DBG_PRINT2("out data id: %d ", tIDLNetStructure->TIDLLayers[i].outData[0].dataId);
+        if (!TIDL_isDataBufUsed(tIDLNetStructure->TIDLLayers[i].outData[0].dataId, tIDLNetStructure, tiLayerIndex))
+        {
+          TIDL_IMPORT_DBG_PRINT("not used, assigned to output layer's input. ");
+          tIDLNetStructure->TIDLLayers[tiLayerIndexNew].inData[0] = tIDLNetStructure->TIDLLayers[i].outData[0];
+        }
+        tiLayerIndexNew++;
+      }
+    }
+    TIDL_IMPORT_DBG_PRINT2("Layer %d end.\n", i);
+  }
+
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
+  for(i=tiLayerIndex; i<tiLayerIndexNew; i++)
+  {
+    printf("Added data layer %d, numInBufs = %d, numOutBufs = %d, input and output dimensions: ", 
+           i, tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs,
+           tIDLNetStructure->TIDLLayers[tiLayerIndex].numOutBufs);
+    for (j = 0; j < TIDL_DIM_MAX; j++)
+    {
+      printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].inData[0].dimValues[j]);
+    }
+    printf("|");
+    
+    for (j = 0; j < TIDL_DIM_MAX; j++)
+    {
+      printf("%8d ", tIDLNetStructure->TIDLLayers[tiLayerIndex].outData[0].dimValues[j]);
+    }
+    printf("\nEnd of data layer %d.\n", i);
+  }
+#endif
+
+  tIDLNetStructure->numLayers = tiLayerIndexNew;
+*/
   return TIDL_IMPORT_NO_ERR;
 }
 
