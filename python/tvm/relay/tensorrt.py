@@ -389,6 +389,10 @@ def register_tensorrt_annotations(trt_version):
         return True
 
 class VarReplacer(ExprMutator):
+    """
+    Visit an expression while replacing vars according to var_map. Used by
+    SubgraphRemover/PruneSubgraphs to return a subgraph originally partitioned to TRT back to TVM.
+    """
     def __init__(self, var_map):
         ExprMutator.__init__(self)
         self.var_map = var_map
@@ -399,6 +403,9 @@ class VarReplacer(ExprMutator):
         return super().visit_var(var)
 
 class SubgraphRemover(ExprMutator):
+    """
+    Reverts subgraphs in subgraphs_to_remove back to TVM instead of using an external codegen.
+    """
     def __init__(self, subgraphs_to_remove, mod, new_mod):
         ExprMutator.__init__(self)
         self.subgraphs_to_remove = subgraphs_to_remove
@@ -426,7 +433,12 @@ class SubgraphRemover(ExprMutator):
                 return subgraph_gv(*args)
         return super().visit_call(call)
 
-def PruneSubgraphs(mod, compiler="tensorrt", num_subgraphs_to_keep=4):
+def PruneSubgraphs(mod, compiler="tensorrt"):
+    """
+    Removes subgraphs which were originally partitioned for TRT if the number of
+    multiply-accumulates is 0. This is a heuristic which can improve performance by around 5%
+    because TVM provides better optimization for certain ops.
+    """
     subgraph_with_macs = []
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint

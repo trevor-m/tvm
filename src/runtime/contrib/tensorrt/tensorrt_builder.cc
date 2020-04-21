@@ -143,13 +143,13 @@ void TensorRTBuilder::ProcessOutputs(const Expr& expr) {
   for (size_t i = 0; i < network_outputs.size(); ++i) {
     CHECK(network_outputs[i].type == kTensor);
     auto out_tensor = network_outputs[i].tensor;
-
-    // Workaround to support duplicate outputs
+    std::string output_name = "tensorrt_output" + std::to_string(i);
+    // If the network is already marked as an output, make a copy to avoid TRT crash. This shouldn't
+    // happen since duplicate output issue in partitioning was fixed.
     if (out_tensor->isNetworkOutput()) {
+      LOG(WARNING) << output_name << " is a duplicate output.";
       out_tensor = network_->addIdentity(*out_tensor)->getOutput(0);
     }
-
-    std::string output_name = "tensorrt_output" + std::to_string(i);
     out_tensor->setName(output_name.c_str());
     network_output_names_.push_back(output_name);
     network_->markOutput(*out_tensor);
@@ -225,8 +225,7 @@ nvinfer1::Weights TensorRTBuilder::GetNdArrayAsWeights(
 
 void TensorRTBuilder::GetInputAsWeights(const VarNode* node) {
   const int var_node_idx = network_input_map_[node->name_hint()];
-  // This input will be baked into TensorRT engine using value from first
-  // invocation.
+  // This input will be baked into TensorRT engine using value from first invocation.
   network_input_is_baked_[var_node_idx] = true;
   nvinfer1::Weights weight =
       GetDLTensorAsWeights(execution_args_[var_node_idx], kDLGPU);
@@ -387,8 +386,7 @@ void TensorRTBuilder::VisitExpr_(const CallNode* call) {
       << "Unsupported operator conversion to TRT, op name: " << params.op_name;
   const auto converter = it->second;
 
-  // Ensure that nodes are processed in topological order by visiting their
-  // inputs first.
+  // Ensure that nodes are processed in topological order by visiting their inputs first.
   for (size_t i = 0; i < call->args.size(); ++i) {
     if (converter->variable_input_count ||
         converter->input_types[i] != kWeight) {
