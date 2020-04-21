@@ -279,7 +279,9 @@ class ElementWiseBinaryOpConverter : public TrtOpConverter {
                   {"subtract", nvinfer1::ElementWiseOperation::kSUB},
                   {"multiply", nvinfer1::ElementWiseOperation::kPROD},
                   {"divide", nvinfer1::ElementWiseOperation::kDIV},
-                  {"power", nvinfer1::ElementWiseOperation::kPOW}};
+                  {"power", nvinfer1::ElementWiseOperation::kPOW},
+                  {"maximum", nvinfer1::ElementWiseOperation::kMAX},
+                  {"minimum", nvinfer1::ElementWiseOperation::kMIN}};
     auto it = op_map.find(params->op_name);
     CHECK(it != op_map.end()) << "Unsupported elementwise type "
                               << params->op_name;
@@ -981,8 +983,8 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     static const std::unordered_map<std::string, nvinfer1::PoolingType> op_map =
-        {{"contrib.adaptive_max_pool2d", nvinfer1::PoolingType::kMAX},
-         {"contrib.adaptive_avg_pool2d", nvinfer1::PoolingType::kAVERAGE}};
+        {{"nn.adaptive_max_pool2d", nvinfer1::PoolingType::kMAX},
+         {"nn.adaptive_avg_pool2d", nvinfer1::PoolingType::kAVERAGE}};
     auto it = op_map.find(params->op_name);
     CHECK(it != op_map.end()) << "Unsupported pooling type " << params->op_name
                               << " in TensorRT";
@@ -991,9 +993,8 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
 
     // This is an approximation of adaptive pooling. Results will not be
     // mathematically exact except when output_size is (1, 1).
-    const auto output_size =
-        nvinfer1::DimsHW(attrs->output_size[0].as<IntImmNode>()->value,
-                         attrs->output_size[1].as<IntImmNode>()->value);
+    // Annotation rules will only allow output size of (1, 1).
+    auto output_size = nvinfer1::DimsHW(1, 1);
     const int h = params->network->hasImplicitBatchDimension() ? input_dims[1]
                                                                : input_dims[2];
     const int w = params->network->hasImplicitBatchDimension() ? input_dims[2]

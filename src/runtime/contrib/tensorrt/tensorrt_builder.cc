@@ -53,6 +53,8 @@ GetOpConverters() {
   map->emplace("multiply", std::make_shared<ElementWiseBinaryOpConverter>());
   map->emplace("divide", std::make_shared<ElementWiseBinaryOpConverter>());
   map->emplace("power", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("maximum", std::make_shared<ElementWiseBinaryOpConverter>());
+  map->emplace("minimum", std::make_shared<ElementWiseBinaryOpConverter>());
   map->emplace("nn.max_pool2d", std::make_shared<PoolingOpConverter>());
   map->emplace("nn.avg_pool2d", std::make_shared<PoolingOpConverter>());
   map->emplace("nn.global_max_pool2d",
@@ -78,9 +80,9 @@ GetOpConverters() {
   map->emplace("max", std::make_shared<ReduceOpConverter>());
   map->emplace("min", std::make_shared<ReduceOpConverter>());
   map->emplace("mean", std::make_shared<ReduceOpConverter>());
-  map->emplace("contrib.adaptive_max_pool2d",
+  map->emplace("nn.adaptive_max_pool2d",
                std::make_shared<AdaptivePoolingOpConverter>());
-  map->emplace("contrib.adaptive_avg_pool2d",
+  map->emplace("nn.adaptive_avg_pool2d",
                std::make_shared<AdaptivePoolingOpConverter>());
 #if TRT_VERSION_GE(5, 1, 5)
   map->emplace("clip", std::make_shared<ActivationOpConverter>());

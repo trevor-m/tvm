@@ -116,12 +116,18 @@ def IsTrtRuntimeAvailable():
 def _register_external_op_helper(op_name, supported=True):
     @reg.register(op_name, "target.tensorrt")
     def _func_wrapper(attrs, args):
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         return supported
     return _func_wrapper
 
 def _register_external_op_helper_func(op_name, func, trt_version):
     @reg.register(op_name, "target.tensorrt")
     def _func_wrapper(attrs, args):
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         return func(attrs, args, op_name, trt_version)
     return _func_wrapper
 
@@ -134,11 +140,12 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper("nn.relu")
     _register_external_op_helper("sigmoid")
     _register_external_op_helper("tanh")
-    _register_external_op_helper("add")
     _register_external_op_helper("subtract")
     _register_external_op_helper("multiply")
     _register_external_op_helper("divide")
     _register_external_op_helper("power")
+    _register_external_op_helper("maximum")
+    _register_external_op_helper("minimum")
     _register_external_op_helper("exp")
     _register_external_op_helper("log")
     _register_external_op_helper("sqrt")
@@ -150,8 +157,24 @@ def register_tensorrt_annotations(trt_version):
     #_register_external_op_helper("slice_like")
     _register_external_op_helper("nn.upsampling")
 
+    @reg.register("add", "target.tensorrt")
+    def add_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if (isinstance(args[0], Constant) or isinstance(args[1], Constant)) and \
+                args[0].checked_type.shape[0] == args[0].checked_type.shape[0] and \
+                args[0].checked_type.shape[0] != 1 and \
+                (len(args[0].checked_type.shape) > 3 or len(args[1].checked_type.shape) > 3):
+            print("add: bug in TRT with adding batched constants.")
+            return False
+        return True
+
     @reg.register("nn.batch_norm", "target.tensorrt")
     def batch_norm_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if int(attrs.axis) != 1 and int(attrs.axis) != 3:
             print("nn.batch_norm: axis is {} but must be 1 or 3.".format(int(attrs.axis)))
             return False
@@ -159,6 +182,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.softmax", "target.tensorrt")
     def softmax_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if trt_version < (6, 0, 1) and int(attrs.axis) == 0:
             print("nn.softmax: can't modify batch dimension.")
             return False
@@ -166,6 +192,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.conv2d", "target.tensorrt")
     def conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.data_layout != "NCHW":
             print("nn.conv2d: data_layout is {} but must be NCHW.".format(attrs.data_layout))
             return False
@@ -179,6 +208,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.dense", "target.tensorrt")
     def dense_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         input_rank = len(args[0].checked_type.shape)
         weight_rank = len(args[1].checked_type.shape)
         if input_rank < 2 or input_rank > 4:
@@ -195,6 +227,9 @@ def register_tensorrt_annotations(trt_version):
         # converted to TRT without binding params and constant folding.
         # if trt_version < (6, 0, 1):
         #     return False
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         input_rank = len(args[0].checked_type.shape)
         if input_rank < 2 or input_rank > 4:
             print("nn.bias_add: input rank is {} but must be 2, 3 or 4.".format(input_rank))
@@ -203,6 +238,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.max_pool2d", "target.tensorrt")
     def max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.layout != "NCHW":
             print("nn.max_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
@@ -210,6 +248,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.avg_pool2d", "target.tensorrt")
     def avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.layout != "NCHW":
             print("nn.avg_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
@@ -224,6 +265,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.global_max_pool2d", "target.tensorrt")
     def global_max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.layout != "NCHW":
             print("nn.global_max_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
@@ -231,6 +275,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.global_avg_pool2d", "target.tensorrt")
     def global_avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.layout != "NCHW":
             print("nn.global_avg_pool2d: layout is {} but must be NCHW.".format(attrs.layout))
             return False
@@ -238,8 +285,8 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("expand_dims", "target.tensorrt")
     def expand_dims_whitelist_fn(attrs, args): # pylint: disable=unused-variable
-        if args[0].checked_type.dtype != "float32":
-            print("expand_dims: only fp32 inputs are supported.")
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
             return False
         if trt_version < (6, 0, 1) and int(attrs.axis) == 0:
             print("expand_dims: can't modify batch dimension.")
@@ -248,6 +295,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("squeeze", "target.tensorrt")
     def squeeze_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if not attrs.axis:
             print("squeeze: must explicitly set axis.")
             return False
@@ -258,6 +308,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("concatenate", "target.tensorrt")
     def concatenate_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.dtype != "float32" for x in args[0].checked_type.fields]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if trt_version >= (6, 0, 1):
             return True
         if int(attrs.axis) == 0:
@@ -272,6 +325,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.conv2d_transpose", "target.tensorrt")
     def conv2d_transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.data_layout != "NCHW":
             print("nn.conv2d_transpose: data_layout is {} but must be NCHW.".format(
                 attrs.data_layout))
@@ -291,6 +347,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("transpose", "target.tensorrt")
     def transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if trt_version < (6, 0, 1) and int(attrs.axes[0]) != 0:
             print("transpose: can't modify batch dimension.")
             return False
@@ -298,6 +357,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("reshape", "target.tensorrt")
     def reshape_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if any([x < -1 for x in map(int, attrs.newshape)]):
             print("reshape: new shape dims must be explicit.")
             return False
@@ -305,6 +367,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("nn.pad", "target.tensorrt")
     def pad_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if attrs.pad_mode != "constant":
             print("nn.pad: pad mode is {} but must be constant.".format(attrs.pad_mode))
             return False
@@ -346,6 +411,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("strided_slice", "target.tensorrt")
     def strided_slice_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if trt_version < (5, 1, 5):
             print("strided_slice: requires TensorRT version 5.1.5 or higher.")
             return False
@@ -366,6 +434,9 @@ def register_tensorrt_annotations(trt_version):
 
     @reg.register("image.resize", "target.tensorrt")
     def resize_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if trt_version < (6, 0, 1):
             print("image.resize: requires TensorRT version 6.0.1 or higher.")
             return False
@@ -374,17 +445,23 @@ def register_tensorrt_annotations(trt_version):
         # TODO(trevmorr): coordinate transform method
         return True
 
-    @reg.register("contrib.adaptive_max_pool2d", "target.tensorrt")
+    @reg.register("nn.adaptive_max_pool2d", "target.tensorrt")
     def adapative_max_pool2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if len(attrs.output_size) == 0 or any([size != 1 for size in map(int, attrs.output_size)]):
-            print("contrib.adaptive_max_pool2d: output size must be (1, 1).")
+            print("nn.adaptive_max_pool2d: output size must be (1, 1).")
             return False
         return True
 
-    @reg.register("contrib.adaptive_avg_pool2d", "target.tensorrt")
+    @reg.register("nn.adaptive_avg_pool2d", "target.tensorrt")
     def adapative_avg_pool2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
         if len(attrs.output_size) == 0 or any([size != 1 for size in map(int, attrs.output_size)]):
-            print("contrib.adaptive_avg_pool2d: output size must be (1, 1).")
+            print("nn.adaptive_avg_pool2d: output size must be (1, 1).")
             return False
         return True
 
