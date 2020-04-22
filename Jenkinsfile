@@ -82,13 +82,11 @@ def init_git() {
 }
 
 def get_tensorrt() {
-  sh """
-     pwd
-     """
-  s3Download(file: 'TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz',
+  sh "mkdir -p /packages"
+  s3Download(file: '/packages/TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz',
              bucket: 'neo-ai-dlr-jenkins-artifacts',
              path: 'TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz')
-  sh "tar xzvf TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz"
+  sh "tar xzvf /packages/TensorRT-7.0.0.11.Ubuntu-18.04.x86_64-gnu.cuda-10.0.cudnn7.6.tar.gz -C /packages"
 }
 
 def init_git_win() {
@@ -152,6 +150,7 @@ stage('Build') {
   parallel 'BUILD: GPU': {
     node('GPUBUILD') {
       ws(per_exec_ws("tvm/build-gpu")) {
+        get_tensorrt()
         init_git()
         sh "${docker_run} ${ci_gpu} ./tests/scripts/task_config_build_gpu.sh"
         make(ci_gpu, 'build', '-j2')
