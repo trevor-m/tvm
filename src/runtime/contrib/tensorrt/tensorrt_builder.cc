@@ -310,7 +310,7 @@ void TensorRTBuilder::VisitExpr_(const TupleNode* op) {
 nvinfer1::ITensor* TensorRTBuilder::AddInput(const std::string& tensor_name, const Type& type) {
   auto shape = GetShape(type);
   // Remove batch dim when not in explicit batch mode.
-  if (network_->hasImplicitBatchDimension() && shape.size() > 1) {
+  if (TRT_HAS_IMPLICIT_BATCH && shape.size() > 1) {
     shape.erase(shape.begin());
   }
   DLOG(INFO) << "Added TRT network input: " << tensor_name << " "
@@ -370,8 +370,7 @@ void TensorRTBuilder::VisitExpr_(const ConstantNode* node) {
   nvinfer1::Weights weight = GetNdArrayAsWeights(node->data, kDLCPU);
   auto shape = node->data.Shape();
   // Remove batch dim when not in explicit batch mode.
-  if (network_->hasImplicitBatchDimension() && shape.size() > 1 &&
-      shape[0] == 1) {
+  if (TRT_HAS_IMPLICIT_BATCH && shape.size() > 1 && shape[0] == 1) {
     shape.erase(shape.begin());
   }
   nvinfer1::Dims dims = VectorToTrtDims(shape);

@@ -155,7 +155,6 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper("clip")
     _register_external_op_helper("split")
     #_register_external_op_helper("slice_like")
-    _register_external_op_helper("nn.upsampling")
 
     @reg.register("add", "target.tensorrt")
     def add_whitelist_fn(attrs, args): # pylint: disable=unused-variable
@@ -407,7 +406,6 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper_func("cos", trt_5_1_5_whitelist_fn, trt_version)
     _register_external_op_helper_func("atan", trt_5_1_5_whitelist_fn, trt_version)
     _register_external_op_helper_func("ceil", trt_5_1_5_whitelist_fn, trt_version)
-    _register_external_op_helper_func("floor", trt_5_1_5_whitelist_fn, trt_version)
 
     @reg.register("strided_slice", "target.tensorrt")
     def strided_slice_whitelist_fn(attrs, args): # pylint: disable=unused-variable
@@ -462,6 +460,16 @@ def register_tensorrt_annotations(trt_version):
             return False
         if len(attrs.output_size) == 0 or any([size != 1 for size in map(int, attrs.output_size)]):
             print("nn.adaptive_avg_pool2d: output size must be (1, 1).")
+            return False
+        return True
+
+    @reg.register("nn.upsampling", "target.tensorrt")
+    def upsampling_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if trt_version < (6, 0, 1):
+            print("nn.upsampling: requires TensorRT version 6.0.1 or higher.")
             return False
         return True
 
