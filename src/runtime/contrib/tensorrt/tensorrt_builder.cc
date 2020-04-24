@@ -168,10 +168,10 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
   ProcessOutputs(func->body);
 // Build engine.
 #if TRT_VERSION_GE(6, 0, 1)
-  auto config = builder_->createBuilderConfig();
-  config->setMaxWorkspaceSize(max_workspace_size_);
+  config_ = builder_->createBuilderConfig();
+  config_->setMaxWorkspaceSize(max_workspace_size_);
   if (dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false)) {
-    config->setFlag(nvinfer1::BuilderFlag::kFP16);
+    config_->setFlag(nvinfer1::BuilderFlag::kFP16);
   }
   // Add profiles.
   auto profile = builder_->createOptimizationProfile();
@@ -182,9 +182,9 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
     profile->setDimensions(name, nvinfer1::OptProfileSelector::kOPT, dims);
     profile->setDimensions(name, nvinfer1::OptProfileSelector::kMAX, dims);
   }
-  config->addOptimizationProfile(profile);
+  config_->addOptimizationProfile(profile);
   nvinfer1::ICudaEngine* engine =
-      builder_->buildEngineWithConfig(*network_, *config);
+      builder_->buildEngineWithConfig(*network_, *config_);
 #else
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
 #endif
@@ -441,6 +441,7 @@ void TensorRTBuilder::VisitExpr_(const CallNode* call) {
 
 void TensorRTBuilder::CleanUp() {
   network_->destroy();
+  config_->destroy();
   builder_->destroy();
   for (auto weight : trt_weights_) {
     if (weight.type == nvinfer1::DataType::kFLOAT) {

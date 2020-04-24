@@ -168,6 +168,11 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
 
+#if TRT_VERSION_GE(6, 0, 1)
+  /*! \brief TensorRT builder config. */
+  nvinfer1::IBuilderConfig* config_;
+#endif
+
   /*! \brief TensorRT network definition. */
   nvinfer1::INetworkDefinition* network_;
 
