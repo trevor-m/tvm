@@ -312,7 +312,8 @@ class TensorRTModule : public runtime::ModuleNode {
     helper.DeclareOptionalField("max_workspace_size", &max_workspace_size);
     helper.ReadAllFields(&reader);
     auto n = make_object<TensorRTModule>(serialized_subgraphs);
-    if (max_workspace_size != 0) {
+    // Use max_workspace_size from artifact if it is set and it is not overriden by env var.
+    if (max_workspace_size != 0 && dmlc::GetEnv("TVM_TENSORRT_MAX_WORKSPACE_SIZE", 0) != 0) {
       n->max_workspace_size_ = max_workspace_size;
     }
     return Module(n);
