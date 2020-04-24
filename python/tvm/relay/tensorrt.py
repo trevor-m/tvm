@@ -153,7 +153,8 @@ def register_tensorrt_annotations(trt_version):
     _register_external_op_helper("negative")
     _register_external_op_helper("nn.batch_flatten")
     _register_external_op_helper("clip")
-    _register_external_op_helper("split")
+    # TODO(trevmorr): Temporarily disable split due to TRT bug on xavier.
+    #_register_external_op_helper("split")
     #_register_external_op_helper("slice_like")
 
     @reg.register("add", "target.tensorrt")
