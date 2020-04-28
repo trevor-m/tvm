@@ -19,12 +19,25 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
+class VarRenamer(ExprMutator):
+    def __init__(self, new_subgraph_name):
+        ExprMutator.__init__(self)
+        self.new_subgraph_name = new_subgraph_name
+
+    def visit_var(self, var):
+        if "_".join(var.name_hint.split('_')[:2]) != self.new_subgraph_name:
+            new_var_name = self.new_subgraph_name + "_" + var.name_hint.split('_')[2]
+            return relay.Var(new_var_name, var.checked_type)
+        return super().visit_var(var)
+
 class SubgraphRemover(ExprMutator):
-    def __init__(self, subgraphs_to_remove, mod, new_mod):
+    def __init__(self, subgraphs_to_remove, mod, new_mod, rename_starting_from_0=True):
         ExprVisitor.__init__(self)
         self.subgraphs_to_remove = subgraphs_to_remove
         self.mod = mod
         self.new_mod = new_mod
+        self.rename_starting_from_0 = rename_starting_from_0
+        self.count = 0
 
     def visit_call(self, call):
         if isinstance(call.op, GlobalVar):
@@ -39,11 +52,21 @@ class SubgraphRemover(ExprMutator):
                 return new_body
             elif name != "main":
                 # Copy the GlobalVar (subgraph function) to the new module and call.
+                if self.rename_starting_from_0:
+                    new_name = name.split('_')[0] + "_" + str(self.count)
+                    self.count += 1
+                else:
+                    new_name = name
                 args = []
                 for arg in call.args:
                     args.append(super().visit(arg))
-                subgraph_gv = relay.GlobalVar(name)
-                self.new_mod[subgraph_gv] = self.mod[name]
+                subgraph_gv = relay.GlobalVar(new_name)
+                if self.rename_starting_from_0:
+                    subgraph_func = VarRenamer(new_name).visit(self.mod[name])
+                    subgraph_func = subgraph_func.with_attr("global_symbol", new_name)
+                    self.new_mod[subgraph_gv] = subgraph_func
+                else:
+                    self.new_mod[subgraph_gv] = self.mod[name]
                 return subgraph_gv(*args)
         return super().visit_call(call)
 
@@ -55,8 +78,9 @@ def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
             continue
         num_macs = relay.analysis.get_total_mac_number(mod[name])
         subgraph_with_macs.append([name, num_macs])
+    subgraph_with_macs = sorted(subgraph_with_macs, key=lambda x: int(x[1]))
     print("Subgraphs with computed # of MACS:", subgraph_with_macs)
-    subgraphs_to_remove = sorted(subgraph_with_macs, key=lambda x: int(x[1]))[:-num_subgraphs_to_keep]
+    subgraphs_to_remove = subgraph_with_macs[:-num_subgraphs_to_keep]
     print("Will remove these subgraphs:", subgraphs_to_remove)
     subgraph_names_to_remove = set([x[0] for x in subgraphs_to_remove])
     # Create new pruned module
