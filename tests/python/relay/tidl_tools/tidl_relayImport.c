@@ -508,6 +508,10 @@ void tidlImportRelu(char * reluType)
     layer->layerParams.reluParams.reluType = TIDL_RelU6;
     TIDL_IMPORT_DBG_PRINT("Relu6\n");
   }
+  else {
+    layer->layerParams.reluParams.reluType = TIDL_RelU;
+    TIDL_IMPORT_DBG_PRINT("Relu\n");
+  }
 }
 
 void tidlImportConcat(int num_inputs)

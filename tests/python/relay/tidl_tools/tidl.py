@@ -832,7 +832,6 @@ def tidl_import_concat(all_nodes, node):
     _tidlImportConcat.restype = None
     _tidlImportConcat(len(in_nodes))
 
-
 def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
     r""" Initializing TIDL import
 
@@ -896,13 +895,18 @@ def tidl_import_node(all_nodes, this_node, params):
         status = tidl_import_conv2d(all_nodes, this_node, params)
     elif this_node.op.name == 'nn.pad':
         status = tidl_import_pad(this_node)
-    elif this_node.op.name == 'add':
+    elif this_node.op.name == 'add' or this_node.op.name == 'nn.bias_add':
         status = tidl_import_add(this_node, params)
     elif this_node.op.name == 'clip':
         _tidlImportRelu = _tidl_mod.tidlImportRelu
         _tidlImportRelu.argtype = (ctypes.c_char_p)
         _tidlImportRelu.restype  = None
         _tidlImportRelu(b'Relu6')
+    elif this_node.op.name == 'nn.relu':
+        _tidlImportRelu = _tidl_mod.tidlImportRelu
+        _tidlImportRelu.argtype = (ctypes.c_char_p)
+        _tidlImportRelu.restype  = None
+        _tidlImportRelu(b'Relu')
     elif this_node.op.name == 'nn.batch_norm':
         status = tidl_import_batch_norm(this_node, params)
     elif this_node.op.name == 'nn.avg_pool2d':
@@ -923,9 +927,9 @@ def tidl_import_node(all_nodes, this_node, params):
         _tidlImportSoftmax.restype = None
         _tidlImportSoftmax()
     elif this_node.op.name == 'concatenate':
-        print("Importing concatenate node")
         status = tidl_import_concat(all_nodes, this_node)
     else:
+        print("Operator " + this_node.op.name + " is not supported!")
         status = False
 
     if status == False:
@@ -1012,16 +1016,10 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
     Returns
     -------
     """
-    num_tensors = 0
+    tensor = []
     for key, value in subgraph_tensors.items():
         if key.find(tensor_name_prefix) != -1:
-            tensor = value
-            num_tensors += 1
-
-    # Only supports 1 input/output tensor at this moment
-    if num_tensors != 1:
-        return None
-
+            tensor.append(value)
     return tensor
 
 def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
@@ -1039,13 +1037,26 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         outIsNCHW   = 1
     """
     
-    sub_graph_cfg = artifacts_folder + "./subgraph" + str(subgraph_id) + ".cfg"
-    sub_graph_net_file = "./tidl_subgraph" + str(subgraph_id) + "_net.bin"
-    sub_graph_params_file = "./tidl_subgraph" + str(subgraph_id) + "_params.bin"
+    def print_list(in_list):
+        str0 = str(in_list)
+        str1 = str0.replace("[","")
+        str2 = str1.replace("]","")
+        str3 = str2.replace(",","",len(in_list)-1)
+        return str3
+
     if data_layout=="NCHW":
         isNCHW = 1
     else:
         isNCHW = 0
+    out_conv_type = []
+    out_is_nchw   = []
+    for i in range(len(output_scale)):
+        out_conv_type.append(0)
+        out_is_nchw.append(isNCHW)
+
+    sub_graph_cfg = artifacts_folder + "./subgraph" + str(subgraph_id) + ".cfg"
+    sub_graph_net_file = "./tidl_subgraph" + str(subgraph_id) + "_net.bin"
+    sub_graph_params_file = "./tidl_subgraph" + str(subgraph_id) + "_params.bin"
     with open(sub_graph_cfg, 'w') as cfg_file:
         cfg_file.write("netBinFile    = {}\n".format(sub_graph_net_file))
         cfg_file.write("paramsBinFile = {}\n".format(sub_graph_params_file))
@@ -1053,31 +1064,55 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("inIsSigned    = {}\n".format(input_signed))
         cfg_file.write("inScaleF2Q    = {}\n".format(round(input_scale,2)))
         cfg_file.write("inIsNCHW      = {}\n".format(isNCHW))
-        cfg_file.write("outConvType   = 0\n")
-        cfg_file.write("outIsSigned   = {}\n".format(output_signed))
-        cfg_file.write("outScaleF2Q   = {}\n".format(round(output_scale,2)))
-        cfg_file.write("outIsNCHW     = {}\n".format(isNCHW))
-
+        cfg_file.write("outConvType   = {}\n".format(print_list(out_conv_type)))
+        cfg_file.write("outIsSigned   = {}\n".format(print_list(output_signed)))
+        cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
+        cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
 def tidl_import_tuple_node(all_nodes, node):
+    """
+    """
 
+    MAX_NUM_OUTPUTS_PER_DATA_LAYER = 16
     out_nodes = find_out_nodes(all_nodes, node)
     if len(out_nodes) == 0:
         # this is the last node of the graph - import this to out data layer
         in_nodes = find_input_nodes(all_nodes, node)
-        print("Importing out data layer, number of input nodes: " + str(len(in_nodes)))
-        _tidlImportOutData = _tidl_mod.tidlImportOutData
-        _tidlImportOutData.argtype = ctypes.c_int
-        _tidlImportOutData.restype = None
-        _tidlImportOutData(len(in_nodes))
+        imported_nodes = 0
+        new_node_ind = len(all_nodes)+1
+        while (imported_nodes < len(in_nodes)):
+            if len(in_nodes) - imported_nodes < MAX_NUM_OUTPUTS_PER_DATA_LAYER:
+                nodes_for_this_data_layer = len(in_nodes) - imported_nodes
+                this_is_the_last_one = True
+            else:
+                nodes_for_this_data_layer = MAX_NUM_OUTPUTS_PER_DATA_LAYER
+                this_is_the_last_one = False
+        
+            print("Importing out data layer, number of input nodes: " + str(nodes_for_this_data_layer))
+            _tidlImportOutData = _tidl_mod.tidlImportOutData
+            _tidlImportOutData.argtype = ctypes.c_int
+            _tidlImportOutData.restype = None
+            _tidlImportOutData(nodes_for_this_data_layer)
+    
+            # TODO: remove duplications with tidl_import_node
+            in_out_nodes = InOutNodes()    # instantiate structure
+            in_out_nodes.this_node = new_node_ind
+            in_out_nodes.num_in_nodes = nodes_for_this_data_layer
+            in_nodes_this_layer = in_nodes[imported_nodes:imported_nodes+nodes_for_this_data_layer]
+            in_nodes_array = np.asarray(in_nodes_this_layer, dtype=np.int32)
+            in_out_nodes.in_nodes = ctypes.c_void_p(in_nodes_array.ctypes.data)
+            in_out_nodes.out_nodes = None
+            in_out_nodes.num_out_nodes = 0
+    
+            _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
+            _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+            _tidlImportLinkNodes.restype = None
+            _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
 
-        # TODO: remove duplications with tidl_import_node
-        in_out_nodes = find_in_out_nodes(all_nodes, node)
-
-        _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
-        _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-        _tidlImportLinkNodes.restype = None
-        _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
+            imported_nodes = imported_nodes + nodes_for_this_data_layer
+            new_node_ind = new_node_ind + 1
+            if this_is_the_last_one== True:
+                break
         return True
     else:
         # this is not the last node of the graph - ignore it
@@ -1126,11 +1161,15 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
         if input_fp is None:
             return False
+        if len(input_fp) > 1:
+            print("Error - only 1 input tensor is supported for now!")
+            return False
+
         # Quantize input tensor into 8-bit integer
-        input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant_flatten(input_fp, data_layout)
+        input_quant_vec, input_scale, input_signed = tidl_utils.tensor_quant_flatten(input_fp[0], data_layout)
 
         # Initialize TIDL import
-        if tidl_import_init(data_layout, input_scale, input_signed, input_fp.shape) == False:
+        if tidl_import_init(data_layout, input_scale, input_signed, input_fp[0].shape) == False:
             return False
 
         # Scan through all relay.expr.Call nodes and import each to TIDL
@@ -1161,7 +1200,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
             return False
 
         # Calibrate TIDL for the imported subgraph
-        status, last_layer_q = subgraph_calibration(artifacts_folder, tidl_calib_tool, input_quant_vec, input_signed, subgraph_id)
+        status, out_data_q = subgraph_calibration(artifacts_folder, tidl_calib_tool, input_quant_vec, input_signed, subgraph_id)
         if status == False:
             return False
         
@@ -1170,10 +1209,15 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
         if output_fp is None:
             return False
-        output_signed = int(np.amin(output_fp) < 0)
-        output_scale  = last_layer_q / 255.0  # 255 is TIDL implementation specific
-        print("Output conversion: " + str(last_layer_q) + ", " + str(output_scale))
-        #print(last_layer_q
+        if len(output_fp) != len(out_data_q):
+            return False
+        output_signed = []
+        output_scale  = []
+        for i in range(len(output_fp)):
+            output_signed.append(int(np.amin(output_fp[i]) < 0))
+        for i in range(len(out_data_q)):
+            output_scale.append(round(out_data_q[i]/255.0,2))  # 255 is TIDL implementation specific
+        print("Output conversion: " + str(out_data_q) + ", " + str(output_scale))
         
         # Generate subgraph configuration file
         subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout, 
@@ -1265,47 +1309,30 @@ def subgraph_calibration(artifacts_folder, calib_tool, input_quant_vec, input_si
         print(console_out)
     except:
         print("TIDL calibration crashed")
-        return False, -1
+        return False, None
 
     # Find trace dump of last node - this may not be needed
     if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
-        files = os.listdir("./tempDir")
-        last_node = -1
-        trace_dump_last_node = None        
-        for file in files:
-            if 'trace_dump_' in file and '.y' in file:
-                x = file.replace('trace_dump_','')
-                y = x.split('_')
-                node = int(y[0])
-                if node > last_node:
-                    last_node = node
-                    trace_dump_last_node = file
-        if trace_dump_last_node is None:
-            print("TIDL calibration failed - can't find last node")
-            return False, -1
+        out_buf_ind = console_out.rfind("Number of output buffers:")
+        if out_buf_ind == -1:
+            print("TIDL calibration failed - can't find number of output buffers.")
+            return False, None
         else:
-            last_layer_ind = console_out.rfind(" Layer ")
-            if last_layer_ind == -1:
-                print("TIDL calibration failed - can't find last layer")
-                return False, -1
+            last_line   = console_out.split("Number of output dataQ:",1)[1]
+            num_outputs = int(last_line.split(". Output dataQ:",1)[0])
+            out_quants  = last_line.split(". Output dataQ:",1)[1]
+            quants = out_quants.split("End of config list found",1)[0]
+            qs = re.findall(r"\d+", quants)
+            outq = list(map(int,qs))
+            if num_outputs != len(outq):
+                print("TIDL calibration failed - can't find all outputQ's")
+                return False, None
             else:
-                last_line  = console_out[last_layer_ind:last_layer_ind+32]
-                last_q_ind = last_line.find(": Out Q :")
-                if last_q_ind == -1:
-                    # Last layer doesn't have Q value - use 255
-                    return True, 255
-                else:
-                    if last_line[last_q_ind+19] != ",":
-                        print("TIDL calibration failed - can't find last Q value")
-                        return False, -1
-                    else:
-                        last_q_val = last_line[last_q_ind+10:last_q_ind+19]
-                        print("TIDL calibration succeeded")
-                        return True, int(last_q_val)
+                return True, outq
     else:
         print("TIDL calibration failed.")
         print(error)
-        return False, -1
+        return False, None
 
 
 def tidl_calib(calib_tool, calib_raw_image, subgraph_id):

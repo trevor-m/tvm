@@ -155,8 +155,8 @@ class TIDLModule : public runtime::ModuleNode {
 #if 1
     std::cout << "TVM runtime GetFunc: subgraph " << name << std::endl;
     if (name.find("tidl_") == std::string::npos) {
-      LOG(FATAL) << "Subgraph name doesn't contain \"tidl_\"!" << std::endl;
-      return PackedFunc();
+      std::cout << "Subgraph name doesn't contain \"tidl_\"!" << std::endl;
+      return PackedFunc(nullptr);
     }
     std::cout << "Initializing TIDL ..." << std::endl;
     TidlInit();  // Question - should TidlInit() be called here??

@@ -16,6 +16,7 @@
 # under the License.
 """Unit tests for graph partitioning."""
 
+import gluoncv
 import os
 import sys
 import numpy as np
@@ -326,7 +327,12 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     #mod.run(data=input_data, weight1=params_w1, weight2=params_w2)
 
     results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
-    np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
+    #num_outputs = mod.get_num_outputs()
+    #out = mod.get_output(0).asnumpy()
+    #for i in range(num_outputs-len(my_mutator.name_map)-1):
+    #    out = np.concatenate((out,mod.get_output(i+1).asnumpy()))
+    #np.savetxt('graph_output.txt', out.flatten(), fmt='%10.5f')
+    #print("Number of output tensors: " + str(num_outputs-len(my_mutator.name_map)))
 
     # We now have subgraph inputs
     # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
@@ -348,6 +354,7 @@ def test_mxnet_mobilenet_ssd():
     #model = 'ssd_512_mobilenet1.0_coco'
     model = 'ssd_512_mobilenet1.0_voc'
     image_size = 512
+    layout = "NCHW"
 
     input_name = 'data'
     input_shape = (1, 3, image_size, image_size)
@@ -357,7 +364,7 @@ def test_mxnet_mobilenet_ssd():
 
     block.hybridize()
     block.forward(x)
-    block.export('temp')
+    block.export('temp')    # create file temp-symbol.json
     #with open('temp-symbol.json') as f:
     #    model_json = json.load(f)
     #model_json["heads"] = [[700, 0, 0]]
@@ -378,36 +385,65 @@ def test_mxnet_mobilenet_ssd():
 
     print('---------- Original Graph ----------')
     mod = relay.transform.RemoveUnusedFunctions()(mod)
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     mod['main'] = bind_params_by_name(mod['main'], params)
     mod0 = mod
-    #with relay.build_config(opt_level=3):
-    #    graph, lib, params = relay.build(mod0, "llvm", params=params)
 
     print('---------- Merge Composite Functions ----------')
     mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod) #Merge sequence of ops into composite functions/ops
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     print("---------- Annotated Graph ----------")
     mod = transform.AnnotateTarget("tidl")(mod) #Looks at annotated ops and marks them in the graph with compiler.begin and compiler.end
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     print("---------- Merge Compiler Regions ----------")
     mod = transform.MergeCompilerRegions()(mod) #Merge annotated regions together that use the same external target, combines marked regions for each target
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     print("---------- Partioned Graph ----------")
     mod = transform.PartitionGraph()(mod)
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     mod = UnpackComposites(mod, "tidl")
     print("---------- Pruned Graph ----------")
     mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=1)
     print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
-#    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, img)
+    input_data = np.expand_dims(img.transpose(2,0,1), axis=0)
+    #img_norm   = (img-128.0)/128.0
+    #np.save("street_small_norm.npy",img_norm)
+    #input_data = np.expand_dims(img_norm.transpose(2,0,1), axis=0)
+    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, input_data)
 
     #======================== Import the graph to TIDL ========================
-    if tidl.import_relay_ir(mod, params, None, "NCHW", "", "") == True:
+    if tidl.import_relay_ir(mod, params, subgraph_tensors, layout, tidl_calib_tool, artifacts_folder) == True:
         print('Heterogeneous execution with TIDL.')
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+    else:
+        print("Full graph compilation with LLVM.")
+        # Future optimization: if not all subgraphs failed with TIDL import, re-partition
+        # the graph to have only TIDL subgraphs with successful TIDL import. 
+        graph, lib, params = relay.build_module.build(mod0, target=target, params=params)
 
+    path_lib    = artifacts_folder + "deploy_lib.so"
+    path_graph  = artifacts_folder + "deploy_graph.json"
+    lib.export_library(path_lib, cc=arm_gcc) # for heterogeneous execute on TIDL+ARM
+    path_params = artifacts_folder + "deploy_param.params"
+
+    with open(path_graph, "w") as fo:
+      fo.write(graph)
+    with open(path_params, "wb") as fo:
+      fo.write(relay.save_param_dict(params))
+
+    #======================== Execute the full graph on TVM ====================
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod0, "llvm", params=params)
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod.set_input(input_name, input_data)
+    mod.set_input(**params)
+    mod.run()
+    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
+    print("Number of outputs: " + str(len(results)))
+    for i in range(len(results)):
+        np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
 
 def test_tidl_mobilenet_no_composite():
 
@@ -453,13 +489,17 @@ def relay_graph_create(layout):
     #Get weights
     w1_shape    = (32, 3, 3, 3)    # OIHW
     w2_shape    = (1, 32, 3, 3)    # OIHW
+    w3_shape    = (32,64, 1, 1)    # OIHW
     mnet1_conv2d_0 = np.load('MobilenetV1_Conv2d_0_weights.npy').astype(np.float32)
     mnet1_conv2d_1 = np.load('MobilenetV1_Conv2d_1_weights.npy').astype(np.float32) # HWIO
+    mnet1_conv2d_2 = np.load('MobilenetV1_Conv2d_2_weights.npy').astype(np.float32) # HWIO
     # change layout from HWIO to OIHW
     w1 = mnet1_conv2d_0.transpose(3,2,0,1)
     w2 = mnet1_conv2d_1.transpose(3,2,0,1)
+    w3 = mnet1_conv2d_2.transpose(3,2,0,1)
     params_w1 = tvm.nd.array(w1)
     params_w2 = tvm.nd.array(w2)
+    params_w3 = tvm.nd.array(w3)
 
     data = relay.var('data', shape=(input_shape), dtype=dtype)
     weight1 = relay.var('weight1', shape=(w1_shape), dtype=dtype)
@@ -477,6 +517,7 @@ def relay_graph_create(layout):
                                padding=(1, 1),
                                data_layout = layout,
                                kernel_layout = 'OIHW')
+    weight3 = relay.var('weight3', shape=(w3_shape), dtype=dtype)
     conv2d_3 = relay.nn.conv2d(conv2d_1,
                                weight2,
                                kernel_size=(3, 3),
@@ -489,12 +530,17 @@ def relay_graph_create(layout):
                                padding=(1, 1),
                                data_layout = layout,
                                kernel_layout = 'OIHW')
-    concat = relay.concatenate((conv2d_2,conv2d_3,conv2d_4), axis=1)
+
+    out1 = conv2d_1
+    out2 = conv2d_2
+    out3 = conv2d_3
+
+    concat = relay.concatenate((out1,out2,out3), axis=1)
     #out = concat
-    out = relay.expr.Tuple([conv2d_2,conv2d_3,conv2d_4])
+    out = relay.expr.Tuple([out1,out2,out3])
     f = relay.Function([data, weight1, weight2], out)
     mod = tvm.IRModule.from_expr(f)
-    params = {'weight1':params_w1, 'weight2':params_w2} 
+    params = {'weight1':params_w1, 'weight2':params_w2, 'weight3':params_w3} 
 
     return mod, params
 
@@ -502,6 +548,7 @@ def test_extern_tidl():
     layout = "NCHW"
     #============= Create a Relay graph ==============
     mod, params = relay_graph_create(layout)
+    mod0 = mod
     print('---------- Original graph ----------')
     print(mod.astext(show_meta_data=False))
     mod['main'] = bind_params_by_name(mod['main'], params)
@@ -527,7 +574,73 @@ def test_extern_tidl():
     #======================== Import the graph to TIDL ========================
     if tidl.import_relay_ir(mod, params, subgraph_tensors, layout, tidl_calib_tool, artifacts_folder) == True:
         print('Heterogeneous execution with TIDL.')
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+    else:
+        print("Full graph compilation with LLVM.")
+        # Future optimization: if not all subgraphs failed with TIDL import, re-partition
+        # the graph to have only TIDL subgraphs with successful TIDL import. 
+        graph, lib, params = relay.build_module.build(mod0, target=target, params=params)
 
+    path_lib    = artifacts_folder + "deploy_lib.so"
+    path_graph  = artifacts_folder + "deploy_graph.json"
+    lib.export_library(path_lib, cc=arm_gcc) 
+    path_params = artifacts_folder + "deploy_param.params"
+
+    with open(path_graph, "w") as fo:
+      fo.write(graph)
+    with open(path_params, "wb") as fo:
+      fo.write(relay.save_param_dict(params))
+
+
+def test_gluoncv_segmentation():
+    model_list = {
+        #'fcn_resnet50_ade' : 'fcn_resnet50_ade',
+        #'fcn_resnet101_ade' : 'fcn_resnet101_ade',
+        #'psp_resnet50_ade' : 'psp_resnet50_ade',
+        #'psp_resnet101_ade' : 'psp_resnet101_ade',
+        #'fcn_resnet101_coco' : 'fcn_resnet101_coco',
+        #'psp_resnet101_coco' : 'psp_resnet101_coco',
+        #'fcn_resnet101_voc' : 'fcn_resnet101_voc',
+        #'psp_resnet101_voc' : 'psp_resnet101_voc',
+        #'psp_resnet101_citys' : 'psp_resnet101_citys',
+        #'mask_rcnn_resnet18_v1b_coco' : 'mask_rcnn_resnet18_v1b_coco',
+        'mask_rcnn_fpn_resnet18_v1b_coco' : 'mask_rcnn_fpn_resnet18_v1b_coco',
+        #'mask_rcnn_resnet50_v1b_coco' : 'mask_rcnn_resnet50_v1b_coco',
+        #'mask_rcnn_fpn_resnet50_v1b_coco' : 'mask_rcnn_fpn_resnet50_v1b_coco',
+        #'mask_rcnn_resnet101_v1d_coco' : 'mask_rcnn_resnet101_v1d_coco',
+        #'mask_rcnn_fpn_resnet101_v1d_coco' : 'mask_rcnn_fpn_resnet101_v1d_coco',
+    }
+
+    for model_name in model_list:
+        print(model_name)
+        model = gluoncv.model_zoo.get_model(model_name, pretrained=True)
+
+        x, img = data.transforms.presets.ssd.load_test(im_fname, short=512)
+        model.hybridize()
+        model.forward(x)
+        model.export('gluoncv-temp')    # create file gluoncv-temp-symbol.json
+
+        mod, params = relay.frontend.from_mxnet(model, {'data':(1,3,480,480)})
+
+        print('---------- Original Graph ----------')
+        mod = relay.transform.RemoveUnusedFunctions()(mod)
+        mod['main'] = bind_params_by_name(mod['main'], params)
+        print(mod.astext(show_meta_data=False))
+        print('---------- Merge Composite Functions ----------')
+        mod = tvm.relay.op.contrib.tidl._merge_sequential_ops(mod) #Merge sequence of ops into composite functions/ops
+        print(mod.astext(show_meta_data=False))
+        print("---------- Annotated Graph ----------")
+        mod = transform.AnnotateTarget("tidl")(mod) #Looks at annotated ops and marks them in the graph with compiler.begin and compiler.end
+        print(mod.astext(show_meta_data=False))
+        print("---------- Merge Compiler Regions ----------")
+        mod = transform.MergeCompilerRegions()(mod) #Merge annotated regions together that use the same external target, combines marked regions for each target
+        print(mod.astext(show_meta_data=False))
+        print("---------- Partioned Graph ----------")
+        mod = transform.PartitionGraph()(mod)
+        print(mod.astext(show_meta_data=False))
+        print("---------- Pruned Graph ----------")
+        mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=1)
+        print(mod.astext(show_meta_data=False))
 
 if __name__ == '__main__':
     if os.getenv("TIDL_PLSDK") is None:
@@ -543,10 +656,12 @@ if __name__ == '__main__':
     filelist = [ f for f in os.listdir(artifacts_folder)]
     for file in filelist:
         os.remove(os.path.join(artifacts_folder, file))
+    target = "llvm -target=armv7l-linux-gnueabihf"
 
     #test_tidl_annotation()
     #test_tidl_mobilenet()
     #test_tidl_mobilenet_no_composite()
     #test_tidl_yolo()
-    #test_mxnet_mobilenet_ssd()
-    test_extern_tidl()
+    test_mxnet_mobilenet_ssd()
+    #test_extern_tidl()
+    #test_gluoncv_segmentation()

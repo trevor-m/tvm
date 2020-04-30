@@ -35,14 +35,8 @@ def _merge_sequential_ops(mod):
         reshape_out = relay.op.transform.reshape(squeeze_out, [])
         return reshape_out
 
-    #tranpose has to be followed by batch_flatten or reshape (special pattern)
+    #tranpose has to be followed by reshape (special pattern)
     #transpose has to be preceded by reshape (special pattern, reshape transpose reshape)
-    def _transpose_pattern():
-        x = relay.var('x')
-        transpose_out = relay.op.transform.transpose(x)
-        batch_flatten_out = relay.op.nn.batch_flatten(transpose_out)
-        return batch_flatten_out
-
     def _transpose_reshape_pattern():
         x = relay.var('x')
         reshape_out1 = relay.op.transform.reshape(x, [])
@@ -116,7 +110,6 @@ def _merge_sequential_ops(mod):
 
     pattern_table = [
         ('tidl.squeeze', _squeeze_pattern()),
-        ('tidl.transpose', _transpose_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
         ('tidl.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
         ('tidl.multibox_prior_concat', _multibox_prior_concat_pattern()),
@@ -322,7 +315,8 @@ def _max_pool_whitelist_fn(attrs, args):
 
 @reg.register("multiply", "target.tidl")
 def _multiply_whitelist_fn(attrs, args):
-    supported = True
+    #supported = True
+    supported = False
     return supported
 
 @reg.register("nn.nms", "target.tidl")
@@ -347,7 +341,8 @@ def _relu_whitelist_fn(attrs, args):
 
 @reg.register("nn.slice_like", "target.tidl")
 def _slice_like_whitelist_fn(attrs, args):
-    supported = (attrs.axis == 1)
+    #supported = (attrs.axis == 1)
+    supported = False
     return supported
 
 @reg.register("nn.softmax", "target.tidl")
