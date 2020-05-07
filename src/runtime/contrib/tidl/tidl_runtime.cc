@@ -47,10 +47,17 @@
 #include <unordered_map>
 #include <vector>
 #include "../../file_util.h"
+#include <time.h>
 
-//#define MAX_INPUT_TENSORS  4
-//#define MAX_OUTPUT_TENSORS 4
-//#define MAX_BATCH_SIZE     256
+#define TVM_RUNTIME_DBG
+
+/*-----------------------------------------------------------------------------
+* Timing Setup
+*----------------------------------------------------------------------------*/
+struct timespec t0,t1;
+#define tick()  clock_gettime(CLOCK_MONOTONIC, &t0);
+#define tock() (clock_gettime(CLOCK_MONOTONIC, &t1), \
+                        t1.tv_sec - t0.tv_sec + (t1.tv_nsec - t0.tv_nsec) / 1e9)
 
 extern "C" {
 extern void TidlRunSubgraph(
@@ -111,12 +118,13 @@ class TIDLModule : public runtime::ModuleNode {
   explicit TIDLModule(int total_subgraphs, 
                       const std::unordered_map<std::string, int>& num_inputs,
                       const std::unordered_map<std::string, int>& num_outputs) {
+#ifdef TVM_RUNTIME_DBG
     std::cout << "TIDL runtime module: total subgraphs is " << total_subgraphs << ", " << std::endl;
     for (auto it : num_inputs) 
       std::cout << "Subgraph " << it.first << ": numinputs is " << it.second << std::endl;
     for (auto it : num_outputs) 
       std::cout << "Subgraph " << it.first << ": numoutputs is " << it.second << std::endl;
-
+#endif
     this->total_subgraphs_ = total_subgraphs;
     this->num_inputs_  = num_inputs;
     this->num_outputs_ = num_outputs;
@@ -153,21 +161,32 @@ class TIDLModule : public runtime::ModuleNode {
                          const ObjectPtr<Object>& sptr_to_self) final {
 //#if TVM_GRAPH_RUNTIME_TIDL
 #if 1
+#ifdef TVM_RUNTIME_DBG
     std::cout << "TVM runtime GetFunc: subgraph " << name << std::endl;
+#endif
     if (name.find("tidl_") == std::string::npos) {
+#ifdef TVM_RUNTIME_DBG
       std::cout << "Subgraph name doesn't contain \"tidl_\"!" << std::endl;
+#endif
       return PackedFunc(nullptr);
     }
+#ifdef TVM_RUNTIME_DBG
     std::cout << "Initializing TIDL ..." << std::endl;
+#endif
     TidlInit();  // Question - should TidlInit() be called here??
+#ifdef TVM_RUNTIME_DBG
     std::cout << "TIDL Initialized. Now running inference... " << std::endl;
-
+#endif
     // get subgraph id from name
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+      tick();
       std::string subgraph_name = (std::string)name;
       // Get subgraph id which is after "tidl_" (5 characters)
       int subgraph_id = std::stoi(subgraph_name.erase(0,5));
+#ifdef TVM_RUNTIME_DBG
       std::cout << "TIDL subgraph name: " << name << " , subgraph id: " << subgraph_id << std::endl;
+      std::vector<int> output_tensor_sizes;
+#endif
       DLTensor *arg0 = (DLTensor *)args[0];
       const int batch_size = arg0->shape[0];
       int num_inputs  = num_inputs_[name];
@@ -178,24 +197,95 @@ class TIDLModule : public runtime::ModuleNode {
       std::vector<float *> outputs;
       //float *inputs[MAX_INPUT_TENSORS*MAX_BATCH_SIZE];
       //float *outputs[MAX_OUTPUT_TENSORS*MAX_BATCH_SIZE];
-      for (int i = 0; i < num_inputs; i++) {
-        DLTensor *arg = (DLTensor *)args[i];
-        //inputs[i] = reinterpret_cast<float*>(arg->data);
-        inputs.push_back(reinterpret_cast<float*>(arg->data));
+      for (int batch = 0; batch < batch_size; batch++) {
+        for (int i = 0; i < num_inputs; i++) {
+          DLTensor *arg = (DLTensor *)args[i];
+          int tensor_size = 1;
+          for (int dim = 1; dim < arg->ndim; dim++) {
+            tensor_size *= arg->shape[dim];
+          }
+          float *input_ptr = reinterpret_cast<float*>(arg->data);
+          inputs.push_back(&(input_ptr[batch*tensor_size]));
+  
+          // debugging
+#ifdef TVM_RUNTIME_DBG
+          std::cout << "Input " << i << " dimension: [";
+          for (int dim = 0; dim < arg->ndim; dim++) {
+            std::cout << arg->shape[dim] << " ";
+          }
+          std::cout << "], tensor_size = " << tensor_size << std::endl;
+  
+          char fname[50];
+          sprintf(fname, "subgraph_in_%d_%d.data", batch, i);
+          FILE *fp = fopen(fname, "w");
+          std::cout << "Writing " << tensor_size << " input data to file..." << std::endl;
+          for(int k=0; k<tensor_size; k++)
+          {
+            fprintf(fp, "%f\n", inputs[batch*num_inputs+i][k]);
+          }
+          fclose(fp);
+#endif
+        }
+      
+        for (int i = 0; i < num_outputs; i++) {
+          const int index_in_args = num_inputs + i;
+          DLTensor *arg = (DLTensor *)args[index_in_args];
+          int tensor_size = 1;
+          for (int dim = 1; dim < arg->ndim; dim++) {
+            tensor_size *= arg->shape[dim];
+          }
+          float *output_ptr = reinterpret_cast<float*>(arg->data);
+          outputs.push_back(&(output_ptr[batch*tensor_size]));
+  
+          // debugging
+#ifdef TVM_RUNTIME_DBG
+          std::cout << "Output " << i << " dimension: [";
+          for (int dim = 0; dim < arg->ndim; dim++) {
+            std::cout << arg->shape[dim] << " ";
+          }
+          std::cout << "], tensor_size = " << tensor_size << std::endl;
+          output_tensor_sizes.push_back(tensor_size);
+          std::cout << "Out buffer ptr: " << outputs[batch*num_outputs+i] << std::endl;
+#endif
+        }
       }
-      for (int i = 0; i < num_outputs; i++) {
-        const int index_in_args = num_inputs + i;
-        DLTensor *arg = (DLTensor *)args[index_in_args];
-        //outputs[i] = reinterpret_cast<float*>(arg->data);
-        outputs.push_back(reinterpret_cast<float*>(arg->data));
-      }
-
       // ... Execute TidlRunSubgraph ...
-      std::cout << "Invoking TIDL with args: " << total_subgraphs_ << subgraph_id;
-      std::cout << batch_size << num_inputs << num_outputs << std::endl;
+#ifdef TVM_RUNTIME_DBG
+      std::cout << "Invoking TIDL with args: " << total_subgraphs_ << ", " << subgraph_id;
+      std::cout << ", " << batch_size << ", " << num_inputs << ", " << num_outputs << std::endl;
+#endif
       tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, 
                     num_inputs, num_outputs, &inputs[0], &outputs[0]);
+      // debugging
+#ifdef TVM_RUNTIME_DBG
       std::cout << "TIDL execution finished." << std::endl;
+      for (int batch = 0; batch < batch_size; batch++) {
+        for (int i = 0; i < num_outputs; i++) {
+          //const int index_in_args = num_inputs + i;
+          //DLTensor *arg = (DLTensor *)args[index_in_args];
+          //int tensor_size = 1;
+          //std::cout << "Writing output " << i << ": dimension = [";
+          //for (int dim = 1; dim < arg->ndim; dim++) {
+          //  tensor_size *= arg->shape[dim];
+          //  std::cout << arg->shape[dim] << " ";
+          //}
+          //std::cout << "], tensor_size = " << tensor_size << std::endl;
+
+          int tensor_size = output_tensor_sizes[batch*num_outputs+i];
+          char fname[50];
+          sprintf(fname, "subgraph_out_%d_%d.data", batch, i);
+          FILE *fp = fopen(fname, "w");
+          std::cout << "Writing " << tensor_size << " data to file..." << std::endl;
+          for(int k=0; k<tensor_size; k++)
+          {
+            fprintf(fp, "%f\n", outputs[batch*num_outputs+i][k]);
+          }
+          fclose(fp);
+        }
+      }
+#endif
+      double time_secs = tock();
+      printf("Time spent on TIDL: %f seconds.\n", time_secs);
     });
 #else
     LOG(FATAL) << "TVM was not built with TIDL runtime enabled. Build "
