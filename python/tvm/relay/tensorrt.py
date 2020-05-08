@@ -601,7 +601,8 @@ def PruneSubgraphs(mod, compiler="tensorrt", use_implicit_batch=True, prune_no_m
     new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True, max_workspace_size=1 << 30, prune_subgraphs=False):
+def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True,
+              max_workspace_size=1 << 30, prune_subgraphs=False):
     """Converts the "main" function in the module into one that can be executed using
     TensorRT. If any of the operators are not supported by the TensorRT
     conversion, the unmodified program will be returned instead.
