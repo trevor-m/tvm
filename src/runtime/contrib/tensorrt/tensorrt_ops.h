@@ -490,8 +490,8 @@ class BatchNormOpConverter : public TrtOpConverter {
     }
     params->outputs.push_back(output);
     // Create dummy outputs for new running mean and new running variance.
-    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
-    params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
+    // params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
+    // params->outputs.push_back(CreateScalar(params, 0.0f, nvinfer1::Dims{1, gamma.count}));
   }
 };
 

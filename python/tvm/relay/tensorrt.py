@@ -138,7 +138,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         # Can't register annotations more than once.
         return
     register_tensorrt_annotations.registered = True
-    if not use_implicit_batch and trt_version >= (6, 0, 1):
+    if not use_implicit_batch and trt_version < (6, 0, 1):
         print("Explicit batch mode only available for TRT 6+")
         use_implicit_batch = True
     # Ops which are always supported
@@ -385,7 +385,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
                 if value == -1:
                     new_shape[i] = original_volume // np.prod([x for x in new_shape if x != -1])
             # Remove batch dimension and see if volumes match
-            if np.prod(shape[1:]) != np.prod(new_shape[1:]):
+            if shape[0] != new_shape[0]:
                 print("reshape: can't modify batch dimension.")
                 return False
         return True
