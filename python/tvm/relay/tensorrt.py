@@ -376,12 +376,12 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
             # TRT cannot modify batch dimension.
             original_volume = np.prod(shape)
             # First, resolve 0.
-            for i in range(len(new_shape)):
-                if new_shape[i] == 0:
+            for i, value in enumerate(new_shape):
+                if value == 0:
                     new_shape[i] = shape[i]
             # Resolve -1.
-            for i in range(len(new_shape)):
-                if new_shape[i] == -1:
+            for i, value in enumerate(new_shape):
+                if value == -1:
                     new_shape[i] = original_volume // np.prod([x for x in new_shape if x != -1])
             # Remove batch dimension and see if volumes match
             if np.prod(shape[1:]) != np.prod(new_shape[1:]):
@@ -568,18 +568,18 @@ def PruneSubgraphs(mod, compiler="tensorrt", use_implicit_batch=True, prune_no_m
                 if len(var.checked_type.shape) == 0:
                     return False
                 input_batch_sizes.append(int(var.checked_type.shape[0]))
-        if len(input_batch_sizes) > 1 and any([x != input_batch_sizes[0] for x in input_batch_sizes[1:]]):
+        if len(input_batch_sizes) > 1 and \
+           any([x != input_batch_sizes[0] for x in input_batch_sizes[1:]]):
             return False
         return True
 
     # Remove invalid subgraphs
     for subgraph in mod.get_global_vars():
-        for subgraph in mod.get_global_vars():
-            name = subgraph.name_hint
-            if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
-                continue
-            if not is_valid_subgraph(mod[name]):
-                subgraphs_to_remove.append(name)
+        name = subgraph.name_hint
+        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+            continue
+        if not is_valid_subgraph(mod[name]):
+            subgraphs_to_remove.append(name)
 
     # Remove subgraphs with no multiply-accumulates
     if prune_no_macs:
