@@ -18,8 +18,8 @@
 """
 Relay TensorRT codegen.
 """
-import numpy as np
 import os
+import numpy as np
 import tvm
 import tvm.relay.transform as transform
 from tvm import relay
