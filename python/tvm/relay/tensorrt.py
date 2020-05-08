@@ -18,6 +18,8 @@
 """
 Relay TensorRT codegen.
 """
+import numpy as np
+import os
 import tvm
 import tvm.relay.transform as transform
 from tvm import relay
@@ -26,8 +28,6 @@ from tvm.relay.build_module import bind_params_by_name
 from tvm.relay import op as reg
 from tvm.relay.transform import _ffi_api
 from tvm.relay.expr_functor import ExprMutator
-import numpy as np
-import os
 
 
 class LegalizeLayoutTranform(ExprMutator):
