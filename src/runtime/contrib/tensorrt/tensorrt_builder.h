@@ -40,6 +40,10 @@
   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
   NV_TENSORRT_PATCH >= patch))
 
+// Explicit batch mode increases operator coverage but reduces performance. Disable for now.
+#define TRT_HAS_IMPLICIT_BATCH true
+// #define TRT_HAS_IMPLICIT_BATCH (!TRT_VERSION_GE(6, 0, 1))
+
 #include "tensorrt_logger.h"
 
 namespace tvm {
@@ -168,7 +172,7 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
 
-#if TRT_VERSION_GE(6, 0, 1)
+#if !TRT_HAS_IMPLICIT_BATCH
   /*! \brief TensorRT builder config. */
   nvinfer1::IBuilderConfig* config_;
 #endif

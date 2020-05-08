@@ -39,7 +39,6 @@
 // #include "NvInferPlugin.h"
 #include "utils.h"
 
-#define TRT_HAS_IMPLICIT_BATCH (!TRT_VERSION_GE(6, 0, 1))
 
 namespace tvm {
 namespace relay {

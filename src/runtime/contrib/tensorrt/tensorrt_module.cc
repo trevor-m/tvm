@@ -193,7 +193,7 @@ class TensorRTModule : public runtime::ModuleNode {
         LOG(FATAL) << "Only float32 inputs are supported.";
       }
       bindings[binding_index] = reinterpret_cast<float*>(arg->data);
-#if TRT_VERSION_GE(6, 0, 1)
+#if !TRT_HAS_IMPLICIT_BATCH
       // Set binding dimensions for INetworkV2 explicit batch mode engines.
       nvinfer1::Dims dims;
       dims.d[0] = 1;
@@ -213,7 +213,7 @@ class TensorRTModule : public runtime::ModuleNode {
       CHECK_NE(binding_index, -1);
       bindings[binding_index] = reinterpret_cast<float*>(out_arg->data);
     }
-#if TRT_VERSION_GE(6, 0, 1)
+#if !TRT_HAS_IMPLICIT_BATCH
     CHECK(context->executeV2(bindings.data())) << "Running TensorRT failed.";
 #else
     // Use batch size from first input.

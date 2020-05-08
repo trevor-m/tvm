@@ -109,13 +109,7 @@ TensorRTBuilder::TensorRTBuilder(runtime::TensorRTLogger* logger,
     : execution_args_(args), max_workspace_size_(max_workspace_size) {
   // Create TRT builder and network.
   builder_ = nvinfer1::createInferBuilder(*logger);
-#if TRT_VERSION_GE(6, 0, 1)
-  // Use INetworkV2 with explicit batch.
-  const auto flags =
-      1U << static_cast<uint32_t>(
-          nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-  network_ = builder_->createNetworkV2(flags);
-#else
+#if TRT_HAS_IMPLICIT_BATCH
   // Use INetwork with implicit batch.
   batch_size_ = args[0]->shape[0];
   builder_->setMaxBatchSize(batch_size_);
@@ -123,6 +117,12 @@ TensorRTBuilder::TensorRTBuilder(runtime::TensorRTLogger* logger,
   const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
   builder_->setFp16Mode(use_fp16);
   network_ = builder_->createNetwork();
+#else
+  // Use INetworkV2 with explicit batch.
+  const auto flags =
+      1U << static_cast<uint32_t>(
+          nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+  network_ = builder_->createNetworkV2(flags);
 #endif
 }
 
@@ -170,7 +170,9 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
   VisitExpr(func->body);
   ProcessOutputs(func->body);
 // Build engine.
-#if TRT_VERSION_GE(6, 0, 1)
+#if TRT_HAS_IMPLICIT_BATCH
+  nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
+#else
   config_ = builder_->createBuilderConfig();
   config_->setMaxWorkspaceSize(max_workspace_size_);
   if (dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false)) {
@@ -188,8 +190,6 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
   config_->addOptimizationProfile(profile);
   nvinfer1::ICudaEngine* engine =
       builder_->buildEngineWithConfig(*network_, *config_);
-#else
-  nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
 #endif
   CleanUp();
   const int num_input_bindings = std::count(
@@ -444,7 +444,9 @@ void TensorRTBuilder::VisitExpr_(const CallNode* call) {
 
 void TensorRTBuilder::CleanUp() {
   network_->destroy();
+#if !TRT_HAS_IMPLICIT_BATCH
   config_->destroy();
+#endif
   builder_->destroy();
   for (auto weight : trt_weights_) {
     if (weight.type == nvinfer1::DataType::kFLOAT) {
