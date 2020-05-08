@@ -83,7 +83,8 @@ class TensorRTModule : public runtime::ModuleNode {
         auto inputs = ConvertInputs(args);
         std::string key = GetSubgraphKey(serialized_subgraphs_[name]);
         this->serialized_subgraphs_[name].clear();
-        relay::contrib::TensorRTBuilder builder(&logger_, inputs, max_workspace_size_, use_implicit_batch_);
+        relay::contrib::TensorRTBuilder builder(&logger_, inputs, max_workspace_size_,
+                                                use_implicit_batch_);
         auto engine_and_context = builder.BuildEngine(func);
         CacheEngineToDisk(key, engine_and_context);
         LOG(INFO) << "Finished building TensorRT engine for subgraph " << name;
