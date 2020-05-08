@@ -39,6 +39,11 @@
 // #include "NvInferPlugin.h"
 #include "utils.h"
 
+#if TRT_VERSION_GE(6, 0, 1)
+#define TRT_HAS_IMPLICIT_BATCH(params) (params->network->hasImplicitBatchDimension())
+#else
+#define TRT_HAS_IMPLICIT_BATCH(params) (true)
+#endif
 
 namespace tvm {
 namespace relay {
@@ -138,7 +143,7 @@ class TrtOpConverter {
     auto layer = params->network->addShuffle(*input);
     CHECK(layer != nullptr);
     nvinfer1::Permutation perm;
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       // Batch dimension cannot be modified.
       CHECK_EQ(input->getDimensions().nbDims, order.size() - 1);
       CHECK_EQ(order[0], 0);
@@ -163,12 +168,12 @@ class TrtOpConverter {
    */
   int ConvertAxis(AddTrtLayerParams* params, int axis, int input_rank) const {
     // Add 1 for missing batch dim.
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       input_rank += 1;
     }
     CHECK(axis >= -input_rank && axis < input_rank);
     if (axis < 0) axis += input_rank;
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       // Can't modify batch dimenson.
       CHECK_NE(axis, 0);
       // Subtract 1 for implicit batch dim.
@@ -400,7 +405,7 @@ class DenseOpConverter : public TrtOpConverter {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
     CHECK(input_dims.size() > 0 && input_dims.size() <= 3);
-    const int required_rank = TRT_HAS_IMPLICIT_BATCH ? 3 : 4;
+    const int required_rank = TRT_HAS_IMPLICIT_BATCH(params) ? 3 : 4;
     const bool need_reshape_on_input = input_dims.size() != required_rank;
     if (need_reshape_on_input) {
       // Add dims of size 1 until rank is required_rank.
@@ -496,7 +501,7 @@ class BatchFlattenOpConverter : public TrtOpConverter {
 
   void Convert(AddTrtLayerParams* params) const {
     std::vector<int> new_shape{-1};
-    if (!TRT_HAS_IMPLICIT_BATCH) {
+    if (!TRT_HAS_IMPLICIT_BATCH(params)) {
       new_shape.insert(new_shape.begin(),
                        params->inputs.at(0).tensor->getDimensions().d[0]);
     }
@@ -633,8 +638,8 @@ class GlobalPoolingOpConverter : public TrtOpConverter {
                               << " in TensorRT";
     const auto* pool_attr = params->call->attrs.as<GlobalPool2DAttrs>();
     CHECK_EQ(pool_attr->layout, "NCHW");
-    const int h = TRT_HAS_IMPLICIT_BATCH ? input_dims[1] : input_dims[2];
-    const int w = TRT_HAS_IMPLICIT_BATCH ? input_dims[2] : input_dims[3];
+    const int h = TRT_HAS_IMPLICIT_BATCH(params) ? input_dims[1] : input_dims[2];
+    const int w = TRT_HAS_IMPLICIT_BATCH(params) ? input_dims[2] : input_dims[3];
     auto pool_layer = params->network->addPooling(*input_tensor, it->second,
                                                   nvinfer1::DimsHW(h, w));
     CHECK(pool_layer != nullptr);
@@ -746,7 +751,7 @@ class BiasAddOpConverter : public TrtOpConverter {
   void Convert(AddTrtLayerParams* params) const {
     auto input_tensor = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
-    const int required_rank = TRT_HAS_IMPLICIT_BATCH ? 3 : 4;
+    const int required_rank = TRT_HAS_IMPLICIT_BATCH(params) ? 3 : 4;
     CHECK(input_dims.size() > 0 && input_dims.size() <= required_rank);
     const bool need_reshape_on_input = input_dims.size() != required_rank;
     if (need_reshape_on_input) {
@@ -849,7 +854,7 @@ class ReshapeOpConverter : public TrtOpConverter {
     CHECK_EQ(attrs->reverse, false);
     std::vector<int> new_shape;
     const int start_index =
-        TRT_HAS_IMPLICIT_BATCH ? 1 : 0;
+        TRT_HAS_IMPLICIT_BATCH(params) ? 1 : 0;
     for (size_t i = start_index; i < attrs->newshape.size(); ++i) {
       const int value = attrs->newshape[i].as<IntImmNode>()->value;
       CHECK_GE(value, -1);
@@ -867,9 +872,9 @@ class PadOpConverter : public TrtOpConverter {
     auto input = params->inputs.at(0).tensor;
     const auto* attrs = params->call->attrs.as<PadAttrs>();
     const int input_rank_with_batch =
-        input->getDimensions().nbDims + (TRT_HAS_IMPLICIT_BATCH ? 1 : 0);
+        input->getDimensions().nbDims + (TRT_HAS_IMPLICIT_BATCH(params) ? 1 : 0);
     CHECK_EQ(input_rank_with_batch, attrs->pad_width.size());
-    CHECK(!TRT_HAS_IMPLICIT_BATCH ||
+    CHECK(!TRT_HAS_IMPLICIT_BATCH(params) ||
           (attrs->pad_width[0][0].as<IntImmNode>()->value == 0 &&
            attrs->pad_width[0][1].as<IntImmNode>()->value == 0))
         << "Cannot pad on batch dimension.";
@@ -949,12 +954,12 @@ class StridedSliceOpConverter : public TrtOpConverter {
     auto input_dims = TrtDimsToVector(input->getDimensions());
     const auto* attrs = params->call->attrs.as<StridedSliceAttrs>();
     const int input_rank_with_batch =
-        input->getDimensions().nbDims + (TRT_HAS_IMPLICIT_BATCH ? 1 : 0);
+        input->getDimensions().nbDims + (TRT_HAS_IMPLICIT_BATCH(params) ? 1 : 0);
     CHECK_EQ(input_rank_with_batch, attrs->begin.size());
     CHECK_EQ(input_rank_with_batch, attrs->end.size());
     const bool default_strides =
         !attrs->strides.defined() || attrs->strides.size() == 0;
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       CHECK(default_strides || !attrs->strides[0].defined() ||
             attrs->strides[0].as<IntImmNode>()->value == 1);
     }
@@ -966,7 +971,7 @@ class StridedSliceOpConverter : public TrtOpConverter {
       return value;
     };
 
-    const int start_index = TRT_HAS_IMPLICIT_BATCH ? 1 : 0;
+    const int start_index = TRT_HAS_IMPLICIT_BATCH(params) ? 1 : 0;
     std::vector<int> start, size, strides;
     for (size_t i = start_index; i < attrs->begin.size(); ++i) {
       const int begin_value =
@@ -1016,8 +1021,8 @@ class AdaptivePoolingOpConverter : public TrtOpConverter {
     // mathematically exact except when output_size is (1, 1).
     // Annotation rules will only allow output size of (1, 1).
     auto output_size = nvinfer1::DimsHW(1, 1);
-    const int h = TRT_HAS_IMPLICIT_BATCH ? input_dims[1] : input_dims[2];
-    const int w = TRT_HAS_IMPLICIT_BATCH ? input_dims[2] : input_dims[3];
+    const int h = TRT_HAS_IMPLICIT_BATCH(params) ? input_dims[1] : input_dims[2];
+    const int w = TRT_HAS_IMPLICIT_BATCH(params) ? input_dims[2] : input_dims[3];
     const auto stride =
         nvinfer1::DimsHW(h / output_size.h(), w / output_size.w());
     const auto window_size =
@@ -1046,12 +1051,12 @@ class ResizeOpConverter : public TrtOpConverter {
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
     CHECK_EQ(attrs->size.size(), 2);
     auto output_dims = TrtDimsToVector(input->getDimensions());
-    const int required_rank = TRT_HAS_IMPLICIT_BATCH ? 3 : 4;
+    const int required_rank = TRT_HAS_IMPLICIT_BATCH(params) ? 3 : 4;
     CHECK_EQ(output_dims.size(), required_rank);
     CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
     int h_index = attrs->layout == "NCHW" ? 2 : 1;
     int w_index = attrs->layout == "NCHW" ? 3 : 2;
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       h_index -= 1;
       w_index -= 1;
     }
@@ -1150,12 +1155,12 @@ class UpsamplingOpConverter : public TrtOpConverter {
     auto it = op_map.find(attrs->method);
     CHECK(it != op_map.end()) << "Unsupported resize type " << attrs->method;
     auto output_dims = TrtDimsToVector(input->getDimensions());
-    const int required_rank = TRT_HAS_IMPLICIT_BATCH ? 3 : 4;
+    const int required_rank = TRT_HAS_IMPLICIT_BATCH(params) ? 3 : 4;
     CHECK_EQ(output_dims.size(), required_rank);
     CHECK(attrs->layout == "NCHW" || attrs->layout == "NHWC");
     int h_index = attrs->layout == "NCHW" ? 2 : 1;
     int w_index = attrs->layout == "NCHW" ? 3 : 2;
-    if (TRT_HAS_IMPLICIT_BATCH) {
+    if (TRT_HAS_IMPLICIT_BATCH(params)) {
       h_index -= 1;
       w_index -= 1;
     }

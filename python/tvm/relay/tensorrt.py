@@ -27,6 +27,7 @@ from tvm.relay import op as reg
 from tvm.relay.transform import _ffi_api
 from tvm.relay.expr_functor import ExprMutator
 import numpy as np
+import os
 
 
 class LegalizeLayoutTranform(ExprMutator):
@@ -600,7 +601,7 @@ def PruneSubgraphs(mod, compiler="tensorrt", use_implicit_batch=True, prune_no_m
     new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True, prune_subgraphs=False):
+def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True, max_workspace_size=1 << 30, prune_subgraphs=False):
     """Converts the "main" function in the module into one that can be executed using
     TensorRT. If any of the operators are not supported by the TensorRT
     conversion, the unmodified program will be returned instead.
@@ -623,6 +624,9 @@ def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True, prune
         If false, will use explicit batch mode. Explicit batch mode is
         available in TRT 6+. It increases operator coverage but comes at a
         performance penalty.
+
+    max_workspace_size : int
+        Number of bytes for TensorRT workspace size.
 
     prune_subgraphs : bool
         If true, will prune subgraphs with 0 MACS and run them with TVM instead.
@@ -663,4 +667,7 @@ def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True, prune
     with tvm.transform.PassContext(opt_level=3):
         mod = seq(mod)
     mod = PruneSubgraphs(mod, use_implicit_batch=use_implicit_batch, prune_no_macs=prune_subgraphs)
+    # Set environment variables used to communicate with TensorRT module.
+    os.environ["TVM_TENSORRT_MAX_WORKSPACE_SIZE"] = str(max_workspace_size)
+    os.environ["TVM_TENSORRT_USE_IMPLICIT_BATCH"] = str(int(use_implicit_batch))
     return mod

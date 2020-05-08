@@ -40,10 +40,6 @@
   (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
   NV_TENSORRT_PATCH >= patch))
 
-// Explicit batch mode increases operator coverage but reduces performance. Disable for now.
-#define TRT_HAS_IMPLICIT_BATCH true
-// #define TRT_HAS_IMPLICIT_BATCH (!TRT_VERSION_GE(6, 0, 1))
-
 #include "tensorrt_logger.h"
 
 namespace tvm {
@@ -103,7 +99,7 @@ class TensorRTBuilder : public ExprVisitor {
    * \param args Inputs to this execution.
    */
   explicit TensorRTBuilder(runtime::TensorRTLogger* logger, const std::vector<DLTensor*>& args,
-                           size_t max_workspace_size);
+                           size_t max_workspace_size, bool use_implicit_batch_);
 
   void VisitExpr_(const VarNode* node) final;
 
@@ -172,7 +168,7 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
 
-#if !TRT_HAS_IMPLICIT_BATCH
+#if TRT_VERSION_GE(6, 0, 1)
   /*! \brief TensorRT builder config. */
   nvinfer1::IBuilderConfig* config_;
 #endif
@@ -191,6 +187,9 @@ class TensorRTBuilder : public ExprVisitor {
 
   /*! \brief Max workspace size in bytes for TRT. */
   size_t max_workspace_size_;
+
+  /*! \brief Whether to use implicit batch mode. */
+  bool use_implicit_batch_;
 
   /*! \brief Input names in same order as execution args during runtime. Some of
    * these are not actual input bindings in the TRT engine - use

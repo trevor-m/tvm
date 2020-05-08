@@ -528,8 +528,8 @@ def test_tensorrt_serialize():
         mod.run(data=i_data)
 
 if __name__ == '__main__':
-    test_tensorrt_ops()
-    test_tensorrt_simple()
-    test_tensorrt_not_compatible()
+    # test_tensorrt_ops()
+    # test_tensorrt_simple()
+    # test_tensorrt_not_compatible()
     test_tensorrt_integration()
-    test_tensorrt_serialize()
+    # test_tensorrt_serialize()
