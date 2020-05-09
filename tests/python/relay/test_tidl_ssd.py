@@ -21,6 +21,7 @@ import os
 import sys
 import numpy as np
 import subprocess
+from matplotlib import pyplot as plt
 
 import tvm
 import tvm.relay.testing
@@ -362,27 +363,52 @@ def test_mxnet_mobilenet_ssd():
     x, img = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
     block = model_zoo.get_model(model, pretrained=True)
 
-    block.hybridize()
-    block.forward(x)
-    block.export('temp')    # create file temp-symbol.json
-    #with open('temp-symbol.json') as f:
-    #    model_json = json.load(f)
-    #model_json["heads"] = [[700, 0, 0]]
-    #with open('temp-symbol.json', 'w') as json_file:
-    #    json.dump(model_json, json_file)
+    mod_tvm, params_tvm = relay.frontend.from_mxnet(block, {"data": input_shape})
 
-    model_json = mx.symbol.load('temp-symbol.json')
-    save_dict = mx.ndarray.load('temp-0000.params')
-    arg_params = {}
-    aux_params = {}
-    for k, v in save_dict.items():
-        tp, name = k.split(':', 1)
-        if tp == 'arg':
-            arg_params[name] = v
-        elif tp == 'aux':
-            aux_params[name] = v
-    mod, params = relay.frontend.from_mxnet(model_json, {input_name: input_shape}, arg_params=arg_params, aux_params=aux_params)
+    #======================== Execute the full graph on TVM ====================
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod_tvm, "llvm", params=params_tvm)
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    #tvm_input = tvm.nd.array(x.asnumpy(), ctx=tvm.cpu(0))
+    tvm_input = x.asnumpy()
+    np.save("ssd_input.npy",tvm_input)
+    mod.set_input(input_name, tvm_input)
+    mod.set_input(**params)
+    mod.run()
+    class_IDs, scores, bounding_boxs = mod.get_output(0), mod.get_output(1), mod.get_output(2)
+    ax = utils.viz.plot_bbox(img, bounding_boxs.asnumpy()[0], scores.asnumpy()[0],
+                         class_IDs.asnumpy()[0], class_names=block.classes)
+    plt.savefig("gluoncv_ssd_tvm.png")
 
+    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
+    print("Number of outputs: " + str(len(results)))
+    for i in range(len(results)):
+        np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
+
+
+#    block.hybridize()
+#    block.forward(x)
+#    block.export('temp')    # create file temp-symbol.json
+#    #with open('temp-symbol.json') as f:
+#    #    model_json = json.load(f)
+#    #model_json["heads"] = [[700, 0, 0]]
+#    #with open('temp-symbol.json', 'w') as json_file:
+#    #    json.dump(model_json, json_file)
+#
+#    model_json = mx.symbol.load('temp-symbol.json')
+#    save_dict = mx.ndarray.load('temp-0000.params')
+#    arg_params = {}
+#    aux_params = {}
+#    for k, v in save_dict.items():
+#        tp, name = k.split(':', 1)
+#        if tp == 'arg':
+#            arg_params[name] = v
+#        elif tp == 'aux':
+#            aux_params[name] = v
+#    mod, params = relay.frontend.from_mxnet(model_json, {input_name: input_shape}, arg_params=arg_params, aux_params=aux_params)
+
+    mod = mod_tvm
+    params = params_tvm
     print('---------- Original Graph ----------')
     mod = relay.transform.RemoveUnusedFunctions()(mod)
     #print(mod.astext(show_meta_data=False))
@@ -407,11 +433,12 @@ def test_mxnet_mobilenet_ssd():
     print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
-    input_data = np.expand_dims(img.transpose(2,0,1), axis=0)
+    #input_data = np.expand_dims(img.transpose(2,0,1), axis=0)
+    #input_data = x
     #img_norm   = (img-128.0)/128.0
-    #np.save("street_small_norm.npy",img_norm)
+    #np.save("street_small_tmp.npy",img)
     #input_data = np.expand_dims(img_norm.transpose(2,0,1), axis=0)
-    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, input_data)
+    subgraph_tensors = generate_subgraph_tensors(mod, params, input_name, tvm_input)
 
     #======================== Import the graph to TIDL ========================
     if tidl.import_relay_ir(mod, params, subgraph_tensors, layout, tidl_calib_tool, artifacts_folder) == True:
@@ -432,18 +459,6 @@ def test_mxnet_mobilenet_ssd():
       fo.write(graph)
     with open(path_params, "wb") as fo:
       fo.write(relay.save_param_dict(params))
-
-    #======================== Execute the full graph on TVM ====================
-    with relay.build_config(opt_level=3):
-        graph, lib, params = relay.build(mod0, "llvm", params=params)
-    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
-    mod.set_input(input_name, input_data)
-    mod.set_input(**params)
-    mod.run()
-    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
-    print("Number of outputs: " + str(len(results)))
-    for i in range(len(results)):
-        np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
 
 def test_tidl_mobilenet_no_composite():
 
@@ -643,19 +658,25 @@ def test_gluoncv_segmentation():
         print(mod.astext(show_meta_data=False))
 
 if __name__ == '__main__':
-    if os.getenv("TIDL_PLSDK") is None:
-        plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+    if os.getenv("TIDL_ARM_GCC_PATH") is None:
+      sys.exit("Environment variable TIDL_ARM_GCC_PATH not set!")
     else: 
-        plsdk = os.getenv('TIDL_PLSDK')
-    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
-    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
-    #tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
-    tidl_calib_tool  = "./tidl_tools/eve_test_dl_algo.out"
-    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+      arm_gcc_path = os.getenv("TIDL_ARM_GCC_PATH")
+    if os.getenv("TIDL_TOOLS_PATH") is None:
+        sys.exit("Environment variable TIDL_TOOLS_PATH not set!")
+    else:
+        tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+    arm_gcc          = arm_gcc_path + "arm-linux-gnueabihf-g++"
+    tidl_calib_tool  = tidl_tools_path + "eve_test_dl_algo_ref.out"
+
     artifacts_folder = "./artifacts/"
-    filelist = [ f for f in os.listdir(artifacts_folder)]
-    for file in filelist:
-        os.remove(os.path.join(artifacts_folder, file))
+    if os.path.isdir(artifacts_folder):
+        filelist = [ f for f in os.listdir(artifacts_folder)]
+        for file in filelist:
+            os.remove(os.path.join(artifacts_folder, file))
+    else:
+        os.mkdir(artifacts_folder)
+
     target = "llvm -target=armv7l-linux-gnueabihf"
 
     #test_tidl_annotation()

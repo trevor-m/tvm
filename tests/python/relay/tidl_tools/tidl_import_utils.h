@@ -39,7 +39,7 @@
 #include "ti_dl.h"
 #include "tidl_import.h"
 
-#define TIDL_IMPORT_ENABLE_DBG_PRINT
+//#define TIDL_IMPORT_ENABLE_DBG_PRINT
 
 #define TIDL_DATA_FORMAT_NHWC         0
 #define TIDL_DATA_FORMAT_NCHW         1

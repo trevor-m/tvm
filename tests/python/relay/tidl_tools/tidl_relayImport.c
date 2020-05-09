@@ -59,8 +59,10 @@ typedef struct Conv2dParams
   int stride_w;
   int dilation_h;
   int dilation_w;
-  int pad_h;
-  int pad_w;
+  int pad_t;
+  int pad_l;
+  int pad_b;
+  int pad_r;
   int kernel_h;
   int kernel_w;
   char *kernel_layout;
@@ -178,6 +180,7 @@ void tidlImportInit(tidlImpConfig * cfg, char * layout)
     orgTIDLNetStructure.TIDLPCLayers[i].layerType =  TIDL_UnSuportedLayer;
     orgTIDLNetStructure.TIDLPCLayers[i].numInBufs =  1;
     orgTIDLNetStructure.TIDLPCLayers[i].numOutBufs = 1;
+    orgTIDLNetStructure.TIDLPCLayers[i].strideOffsetMethod = (int32_t)TIDL_strideOffsetCenter;
     gParams.conv2dKernelType[i] = -1;
   }
 }
@@ -186,6 +189,8 @@ void tidlImportInit(tidlImpConfig * cfg, char * layout)
 void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
 {
   int i, num_weights;
+  int32_t padW, padH, padL, padT;
+
   size_t size;
   float * weights;
   sTIDL_LayerPC_t *layer;
@@ -210,8 +215,18 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
   convParams->dilationH       = conv2dInfo->dilation_h;
   convParams->strideW         = conv2dInfo->stride_w;
   convParams->strideH         = conv2dInfo->stride_h;
-  convParams->padW            = conv2dInfo->pad_w;
-  convParams->padH            = conv2dInfo->pad_h;
+
+  padW = conv2dInfo->pad_r;
+  padL = conv2dInfo->pad_l;
+  padH = conv2dInfo->pad_b;
+  padT = conv2dInfo->pad_t;
+  padW = padW < padL ? padL : padW;
+  padH = padH < padT ? padT : padH;
+  convParams->padW = padW;
+  convParams->padH = padH;
+  if( (padL == padW) && (padT == padH)) {
+    layer->strideOffsetMethod = TIDL_strideOffsetTopLeft;
+  }
 
   convParams->enableBias      = 0;
   convParams->enableRelU      = 0;
@@ -240,8 +255,10 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
   TIDL_IMPORT_DBG_PRINT("TIDL conv2d parameters: \n");
   TIDL_IMPORT_DBG_PRINT2("Stride accross width: %d\n",    conv2dInfo->stride_w);
   TIDL_IMPORT_DBG_PRINT2("Stride accross height: %d\n",   conv2dInfo->stride_h);
-  TIDL_IMPORT_DBG_PRINT2("Padding accross width: %d\n",    conv2dInfo->pad_w);
-  TIDL_IMPORT_DBG_PRINT2("Padding accross height: %d\n",   conv2dInfo->pad_h);
+  TIDL_IMPORT_DBG_PRINT2("Padding from top: %d\n",        conv2dInfo->pad_t);
+  TIDL_IMPORT_DBG_PRINT2("Padding from left: %d\n",       conv2dInfo->pad_l);
+  TIDL_IMPORT_DBG_PRINT2("Padding from bottom: %d\n",     conv2dInfo->pad_b);
+  TIDL_IMPORT_DBG_PRINT2("Padding from right: %d\n",      conv2dInfo->pad_r);
   TIDL_IMPORT_DBG_PRINT2("Dilation accross width: %d\n",  conv2dInfo->dilation_w);
   TIDL_IMPORT_DBG_PRINT2("Dilation accross height: %d\n", conv2dInfo->dilation_h);
   TIDL_IMPORT_DBG_PRINT2("Kernel width: %d\n",            conv2dInfo->kernel_w);
@@ -414,6 +431,7 @@ void tidlImportSoftmax()
 
   layer->layerType = TIDL_SoftMaxLayer;
   layer->outData[0].dataId = GET_DATA_INDEX;
+  printf("Softmax layer outData ID: %d\n", layer->outData[0].dataId);
 }
 
 void tidlImportPad(int size, void *padTensor)
@@ -534,6 +552,7 @@ void tidlImportOutData(int num_inputs)
   TIDL_IMPORT_DBG_PRINT("----- Importing OutData layer ----- \n");
   TIDL_IMPORT_DBG_PRINT2("Number of inputs to OutData layer: %d\n", num_inputs);
 
+  // Input dataIDs are filled in tidlImportLinkNodes()
   layer = GET_LAYER_PTR;
   layer->layerType = TIDL_DataLayer;
   layer->numInBufs = num_inputs;
@@ -621,7 +640,7 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
   }
 
   layer->weightsElementSizeInBits = (int32_t)NUM_WHGT_BITS;
-  layer->strideOffsetMethod = (int32_t)TIDL_strideOffsetCenter;
+  //layer->strideOffsetMethod = (int32_t)TIDL_strideOffsetCenter;
 
   tidl_linkInputTensors(&orgTIDLNetStructure,  tidlImpState.layerIndex);
   tidl_linkOutputTensors(&orgTIDLNetStructure, tidlImpState.layerIndex);
@@ -911,7 +930,7 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   int32_t importStatus, i, numErrs, numUnsupportedLayers, tiLayerIndex;
   FILE    *fpNetFile;
   FILE    *fpParamsFile;
-  char    str[30];
+  char    str[100];
 
   numErrs = 0;
   TIDL_IMPORT_DBG_PRINT2("TIDL artifacts folder: %s\n", artifacts_folder);
@@ -984,13 +1003,13 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
   tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
 
-  //TIDL_IMPORT_DBG_PRINT("Converting Conv2D to IP layer\n");
-  //importStatus = tidl_convertConv2DToIpLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
-  //if(importStatus != TIDL_IMPORT_NO_ERR)
-  //{
-  //  printf("\n Import error: Conv2D layer cannot be converted into Inner Product layer.\n");
-  //  numErrs++;
-  //}
+  TIDL_IMPORT_DBG_PRINT("Converting Conv2D to IP layer\n");
+  importStatus = tidl_convertConv2DToIpLayer(&orgTIDLNetStructure, tidlImpState.layerIndex, (sTIDL_outRehapeMap_t *)&sTIDL_outRehapeTable);
+  if(importStatus != TIDL_IMPORT_NO_ERR)
+  {
+    printf("\n Import error: Conv2D layer cannot be converted into Inner Product layer.\n");
+    numErrs++;
+  }
 
   TIDL_IMPORT_DBG_PRINT("Merging flatten layer.\n");  
   importStatus = tidl_mergeFlattenLayer(&orgTIDLNetStructure, tidlImpState.layerIndex);
@@ -1061,5 +1080,6 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
 
   fclose(fpNetFile);
 
+  printf("Import of Relay IR to TIDL representation finished successfully. To do calibration next.\n");
   return TIDL_IMPORT_SUCCESS;
 } // tidlImportOptimize()

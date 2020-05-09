@@ -122,18 +122,6 @@ class WhiteListAnnotator:
         return Annotator().visit(func)
 
 def test_extern_tidl():
-#    #============= Create a Relay graph ==============
-#    mod0, params0 = relay_graph_create()
-#
-#    #============= Annotate the graph ==============
-#    mod1, params1 = relay_graph_annotate(mod0, params0)
-#    
-#    #============= Partition the graph ==============
-#    mod2, params2 = relay_graph_partition(mod1, params1)
-
-#    #============= Generate subgraph boundary tensors ==============
-#    input_tensors, output_tensors = subgraph_tensors_generate(mod2, params2)
-
     target = "llvm -target=armv7l-linux-gnueabihf"
 
     #============= Constructing a simple graph ==============
@@ -285,10 +273,10 @@ def create_relay_graph(model, input_node, input_shape, layout):
     if model == "MobileNetV1" or model == "MobileNetV2":
         if model == "MobileNetV1":
             model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
-            out_node = 'MobilenetV1/Predictions/Reshape_1'
+            out_node = 'MobilenetV1/Predictions/Softmax'
         else:
             model    = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
-            out_node = 'MobilenetV2/Predictions/Reshape_1'
+            out_node = 'MobilenetV2/Predictions/Softmax'
         #if layout == "NCHW":
         #    input_shape = (input_shape[0],input_shape[2],input_shape[3],input_shape[1])
         with tf.gfile.GFile(model, 'rb') as f:
@@ -372,8 +360,8 @@ def test_extern_tidl_mobilenet():
                                        input_node  = input_node,
                                        input_shape = input_shape,
                                        layout      = data_layout)
-    #print('-------- Original MobileNetV1 model --------')
-    #print(mod.astext(show_meta_data=False))
+    print('-------- Original MobileNetV1 model --------')
+    print(mod0.astext(show_meta_data=False))
 
     #============= Annotate the graph ==============
     # Looks at annotated ops and marks them in the graph with compiler.begin 
@@ -423,18 +411,24 @@ def test_extern_tidl_mobilenet():
 
 
 if __name__ == '__main__':
-    if os.getenv("TIDL_PLSDK") is None:
-      plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+    if os.getenv("TIDL_ARM_GCC_PATH") is None:
+      sys.exit("Environment variable TIDL_ARM_GCC_PATH not set!")
     else: 
-      plsdk = os.getenv('TIDL_PLSDK')
-    plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
-    print("PLSDK DEVKIT path set to: " + plsdk_devkit)
-    tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
-    arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
-    artifacts_folder = "./artifacts/"
-    filelist = [ f for f in os.listdir(artifacts_folder)]
-    for file in filelist:
-        os.remove(os.path.join(artifacts_folder, file))
+      arm_gcc_path = os.getenv("TIDL_ARM_GCC_PATH")
+    if os.getenv("TIDL_TOOLS_PATH") is None:
+        sys.exit("Environment variable TIDL_TOOLS_PATH not set!")
+    else:
+        tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+    arm_gcc          = arm_gcc_path + "arm-linux-gnueabihf-g++"
+    tidl_calib_tool  = tidl_tools_path + "eve_test_dl_algo_ref.out"
 
-    test_extern_tidl_mobilenet()
+    artifacts_folder = "./artifacts/"
+    if os.path.isdir(artifacts_folder):
+        filelist = [ f for f in os.listdir(artifacts_folder)]
+        for file in filelist:
+            os.remove(os.path.join(artifacts_folder, file))
+    else:
+        os.mkdir(artifacts_folder)
+
     #test_extern_tidl()
+    test_extern_tidl_mobilenet()

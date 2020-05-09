@@ -393,7 +393,8 @@ class Conv2dParams(ctypes.Structure):
                 ('num_groups', ctypes.c_int),
                 ('stride_h', ctypes.c_int), ('stride_w', ctypes.c_int),     
                 ('dilation_h', ctypes.c_int), ('dilation_w', ctypes.c_int), 
-                ('pad_h', ctypes.c_int), ('pad_w', ctypes.c_int), 
+                ('pad_t', ctypes.c_int), ('pad_l', ctypes.c_int), 
+                ('pad_b', ctypes.c_int), ('pad_r', ctypes.c_int), 
                 ('kernel_h', ctypes.c_int), ('kernel_w', ctypes.c_int),
                 ('kernel_layout', ctypes.c_char_p),
                 ('weights_array', ctypes.c_void_p),
@@ -428,7 +429,7 @@ class InOutNodes(ctypes.Structure):
                 ('in_nodes', ctypes.c_void_p),  ('out_nodes',ctypes.c_void_p)]
 
 
-def find_input_nodes(all_nodes, this_node):
+def find_input_nodes_old(all_nodes, this_node):
     r""" Find the input nodes of a given relay.expr.Call node.
     
          Only find input nodes that are relay.expr.Call.
@@ -461,8 +462,49 @@ def find_input_nodes(all_nodes, this_node):
             #else: ignore all other types of nodes: var, const, etc.
     elif isinstance(this_node, relay.expr.Tuple):
         for in_node in this_node.fields:
-            input_nodes.append(all_nodes[in_node])
+            if isinstance(in_node, relay.expr.TupleGetItem):
+                input_nodes.append(all_nodes[in_node.tuple_value])
+            elif isinstance(in_node, relay.expr.Call):
+                input_nodes.append(all_nodes[in_node])
     return input_nodes
+
+def find_input_nodes(all_nodes, this_node):
+    r""" Find the input nodes of a given relay.expr.Call node.
+    
+         Only find input nodes that are relay.expr.Call.
+         If an input node is a relay.expr.TupleGetItem, then check this input
+         node's input node.
+
+    Parameters
+    ----------
+    all_nodes : dictionary 
+        Dictionary of all nodes of the graph 
+    this_node : relay.expr.Call
+        A relay.expr.Call node whose input nodes are to be found by this function
+
+    Returns
+    -------
+    input_nodes : list
+        A list of all input node indices of the given node
+    """
+
+    input_nodes = []
+    if isinstance(this_node, relay.expr.Call):
+        in_nodes = this_node.args
+    elif isinstance(this_node, relay.expr.Tuple):
+        in_nodes = this_node.fields
+
+    for node in in_nodes:
+        if isinstance(node, relay.expr.Call):
+            input_nodes.append(all_nodes[node])
+        elif isinstance(node, relay.expr.TupleGetItem):
+            input_nodes.append(all_nodes[node.tuple_value])
+        elif isinstance(node, relay.expr.Tuple):
+            input_nodes.append(find_input_nodes(node))
+        #else: ignore all other types of nodes: var, const, etc.
+
+    return input_nodes
+
 
 def find_out_nodes(all_nodes, this_node):
     r""" Find the output nodes of a given relay.expr.Call node.
@@ -591,11 +633,17 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params = Conv2dParams()
     (conv2d_params.stride_h, conv2d_params.stride_w) = strides
     (conv2d_params.dilation_h, conv2d_params.dilation_w) = dilation
-    #print("Conv2d padding: ")
-    #print(padding)
+    print("Conv2d padding: " + str(padding))
     # TODO: to pass all padding values to TIDL and use strideOffsetMethod
-    (pad_h_1, pad_w_1, conv2d_params.pad_h, conv2d_params.pad_w) = padding
-    #(conv2d_params.pad_h, conv2d_params.pad_w) = padding
+    # top, left, bottom, right
+    if len(padding) == 1:
+        pad_t = pad_l = pad_b = pad_r = padding[0]
+    elif len(padding) == 2:
+        pad_t = pad_b = padding[0]
+        pad_l = pad_r = padding[1]
+    else:
+        (pad_t, pad_l, pad_b, pad_r) = padding
+    (conv2d_params.pad_t, conv2d_params.pad_l, conv2d_params.pad_b, conv2d_params.pad_r) = (pad_t, pad_l, pad_b, pad_r)
     (conv2d_params.kernel_h, conv2d_params.kernel_w) = kernel_size
     conv2d_params.num_groups = groups
 
@@ -859,7 +907,7 @@ def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
         print('data layout ' + node.attrs.data_layout + ' is not supported')
         return False
 
-    inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
+    inQuantFactor = int(round(input_scale*256))  # 256 is due to TIDL implementation
     config_params = TIDLconfigParams(12,50,inQuantFactor,input_signed,
                                      channel, height, width)
 
@@ -928,6 +976,8 @@ def tidl_import_node(all_nodes, this_node, params):
         _tidlImportSoftmax()
     elif this_node.op.name == 'concatenate':
         status = tidl_import_concat(all_nodes, this_node)
+    elif this_node.op.name == 'nn.max_pool2d':
+        status = tidl_import_pooling(this_node, b'max_pool2d')
     else:
         print("Operator " + this_node.op.name + " is not supported!")
         status = False
@@ -1216,7 +1266,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         for i in range(len(output_fp)):
             output_signed.append(int(np.amin(output_fp[i]) < 0))
         for i in range(len(out_data_q)):
-            output_scale.append(round(out_data_q[i]/255.0,2))  # 255 is TIDL implementation specific
+            output_scale.append(round(out_data_q[i]/256.0,5))  # 256 is TIDL implementation specific
         print("Output conversion: " + str(out_data_q) + ", " + str(output_scale))
         
         # Generate subgraph configuration file

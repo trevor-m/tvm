@@ -49,25 +49,29 @@ int32_t tidl_linkInputTensors(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t
   sTIDL_LayerPC_t *pSearchLayer;
 
   pCurrentLayer = &pOrgTIDLNetStructure->TIDLPCLayers[layerIndex];
-  printf("Linking input tensors for layer %d. There are %d inbufs.\n", layerIndex, pCurrentLayer->numInBufs);
+  TIDL_IMPORT_DBG_PRINT3("Linking input tensors for layer %d. There are %d inbufs.\n", layerIndex, pCurrentLayer->numInBufs);
   for (i0 = 0; i0 < pCurrentLayer->numInBufs; i0++)
   {
     for (i1 = layerIndex - 1; i1 >= 0; i1--)
     {
       pSearchLayer = &pOrgTIDLNetStructure->TIDLPCLayers[i1];
-      printf("search layer %d's numOutBufs is %d\n", i1, pSearchLayer->numOutBufs);
+      TIDL_IMPORT_DBG_PRINT3("search layer %d's numOutBufs is %d\n", i1, pSearchLayer->numOutBufs);
       for (i2 = 0; i2 < pSearchLayer->numOutBufs; i2++)
       {
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
         printf("CurrentLayer inDataNames[%d]: %s, searchLayer outDataNames[%d]: %s\n", 
                i0, pCurrentLayer->inDataNames[i0], i2, pSearchLayer->outDataNames[i2]);
+#endif
         if (pSearchLayer->outConsumerLinked[i2] < pSearchLayer->outConsumerCnt[i2])
         {
           if (strcmp((const char *)pCurrentLayer->inDataNames[i0], 
                      (const char *)pSearchLayer->outDataNames[i2]) == 0)
           {
             pCurrentLayer->inData[i0].dataId = pSearchLayer->outData[i2].dataId;
+#ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
             printf("Found layer %d's input tensor, inData[%d].dataId = layer %d's outData[%d].dataId: %d\n", 
                    layerIndex, i0, i1, i2, pSearchLayer->outData[i2].dataId);
+#endif
             pSearchLayer->outConsumerLinked[i2]++;
           }
         }
@@ -1419,6 +1423,10 @@ int32_t tidl_copyPCNetToDeviceNet(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, sTI
       if (tIDLNetStructure->TIDLLayers[tiLayerIndex].layerType == TIDL_DataLayer)
       {
         tIDLNetStructure->TIDLLayers[tiLayerIndex].layersGroupId = 0;
+        if(tIDLNetStructure->TIDLLayers[tiLayerIndex].numOutBufs == -1) 
+        {
+          tIDLNetStructure->TIDLLayers[tiLayerIndex].coreID = 255;
+        }
       }
       else
       {
@@ -1693,6 +1701,7 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
     //tiLayerIndex -= 1;
     tIDLNetStructure->TIDLLayers[tiLayerIndex-1].numOutBufs = -1;
     tIDLNetStructure->TIDLLayers[tiLayerIndex-1].coreID = 255;
+    tIDLNetStructure->TIDLLayers[tiLayerIndex-1].layersGroupId = 0;
     tIDLNetStructure->numLayers = tiLayerIndex;
     return TIDL_IMPORT_NO_ERR;
   }
@@ -1701,6 +1710,7 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
   tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs = 0;
   tIDLNetStructure->TIDLLayers[tiLayerIndex].numOutBufs = -1;
   tIDLNetStructure->TIDLLayers[tiLayerIndex].coreID = 255;
+  tIDLNetStructure->TIDLLayers[tiLayerIndex].layersGroupId = 0;
 
   for (i = 0; i < tiLayerIndex; i++)
   {
@@ -1711,7 +1721,8 @@ int32_t tidl_addOutDataLayer(sTIDL_Network_t  *tIDLNetStructure, int32_t tiLayer
       if(tIDLNetStructure->TIDLLayers[i].numOutBufs == -1) 
       {
         // This is the last layer - add data layer after it.
-        tIDLNetStructure->TIDLLayers[i].numOutBufs = 1;    
+        tIDLNetStructure->TIDLLayers[i].numOutBufs = 1;
+        tIDLNetStructure->TIDLLayers[i].outData[0].dataId = i;
       }
       for (j = 0; j < tIDLNetStructure->TIDLLayers[i].numOutBufs; j++)
       {
