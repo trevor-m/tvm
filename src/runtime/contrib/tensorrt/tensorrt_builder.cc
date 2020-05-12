@@ -112,10 +112,12 @@ TensorRTBuilder::TensorRTBuilder(runtime::TensorRTLogger* logger,
   builder_ = nvinfer1::createInferBuilder(*logger);
 #if TRT_VERSION_GE(6, 0, 1)
   // Use INetworkV2.
-  auto flags = 0U;
-  if (!use_implicit_batch_) {
-    flags = 1U << static_cast<uint32_t>(
-        nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
+  auto flags = 1U << static_cast<uint32_t>(
+      nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);;
+  if (use_implicit_batch_) {
+    flags = 0U;
+    batch_size_ = args[0]->shape[0];
+    builder_->setMaxBatchSize(batch_size_);
   }
   network_ = builder_->createNetworkV2(flags);
 #else
