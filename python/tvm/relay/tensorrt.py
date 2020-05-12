@@ -546,13 +546,42 @@ class SubgraphRemover(ExprMutator):
 
 def PruneSubgraphs(mod, compiler="tensorrt", use_implicit_batch=True, prune_no_macs=False):
     """
-    Removes subgraphs which were originally partitioned for TRT if the number of
-    multiply-accumulates is 0. This is a heuristic which can improve performance by around 5%
-    because TVM provides better optimization for certain ops.
+    If use_implicit_batch is True, removes subgraphs which were originally partitioned for TRT
+    that are incompatible with implicit batch mode.
+    If prune_no_macs is True, also remove subgraph if the number of multiply-accumulates is 0.
+    This is a heuristic which can improve performance by around 5% because TVM provides better
+    optimization for certain ops.
+
+     Parameters
+    ----------
+    mod: Module
+        The module which has been partitioned for tensorrt compiler.
+
+    compiler : str
+        Compiler string, should be "tensorrt".
+
+    use_implicit_batch : bool
+        Which mode we plan to use for TensorRT. Will be used to determine which subgraphs are
+        valid. In implicit batch mode, all inputs to a subgraph must have the same batch size.
+
+    prune_no_macs : bool
+        Whether to also remove subgraphs which have no multiple-accumulate operations.
+
+    Returns
+    -------
+    mod: Module
+        The modified module which has pruned subgraphs reverted back to TVM.
     """
     subgraphs_to_remove = []
 
     def is_valid_subgraph(func):
+        """Whether a subgraph is valid in TRT.
+
+        Returns
+        -------
+        compatible : bool
+            True if the subgraph is compatible with TRT.
+        """
         if not use_implicit_batch:
             return True
         input_batch_sizes = []
