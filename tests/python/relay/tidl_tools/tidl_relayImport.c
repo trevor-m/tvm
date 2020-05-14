@@ -545,6 +545,17 @@ void tidlImportConcat(int num_inputs)
   layer->numInBufs = num_inputs;
 }
 
+void tidlImportDropOut()
+{
+  sTIDL_LayerPC_t *layer;
+
+  TIDL_IMPORT_DBG_PRINT("----- Importing dropout layer ----- \n");
+
+  layer = GET_LAYER_PTR;
+  layer->layerType = TIDL_DropOutLayer;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+}
+
 void tidlImportOutData(int num_inputs)
 {
   sTIDL_LayerPC_t *layer;
@@ -992,6 +1003,13 @@ int tidlImportOptimize(char * artifacts_folder, int graphId)
   if(importStatus != TIDL_IMPORT_NO_ERR)
   {
     printf("\n Import error: Pad layer cannot be merged into other layers.\n");
+    numErrs++;
+  }
+
+  importStatus = tidl_mergeDropoutLayer(&orgTIDLNetStructure, tidlImpState.layerIndex);
+  if(importStatus != TIDL_IMPORT_NO_ERR)
+  {
+    printf("\n Import error: Dropout layer cannot be merged into other layers.\n");
     numErrs++;
   }
 

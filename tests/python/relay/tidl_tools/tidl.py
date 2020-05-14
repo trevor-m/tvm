@@ -769,7 +769,7 @@ def tidl_import_add(node, params):
         _tidlImportBiasAdd.restype  = None
         _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
                            ctypes.c_void_p(bias_params_np.ctypes.data))
-    elif isinstance(node.args[1], relay.expr.Call):
+    elif isinstance(node.args[1], relay.expr.Call) or isinstance(node.args[1], relay.expr.TupleGetItem):
         #print('This is an add operator')
         _tidlImportAdd = _tidl_mod.tidlImportAdd
         _tidlImportAdd.argtypes = None
@@ -978,6 +978,11 @@ def tidl_import_node(all_nodes, this_node, params):
         status = tidl_import_concat(all_nodes, this_node)
     elif this_node.op.name == 'nn.max_pool2d':
         status = tidl_import_pooling(this_node, b'max_pool2d')
+    elif this_node.op.name == 'nn.dropout':
+        _tidlImportDropOut = _tidl_mod.tidlImportDropOut
+        _tidlImportDropOut.argtype = None
+        _tidlImportDropOut.restype = None
+        _tidlImportDropOut()
     else:
         print("Operator " + this_node.op.name + " is not supported!")
         status = False
@@ -1003,59 +1008,6 @@ def traverse_expr(node, node_dict):
         return 
     node_dict[node] = len(node_dict)
 
-def relay_ir_import(mod, params):
-    r""" Relay IR import to TIDL 
-
-    Parameters
-    ----------
-    mod : tvm.relay.Module 
-        Relay IR graph
-    params : dict of str to tvm.NDArray
-        The parameter dict to be used by relay
-
-    Returns
-    -------
-    True if import succeeds or False if import fails    
-    """
-
-    # Traverse Relay IR graph and generate a dictionary of all nodes
-    all_nodes_main = {}
-    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes_main)) 
-    tidl_subgraphs = []
-    for node in all_nodes_main:
-        if isinstance(node, relay.expr.GlobalVar):
-            if 'tidl' in node.name_hint:
-                tidl_subgraphs.append(node.name_hint)
-
-    # Question: how to traverse all tidl_* subgraphs?
-    for tidl_subgraph in tidl_subgraphs:
-        all_nodes_tidl = {}
-        # Extract subgraph id from subgraph name
-        id = re.search('tidl_(\d+)',tidl_subgraph)
-        subgraph_id = int(id.group(1))
-
-        relay.analysis.post_order_visit(mod[tidl_subgraph], lambda node: traverse_expr(node, all_nodes_tidl)) 
-    
-        # Initialize TIDL import
-        if tidl_import_init(all_nodes_tidl) == False:
-            return False
-    
-        # Scan through all relay.expr.Call nodes and import each to TIDL
-        for node in all_nodes_tidl:
-            if isinstance(node, relay.expr.Call):
-                result = tidl_import_node(all_nodes_tidl, node, params)
-                if result == False:
-                    return False
-    
-        # Invoke TIDL optimization of the imported graph
-        _tidlImportOptimize = _tidl_mod.tidlImportOptimize
-        _tidlImportOptimize.argtype = ctypes.c_int
-        _tidlImportOptimize.restype = ctypes.c_int
-        if _tidlImportOptimize(subgraph_id) == -1:
-            return False
-
-    return True
-
 
 def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph
@@ -1075,16 +1027,22 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
 def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
                      input_scale, input_signed, output_scale, output_signed):
     r""" Generate subgraph configuration file to be used by TIDL runtime
-        netBinFile    = "./tidl_subgraph0_net.bin"
-        paramsBinFile = "./tidl_subgraph0_params.bin"
-        inConvType  = 0
-        inIsSigned  = 1
-        inScaleF2Q  = 128.0
-        inIsNCHW    = 1
-        outConvType = 0
-        outIsSigned = 1
-        outScaleF2Q = 128.0
-        outIsNCHW   = 1
+
+    Parameters
+    ----------
+    input_scale : vector 
+        scaling factor to convert floating point TVM tensors to 8-bit TIDL inputs,
+        where TIDL_input[i] = TVM_tensor[i] * input_scale[i]
+    input_signed : vector
+        indicating whether input tensor to TIDL is signed (1) or unsigned (0)
+    output_scale : vector 
+        scaling factor to convert 8-bit TIDL outputs to floating point TVM tensors,
+        where TVM_tensor[i] = TIDL_input[i] / output_scale[i]
+    output_signed : vector
+        indicating whether output tensor of TIDL is signed (1) or unsigned (0)
+
+    Returns
+    -------
     """
     
     def print_list(in_list):
@@ -1275,44 +1233,6 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
 
     return True
 
-def relay_ir_import_whole_graph(mod, params, subgraph_id):
-    r""" Relay IR import to TIDL 
-
-    Parameters
-    ----------
-    mod : tvm.relay.Module 
-        Relay IR graph
-    params : dict of str to tvm.NDArray
-        The parameter dict to be used by relay
-
-    Returns
-    -------
-    True if import succeeds or False if import fails    
-    """
-
-    # Traverse Relay IR graph and generate a dictionary of all nodes
-    all_nodes = {}
-    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes)) 
-
-    # Initialize TIDL import
-    if tidl_import_init(all_nodes) == False:
-        return False
-
-    # Scan through all relay.expr.Call nodes and import each to TICL
-    for node in all_nodes:
-        if isinstance(node, relay.expr.Call):
-            result = tidl_import_node(all_nodes, node, params)
-            if result == False:
-                return False
-
-    # Invoke TIDL optimization of the imported graph
-    _tidlImportOptimize = _tidl_mod.tidlImportOptimize
-    _tidlImportOptimize.argtype = ctypes.c_int
-    _tidlImportOptimize.restype = ctypes.c_int
-    if _tidlImportOptimize(subgraph_id) == -1:
-        return False
-
-    return True
 
 def subgraph_calibration(artifacts_folder, calib_tool, input_quant_vec, input_signed, subgraph_id):
 

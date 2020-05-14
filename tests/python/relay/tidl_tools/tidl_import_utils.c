@@ -699,6 +699,37 @@ int32_t tidl_mergePoolLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t l
   return TIDL_IMPORT_NO_ERR;
 }
 
+int32_t tidl_mergeDropoutLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t layerIndex)
+{
+  int32_t i1, i2, i3, i4;
+  int32_t status = 0;
+  for (i1 = 0; i1 < layerIndex; i1++)
+  {
+    if (pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType == TIDL_DropOutLayer)
+    {
+      int32_t  idx = tidl_getInLayer(pOrgTIDLNetStructure, layerIndex, pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0].dataId);
+      if (idx == -1)
+      {
+        printf("Error in merging Dropout layer: could not find input layer: %s!\n",
+               pOrgTIDLNetStructure->TIDLPCLayers[i1].inDataNames[0]);
+        return TIDL_IMPORT_ERR_INPUT_LAYER_NOT_FOUND;
+      }
+      sTIDL_LayerPC_t *TIDLPCLayers = &pOrgTIDLNetStructure->TIDLPCLayers[idx];
+      if ((TIDLPCLayers->outConsumerCnt[0] == 1))
+      {
+        TIDLPCLayers->numMacs += pOrgTIDLNetStructure->TIDLPCLayers[i1].numMacs;
+        TIDLPCLayers->outData[0] = pOrgTIDLNetStructure->TIDLPCLayers[i1].outData[0];
+        strcpy((char *)TIDLPCLayers->outDataNames[0], (char *)pOrgTIDLNetStructure->TIDLPCLayers[i1].outDataNames[0]);
+        TIDLPCLayers->outConsumerCnt[0] = pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0];
+        pOrgTIDLNetStructure->TIDLPCLayers[i1].numInBufs = -1;
+        pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs = -1;
+      }
+    }
+  }
+
+  return TIDL_IMPORT_NO_ERR;
+}
+
 int32_t tidl_removeMergedLayersFromNet(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, sTIDL_OrgNetwork_t  *ptempTIDLNetStructure, int32_t layerIndex)
 {
   int32_t i0, i1, i2;
