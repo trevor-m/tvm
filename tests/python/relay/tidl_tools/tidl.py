@@ -1417,7 +1417,7 @@ class CalibrationGraphMutator(ExprMutator):
         self.additional_outputs.append(expr)
 
     def visit_call(self, call):
-        if isinstance(call.op, Function) and call.op.attrs["Compiler"] == self.compiler:
+        if isinstance(call.op, Function) and "Compiler" in call.op.attrs and call.op.attrs["Compiler"] == self.compiler:
             var_map = {}
             for arg, param in zip(call.args, call.op.params):
                 subgraph_name = "_".join(param.name_hint.split("_")[:2])

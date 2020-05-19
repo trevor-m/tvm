@@ -523,6 +523,7 @@ def test_gluoncv_segmentation():
         print("---------- Partioned Graph ----------")
         mod = transform.PartitionGraph()(mod)
         print(mod.astext(show_meta_data=False))
+        mod = UnpackComposites(mod, "tidl")
         print("---------- Pruned Graph ----------")
         mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=1)
         print(mod.astext(show_meta_data=False))
