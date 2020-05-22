@@ -804,7 +804,7 @@ class Conv2DTransposeOpConverter : public TrtOpConverter {
     CHECK(conv2d_attr->dilation[0].as<IntImmNode>()->value == 1 &&
           conv2d_attr->dilation[1].as<IntImmNode>()->value == 1);
 
-      // TRT deconv op doesn't support asymmetric padding before 5.1, so we
+    // TRT deconv op doesn't support asymmetric padding before 5.1, so we
     // workaround by adding a padding layer before the pooling op.
     nvinfer1::DimsHW prepadding, postpadding;
     bool use_asymmetric_padding;
