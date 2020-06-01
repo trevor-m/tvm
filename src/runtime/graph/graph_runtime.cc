@@ -131,7 +131,8 @@ std::string GraphRuntime::GetInputName(int index) const {
 std::string GraphRuntime::GetInputType(int index) const {
   CHECK_LT(static_cast<size_t>(index), input_nodes_.size())
       << "The index is out of range.";
-  return attrs_.dltype[input_nodes_[index]];
+  uint32_t eid = this->entry_id(input_nodes_[index], 0);
+  return attrs_.dltype[eid];
 }
 /*!
  * \brief Get the names of weight inputs.
