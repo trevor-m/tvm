@@ -183,7 +183,8 @@ int GraphRuntime::NumOutputs() const {
 std::string GraphRuntime::GetOutputType(int index) const {
   CHECK_LT(static_cast<size_t>(index), outputs_.size())
       << "The index is out of range.";
-  return attrs_.dltype[outputs_[index].node_id];
+  uint32_t eid = this->entry_id(outputs_[index]);
+  return attrs_.dltype[eid];
 }
 /*!
  * \brief Return NDArray for given input index.
