@@ -293,15 +293,15 @@ def _dropout_whitelist_fn(attrs, args):
 
 @reg.register("nn.global_avg_pool2d", "target.tidl")
 def _global_avg_pool_whitelist_fn(attrs, args):
-    data = args[0].checked_type
+    shape = list(map(int, args[0].checked_type.shape))
     layout = attrs.layout
     if layout == "NCHW":
-        height = data.shape[2]
-        width  = data.shape[3]
+        height = shape[2]
+        width  = shape[3]
     else:
-        height = data.shape[1]
-        width  = data.shape[2]
-    supported = (height * width <= 4096)
+        height = shape[1]
+        width  = shape[2]
+    supported = height * width <= 4096
     return supported
 
 @reg.register("nn.max_pool2d", "target.tidl")

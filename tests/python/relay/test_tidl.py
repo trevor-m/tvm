@@ -37,18 +37,18 @@ from mxnet import image
 
 
 def create_tf_relay_graph(model, input_node, input_shape, layout):
-
+    model_folder = "./tf_models/"
     if model == "MobileNetV1":
-        model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
-        out_node = 'MobilenetV1/Predictions/Softmax'
+        model    = model_folder + "mobilenet_v1_1.0_224_frozen.pb"
+        out_node = "MobilenetV1/Predictions/Softmax"
     elif model == "MobileNetV2":
-        model    = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
-        out_node = 'MobilenetV2/Predictions/Softmax'
+        model    = model_folder + "mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
+        out_node = "MobilenetV2/Predictions/Softmax"
     elif model == "InceptionV1":
-        model    = "./inception1/inception_v1_fbn.pb"
+        model    = model_folder + "inception1/inception_v1_fbn.pb"
         out_node = "softmax/Softmax"
     elif model == "InceptionV3":
-        model    = "./inception3/inception_v3_2016_08_28_frozen-with_shapes.pb"
+        model    = model_folder + "inception3/inception_v3_2016_08_28_frozen-with_shapes.pb"
         out_node = "InceptionV3/Predictions/Softmax"
     #if layout == "NCHW":
     #    input_shape = (input_shape[0],input_shape[2],input_shape[3],input_shape[1])
@@ -124,11 +124,15 @@ def test_extern_tidl_tf(model_name, num_tidl_subgraphs):
     model_compile(model_name, tf_mod, tf_params, num_tidl_subgraphs, data_layout, input_node, input_data)
 
 def test_extern_tidl_onnx(model_name, num_tidl_subgraphs):
+    model_folder = "./onnx_models/"
     if model_name == "resnet18v1":
-        model = "./onnx_resNet18v1/resnet18v1.onnx"
+        model = model_folder + "onnx_resNet18v1/resnet18v1.onnx"
     if model_name == "resnet18v2":
-        model = "./onnx_resNet18v2/resnet18v2.onnx"
-    #model_path = "./onnx_squeezeNet/squeezenet1.1.onnx"
+        model = model_folder + "onnx_resNet18v2/resnet18v2.onnx"
+    if model_name == "resnet101v1":
+        model = model_folder + "resnet101v1/resnet101-v1.onnx"
+    if model_name == "squeezenet1.1":
+        model = model_folder + "squeezeNet1.1/squeezenet1.1.onnx"
     onnx_model = onnx.load(model)
 
     image_shape = (1, 3, 224, 224)
@@ -238,12 +242,13 @@ if __name__ == '__main__':
     arm_gcc          = os.path.join(arm_gcc_path, "arm-linux-gnueabihf-g++")
     target           = "llvm -target=armv7l-linux-gnueabihf"
 
-    tf_models  = ['MobileNetV1',
-                  'MobileNetV2',
+    tf_models  = [#'MobileNetV1',
+#                  'MobileNetV2',
                   'InceptionV1',
                  ]
-    onnx_models = ['resnet18v1',
-                   'resnet18v2',
+    onnx_models = [#'resnet18v1',
+                   #'resnet18v2',
+                   'squeezenet1.1'
                    ]
     ssd_models = ['ssd_512_mobilenet1.0_coco',
                   'ssd_512_mobilenet1.0_voc',
@@ -258,7 +263,7 @@ if __name__ == '__main__':
 #    for tf_model in tf_models:
 #        test_extern_tidl_tf(tf_model, num_tidl_subgraphs=1)
 #    for onnx_model in onnx_models:
-#        test_extern_tidl_onnx("resnet18v1", num_tidl_subgraphs=1)
+#        test_extern_tidl_onnx(onnx_model, num_tidl_subgraphs=1)
     for ssd_model in ssd_models:
         test_extern_tidl_gluoncv_ssd(ssd_model, num_tidl_subgraphs=1)
     for seg_model in seg_models:

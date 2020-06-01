@@ -136,6 +136,10 @@ def find_in_nodes(all_nodes, this_node):
             input_nodes.append(all_nodes[node.tuple_value])
         elif isinstance(node, relay.expr.Tuple):
             input_nodes = input_nodes + find_in_nodes(all_nodes, node)
+        elif isinstance(node, relay.expr.Var):
+            if "tidl_" in node.name_hint and "_i" in node.name_hint:
+                # this is the input to the subgraph
+                input_nodes.append(-1)
         #else: ignore all other types of nodes: var, const, etc.
 
     return input_nodes
@@ -358,15 +362,26 @@ def tidl_import_pad(node):
     _tidlImportPad.restype  = None
     _tidlImportPad(len(pad_array), ctypes.c_void_p(pad_array.ctypes.data))
 
-
-def tidl_import_add(node, params):
+def tidl_import_add(node):
     r""" Import add operator to TIDL
-        An "add" operator may be adding two nodes or adding one node with const
+        An "add" operator may be adding two nodes or adding one node with constant:
             - %3 = add(%2, %1) 
             - %3 = add(%2, %MobilenetV2/Conv/Conv2D_bn_offset) 
+        This function imports "add" opertor with args being two nodes.
+    """
 
-        Need to distinguish these 2 cases and invoke corresponding TIDL mapping 
-        functions:
+    _tidlImportAdd = _tidl_mod.tidlImportAdd
+    _tidlImportAdd.argtypes = None
+    _tidlImportAdd.restype  = None
+    _tidlImportAdd()
+
+def tidl_import_bias_add(node, params):
+    r""" Import bias_add or add operator to TIDL
+        An "add" operator may be adding two nodes or adding one node with constant:
+            - %3 = add(%2, %1) 
+            - %3 = add(%2, %MobilenetV2/Conv/Conv2D_bn_offset) 
+        A "bias_add" operator always add one node with constant.
+        This function imports a "bias_add" or "add" with args[1] being constant.
 
     Parameters
     ----------
@@ -379,42 +394,31 @@ def tidl_import_add(node, params):
     -------
     True if import succeeds or False if import fails    
     """
-
-    if isinstance(node.args[1], relay.expr.Var) or isinstance(node.args[1], tvm.relay.expr.Constant):
-        #print('This is a bias_add operator')
-        bias = node.args[1]
-        if isinstance(bias, tvm.relay.expr.Constant):
-            bias_params = bias.data
-        else:
-            bias_params = params[bias.name_hint]
-
-        if bias.checked_type.dtype == 'float32':
-            bias_params_dtype = b'float32'
-        #elif bias.checked_type.dtype == 'int8':
-        #    bias_params_dtype = b'int8'
-        else:
-            print('Unsupported data type of add')
-            return False
-
-        bias_params_len = bias.checked_type.shape[0]
-        bias_params_np = bias_params.asnumpy()
-
-        _tidlImportBiasAdd = _tidl_mod.tidlImportBiasAdd
-        _tidlImportBiasAdd.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
-        _tidlImportBiasAdd.restype  = None
-        _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
-                           ctypes.c_void_p(bias_params_np.ctypes.data))
-    elif isinstance(node.args[1], relay.expr.Call) or isinstance(node.args[1], relay.expr.TupleGetItem):
-        #print('This is an add operator')
-        _tidlImportAdd = _tidl_mod.tidlImportAdd
-        _tidlImportAdd.argtypes = None
-        _tidlImportAdd.restype  = None
-        _tidlImportAdd()
+    bias = node.args[1]
+    if isinstance(bias, tvm.relay.expr.Constant):
+        # bias is expr.Constant if bind_params_by_name is called
+        bias_params = bias.data
     else:
-        print('Error in importing add operator')
+        # bias is expr.Var if bind_params_by_name is not called
+        print('bias_add op must have args[1] as expr.Constant')
         return False
 
-    return True
+    if bias.checked_type.dtype == 'float32':
+        bias_params_dtype = b'float32'
+    #elif bias.checked_type.dtype == 'int8':
+    #    bias_params_dtype = b'int8'
+    else:
+        print('Unsupported data type of bias_add')
+        return False
+
+    bias_params_len = bias.checked_type.shape[0]
+    bias_params_np = bias_params.asnumpy()
+
+    _tidlImportBiasAdd = _tidl_mod.tidlImportBiasAdd
+    _tidlImportBiasAdd.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
+    _tidlImportBiasAdd.restype  = None
+    _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
+                       ctypes.c_void_p(bias_params_np.ctypes.data))
 
 def tidl_import_batch_norm(node, params):
     r""" Import batch_norm operator to TIDL
@@ -552,7 +556,7 @@ def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
 
     Parameters
     ----------
-    data_layout: 
+    data_layout: string
     input_scale: double
         Scaling factor to convert floating point input to 8-bit quantized input
     input_signed: int
@@ -564,17 +568,29 @@ def tidl_import_init(data_layout, input_scale, input_signed, input_shape):
     True if initialization succeeds or False if initialization fails
     """
 
+    if len(input_shape) == 2:
+        # input is a vector - expand (N,W) to (N,1,1,W) or (N,1,W,1)
+        if data_layout == "NCHW":
+            in_shape = (input_shape[0],1,1,input_shape[1])
+        else:
+            in_shape = (input_shape[0],1,input_shape[1],1)
+    elif len(input_shape) == 4:
+        in_shape = input_shape
+    else:
+        print("Subgraph input_shape " + str(input_shape) + " is not supported")
+        return False
+
     if data_layout == "NCHW":
         layout = b'NCHW'
-        (channel, height, width) = input_shape[1:4]
+        (channel, height, width) = in_shape[1:4]
     elif data_layout == "NHWC":
         layout = b'NHWC'
-        (channel, height, width) = (input_shape[3],input_shape[1],input_shape[2])
+        (channel, height, width) = (in_shape[3],in_shape[1],in_shape[2])
     else:
         print('data layout ' + node.attrs.data_layout + ' is not supported')
         return False
 
-    inQuantFactor = int(round(input_scale*256))  # 256 is due to TIDL implementation
+    inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
     config_params = TIDLconfigParams(12,50,inQuantFactor,input_signed,
                                      channel, height, width)
 
@@ -610,8 +626,13 @@ def tidl_import_node(all_nodes, this_node, params):
         status = tidl_import_conv2d(all_nodes, this_node, params)
     elif this_node.op.name == 'nn.pad':
         status = tidl_import_pad(this_node)
-    elif this_node.op.name == 'add' or this_node.op.name == 'nn.bias_add':
-        status = tidl_import_add(this_node, params)
+    elif this_node.op.name == 'add':
+        if isinstance(this_node.args[1], tvm.relay.expr.Constant):
+            status = tidl_import_bias_add(this_node, params)
+        else:
+            status = tidl_import_add(this_node)
+    elif this_node.op.name == 'nn.bias_add':
+        status = tidl_import_bias_add(this_node, params)
     elif this_node.op.name == 'clip':
         _tidlImportRelu = _tidl_mod.tidlImportRelu
         _tidlImportRelu.argtype = (ctypes.c_char_p)
@@ -676,8 +697,9 @@ def tidl_import_node(all_nodes, this_node, params):
 
     _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
     _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-    _tidlImportLinkNodes.restype = None
-    _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
+    _tidlImportLinkNodes.restype = ctypes.c_int
+    if _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+        return False
 
     return True
 
@@ -794,8 +816,9 @@ def tidl_import_tuple_node(all_nodes, node):
     
             _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
             _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-            _tidlImportLinkNodes.restype = None
-            _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
+            _tidlImportLinkNodes.restype = ctypes.c_int
+            if _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+                return False
 
             imported_nodes = imported_nodes + nodes_for_this_data_layer
             new_node_ind = new_node_ind + 1
@@ -853,7 +876,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
             print("Error - only 1 input tensor is supported for now!")
             return False
 
-        # Quantize input tensor into 8-bit integer
+        # Quantize input tensor into 8-bit integer (only support 1 input tensor)
         input_quant_vec, input_scale, input_signed = tensor_quant_flatten(input_fp[0], data_layout)
 
         # Initialize TIDL import
@@ -889,7 +912,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         _tidlImportOptimize.restype = ctypes.c_int
         net_fname = net_file.encode('utf-8')
         par_fname = par_file.encode('utf-8')
-        if _tidlImportOptimize(net_fname, par_fname, subgraph_id) == -1:
+        if _tidlImportOptimize(net_fname, par_fname, subgraph_id) == 0:
             return False
 
         # Calibrate TIDL for the imported subgraph
@@ -911,7 +934,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         for i in range(len(output_fp)):
             output_signed.append(int(np.amin(output_fp[i]) < 0))
         for i in range(len(out_data_q)):
-            output_scale.append(round(out_data_q[i]/256.0,5))  # 256 is TIDL implementation specific
+            output_scale.append(round(out_data_q[i]/255.0,5))  # 255 is TIDL implementation specific
         print("Output conversion: " + str(out_data_q) + ", " + str(output_scale))
         
         # Generate subgraph configuration file
@@ -1000,17 +1023,18 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
         print("TIDL calibration crashed")
         return False, None
 
-    # Find trace dump of last node - this may not be needed
+    # Find output dataQs
     if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
-        out_buf_ind = console_out.rfind("Number of output buffers:")
+        output_dataQ_token = "Number of output dataQ:"
+        out_buf_ind = console_out.rfind(output_dataQ_token)
         if out_buf_ind == -1:
             print("TIDL calibration failed - can't find number of output buffers.")
             return False, None
         else:
-            last_line   = console_out.split("Number of output dataQ:",1)[1]
+            last_line   = console_out.split(output_dataQ_token,1)[1]
             num_outputs = int(last_line.split(". Output dataQ:",1)[0])
             out_quants  = last_line.split(". Output dataQ:",1)[1]
-            quants = out_quants.split("End of config list found",1)[0]
+            quants = out_quants.split("End of output dataQ",1)[0]
             qs = re.findall(r"\d+", quants)
             outq = list(map(int,qs))
             if num_outputs != len(outq):
@@ -1119,6 +1143,10 @@ class RemoveMultiplyByOne(ExprMutator):
                 data = expr.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 1.0:
                     return expr.args[0]
+            if isinstance(expr.args[0], tvm.relay.expr.Constant):
+                data = expr.args[0].data.asnumpy()
+                if data.shape == () and data.item() == 1.0:
+                    return expr.args[1]
         return super().visit_call(expr)
 
 def generate_subgraph_tensors(mod, params, input_node, input_data):
