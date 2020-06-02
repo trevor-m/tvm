@@ -28,8 +28,8 @@ target = "target.tidl"
 def _merge_sequential_ops(mod):
     """Fuse sequential ops for op registration. Ops: vision.multibox_prior, nn.reshape, squeeze, transpose
     """
-    #squeese has to be followed by reshape
-    def _squeeze_pattern():
+    # Squeeze has to be followed by reshape.
+    def _squeeze_reshape_pattern():
         x = relay.var('x')
         squeeze_out = relay.op.transform.squeeze(x)
         reshape_out = relay.op.transform.reshape(squeeze_out, [])
@@ -88,7 +88,6 @@ def _merge_sequential_ops(mod):
         reshape_out = relay.op.transform.reshape(dense_out, [])
         return reshape_out
 
-    #Same as squeeze pattern
     def _reshape_squeeze_pattern():
         x = relay.var('x')
         squeeze_out = relay.op.transform.squeeze(x)
@@ -108,8 +107,50 @@ def _merge_sequential_ops(mod):
         transpose_out1 = relay.op.transform.transpose(reshape_out)
         return transpose_out1
 
+    def _conv2d_relu_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        conv2d_out = relay.op.nn.conv2d(x, w)
+        relu_out = relay.op.nn.relu(conv2d_out)
+        return relu_out
+
+    def _conv2d_bias_relu_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        b = relay.var('b')
+        conv2d_out = relay.op.nn.conv2d(x, w)
+        bias_out = relay.op.nn.bias_add(conv2d_out, b)
+        relu_out = relay.op.nn.relu(bias_out)
+        return relu_out
+
+    def _bn_relu_pattern():
+        x = relay.var('x')
+        gamma = relay.var("gamma")
+        beta = relay.var("beta")
+        moving_mean = relay.var("moving_mean")
+        moving_var = relay.var("moving_var")
+        bn_out = relay.op.nn.batch_norm(x, gamma, beta, moving_mean, moving_var)
+        relu_out = relay.op.nn.relu(bn_out[0])
+        return relu_out
+
+    def _dense_relu_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        dense_out = relay.op.nn.dense(x, w)
+        relu_out = relay.op.nn.relu(dense_out)
+        return relu_out
+
+    def _dense_bias_relu_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        b = relay.var('b')
+        dense_out = relay.op.nn.dense(x, w)
+        bias_out = relay.op.nn.bias_add(dense_out, b)
+        relu_out = relay.op.nn.relu(bias_out)
+        return relu_out
+
     pattern_table = [
-        ('tidl.squeeze', _squeeze_pattern()),
+        ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
         ('tidl.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
         ('tidl.multibox_prior_concat', _multibox_prior_concat_pattern()),
@@ -120,69 +161,87 @@ def _merge_sequential_ops(mod):
         ('tidl.reshape_squeeze', _reshape_squeeze_pattern()),
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
         ('tidl.reshape_transpose', _reshape_transpose_pattern()),
+        ('tidl.conv2d_relu', _conv2d_relu_pattern()),
+        ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
+        ('tidl.bn_relu', _bn_relu_pattern()),
+        ('tidl.dense_relu', _dense_relu_pattern()),
+        ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
 
-@reg.register("tidl.squeeze", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
-
-@reg.register("tidl.transpose", "target.tidl")
-def _tidl_transpose_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+@reg.register("tidl.squeeze_reshape", "target.tidl")
+def _tidl_squeeze_reshape_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.transpose_reshape", "target.tidl")
 def _tidl_transpose_reshape_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+    return True
 
 @reg.register("tidl.transpose_batch_reshape", "target.tidl")
 def _tidl_transpose_batch_reshape_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+    return True
 
 @reg.register("tidl.multibox_prior_concat", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_multibox_prior_concat_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.mutlibox_prior_nms", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_mutlibox_prior_nms_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_avgpool", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_globalavgpool", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_dense", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_dense_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_squeeze", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_squeeze_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_softmax", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_softmax_whitelist_fn(attrs, args):
+    return True
 
 @reg.register("tidl.reshape_transpose", "target.tidl")
-def _tidl_squeeze_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+def _tidl_reshape_transpose_whitelist_fn(attrs, args):
+    return True
+
+@reg.register("tidl.conv2d_relu", "target.tidl")
+def _conv2d_relu_whitelist_fn(attrs, args):
+    conv2d_op = args[0]
+    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
+@reg.register("tidl.conv2d_bias_relu", "target.tidl")
+def _conv2d_bias_relu_whitelist_fn(attrs, args):
+    bias_add_op = args[0]
+    conv2d_op = bias_add_op.args[0]
+    return _bias_add_whitelist_fn(bias_add_op.attrs, bias_add_op.args) and \
+           _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
+@reg.register("tidl.bn_relu", "target.tidl")
+def _bn_relu_whitelist_fn(attrs, args):
+    bn_op = args[0]
+    return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
+
+@reg.register("tidl.dense_relu", "target.tidl")
+def _dense_relu_whitelist_fn(attrs, args):
+    dense_op = args[0]
+    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
+@reg.register("tidl.dense_bias_relu", "target.tidl")
+def _dense_bias_relu_whitelist_fn(attrs, args):
+    bias_add_op = args[0]
+    dense_op = bias_add_op.args[0]
+    return _bias_add_whitelist_fn(bias_add_op.attrs, bias_add_op.args) and \
+           _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
 @reg.register("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
@@ -334,8 +393,8 @@ def _prelu_whitelist_fn(attrs, args):
 
 @reg.register("nn.relu", "target.tidl")
 def _relu_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+    # Standalone relu is not supported.
+    return False
 
 @reg.register("nn.slice_like", "target.tidl")
 def _slice_like_whitelist_fn(attrs, args):
