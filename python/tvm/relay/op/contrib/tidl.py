@@ -149,6 +149,22 @@ def _merge_sequential_ops(mod):
         relu_out = relay.op.nn.relu(bias_out)
         return relu_out
 
+    def _conv2d_bias_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        b = relay.var('b')
+        conv2d_out = relay.op.nn.conv2d(x, w)
+        bias_out = relay.op.nn.bias_add(conv2d_out, b)
+        return bias_out
+
+    def _dense_bias_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        b = relay.var('b')
+        dense_out = relay.op.nn.dense(x, w)
+        bias_out = relay.op.nn.bias_add(dense_out, b)
+        return bias_out
+
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
@@ -166,6 +182,8 @@ def _merge_sequential_ops(mod):
         ('tidl.bn_relu', _bn_relu_pattern()),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
+        ('tidl.conv2d_bias', _conv2d_bias_pattern()),
+        ('tidl.dense_bias', _dense_bias_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
@@ -221,10 +239,8 @@ def _conv2d_relu_whitelist_fn(attrs, args):
 
 @reg.register("tidl.conv2d_bias_relu", "target.tidl")
 def _conv2d_bias_relu_whitelist_fn(attrs, args):
-    bias_add_op = args[0]
-    conv2d_op = bias_add_op.args[0]
-    return _bias_add_whitelist_fn(bias_add_op.attrs, bias_add_op.args) and \
-           _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+    conv2d_op = args[0].args[0]
+    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
 @reg.register("tidl.bn_relu", "target.tidl")
 def _bn_relu_whitelist_fn(attrs, args):
@@ -238,10 +254,18 @@ def _dense_relu_whitelist_fn(attrs, args):
 
 @reg.register("tidl.dense_bias_relu", "target.tidl")
 def _dense_bias_relu_whitelist_fn(attrs, args):
-    bias_add_op = args[0]
-    dense_op = bias_add_op.args[0]
-    return _bias_add_whitelist_fn(bias_add_op.attrs, bias_add_op.args) and \
-           _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+    dense_op = args[0].args[0]
+    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
+@reg.register("tidl.conv2d_bias", "target.tidl")
+def _dense_bias_relu_whitelist_fn(attrs, args):
+    conv2d_op = args[0]
+    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
+@reg.register("tidl.dense_bias", "target.tidl")
+def _dense_bias_relu_whitelist_fn(attrs, args):
+    dense_op = args[0]
+    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
 @reg.register("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
@@ -289,8 +313,8 @@ def _batch_norm_whitelist_fn(attrs, args):
 
 @reg.register("nn.bias_add", "target.tidl")
 def _bias_add_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+    # Standalone bias_add is not supported.
+    return False
 
 @reg.register("clip", "target.tidl")
 def _clip_whitelist_fn(attrs, args):
