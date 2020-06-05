@@ -900,6 +900,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
                 print("This is a TupleNode")
                 result = tidl_import_tuple_node(all_nodes_tidl, node)
                 if result == False:
+                    print('Error importing tuplenode')
                     return False
     
         # Invoke TIDL optimization of the imported graph
@@ -912,18 +913,25 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         _tidlImportOptimize.restype = ctypes.c_int
         net_fname = net_file.encode('utf-8')
         par_fname = par_file.encode('utf-8')
+        
+        print('here1')
         if _tidlImportOptimize(net_fname, par_fname, subgraph_id) == 0:
+            print('tidl import optimize failed')
             return False
 
         # Calibrate TIDL for the imported subgraph
+        print('here2')
         status, out_data_q = subgraph_calibration(tidl_calib_tool, input_quant_vec, 
                                                   input_signed, net_file, par_file)
         if status == False:
             return False
         
+        print('here3')
         # Calculate scaling factor to convert output tensor to floating point
         # Obtain output tensor from TVM graph execution
         output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
+        
+        print('here4')
         # TODO: convert following lines into a function
         if output_fp is None:
             return False
@@ -937,10 +945,12 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
             output_scale.append(round(out_data_q[i]/255.0,5))  # 255 is TIDL implementation specific
         print("Output conversion: " + str(out_data_q) + ", " + str(output_scale))
         
+        print('here5')
         # Generate subgraph configuration file
         subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout, 
                          input_scale, input_signed, output_scale, output_signed)
-
+        
+        print('here6')
     return True
 
 def tensor_quant_flatten(input_tensor, data_layout):
@@ -1303,7 +1313,7 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = relay.transform.FoldConstant()(mod)
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
     print("---------- Original graph ----------")
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
 
     #============= Annotate the graph ==============
     # Looks at annotated ops and marks them in the graph with compiler.begin 
@@ -1321,10 +1331,14 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = transform.PartitionGraph()(mod)
     print("---------- Unpack composite ops in the graph ----------")
     mod = UnpackComposites(mod, "tidl")
+    print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
     print("---------- Prune Graph ----------")
     mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl")
-    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
     print(mod.astext(show_meta_data=False))
+    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
+    # print(mod.astext(show_meta_data=False))
+
+    print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
 
     #============= Generate subgraph boundary tensors ==============
     subgraph_tensors = generate_subgraph_tensors(mod, params, input_node, input_data)

@@ -88,12 +88,6 @@ def _merge_sequential_ops(mod):
         reshape_out = relay.op.transform.reshape(dense_out, [])
         return reshape_out
 
-    def _reshape_squeeze_pattern():
-        x = relay.var('x')
-        squeeze_out = relay.op.transform.squeeze(x)
-        reshape_out = relay.op.transform.reshape(squeeze_out, [])
-        return reshape_out
-
     def _reshape_softmax_pattern():
         x = relay.var('x')
         reshape_out = relay.op.transform.reshape(x, [])
@@ -174,7 +168,6 @@ def _merge_sequential_ops(mod):
         ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
         ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
         ('tidl.reshape_dense', _reshape_dense_pattern()),
-        ('tidl.reshape_squeeze', _reshape_squeeze_pattern()),
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
         ('tidl.reshape_transpose', _reshape_transpose_pattern()),
         ('tidl.conv2d_relu', _conv2d_relu_pattern()),
@@ -210,7 +203,7 @@ def _tidl_mutlibox_prior_nms_whitelist_fn(attrs, args):
 
 @reg.register("tidl.reshape_avgpool", "target.tidl")
 def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
-    return True
+    return _avg_pool_whitelist_fn(attrs, args)
 
 @reg.register("tidl.reshape_globalavgpool", "target.tidl")
 def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
@@ -258,7 +251,7 @@ def _dense_bias_relu_whitelist_fn(attrs, args):
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
 @reg.register("tidl.conv2d_bias", "target.tidl")
-def _dense_bias_relu_whitelist_fn(attrs, args):
+def _conv2d_bias_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
@@ -407,7 +400,7 @@ def _nms_whitelist_fn(attrs, args):
 
 @reg.register("nn.pad", "target.tidl")
 def _pad_whitelist_fn(attrs, args):
-    supported = (call_node.attrs.pad_value == 0.0 and call_node.attrs.pad_mode == 'constant')
+    supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
     return supported
 
 @reg.register("nn.prelu", "target.tidl")
