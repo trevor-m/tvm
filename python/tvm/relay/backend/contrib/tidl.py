@@ -965,7 +965,7 @@ def tensor_quant_flatten(input_tensor, data_layout):
     # only use 1 batch for calibration
     input_tensor = input_tensor[0,:]
     # change layout to CxHxW to use numpy.flattern to change to 1-d array
-    if data_layout == "NHWC":
+    if data_layout == "NHWC" and len(input_tensor.shape) == 3:
         input_tensor = input_tensor.transpose(2,0,1)
 
     if np.amin(input_tensor) >= 0:
