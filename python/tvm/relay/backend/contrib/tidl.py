@@ -1183,7 +1183,8 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     print("Input map:", my_mutator.name_map)
 
     # Build and execute calibration graph to get outputs
-    with relay.build_config(opt_level=3):
+    # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
+    with relay.build_config(opt_level=0):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(input_node, input_data)
