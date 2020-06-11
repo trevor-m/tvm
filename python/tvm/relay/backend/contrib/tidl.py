@@ -1201,6 +1201,16 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
+class ExprReplacer(ExprMutator):
+    def __init__(self, call_map):
+        ExprMutator.__init__(self)
+        self.call_map = call_map
+
+    def visit_call(self, call):
+        if call in self.call_map:
+            return self.call_map[call]
+        return super().visit_call(call)
+
 class VarRenamer(ExprMutator):
     def __init__(self, new_subgraph_name):
         ExprMutator.__init__(self)
@@ -1251,6 +1261,131 @@ class SubgraphRemover(ExprMutator):
                     self.new_mod[subgraph_gv] = self.mod[name]
                 return subgraph_gv(*args)
         return super().visit_call(call)
+
+class SubgraphSizeCounter(ExprVisitor):
+    def __init__(self):
+        ExprVisitor.__init__(self)
+        self.num_layers = 0
+        self.total_memory = 0
+
+    def visit_call(self, call):
+        self.num_layers += 1
+        super().visit_call(call)
+
+class SubgraphReducer(ExprMutator):
+    def __init__(self, mod, new_mod, compiler="tidl"):
+        ExprVisitor.__init__(self)
+        self.mod = mod
+        self.new_mod = new_mod
+        self.compiler = compiler
+
+    # def _remove_last_op(mod, call, name):
+    #     new_mod = tvm.IRModule()
+    #     original_func = mod[name]
+    #     last_op = mod[name].body
+    #     # TODO: if tuple?
+    #     if len(last_op.args > 1):
+    #         new_outputs = relay.Tuple(last_op.args)
+    #     else:
+    #         new_outputs = last_op.args[0]
+    #     subgraph_gv = relay.GlobalVar(new_name)
+    #     subgraph_func = relay.Function(original_func.args, new_outputs)
+    #     subgraph_func = subgraph_func.with_attr("global_symbol", new_name)
+    #     new_mod[subgraph_gv] = subgraph_func
+    #     return new_outputs
+
+    def visit_call(self, call):
+        if isinstance(call.op, GlobalVar):
+            name = call.op.name_hint
+            print(name)
+            if not self.mod[name].attrs or self.mod[name].attrs["Compiler"] != self.compiler:
+                return super().visit_call(call)
+            counter = SubgraphSizeCounter()
+            counter.visit(self.mod[name])
+            print('counted num layers=', counter.num_layers)
+            #if counter.num_layers > max_num_layers or counter.total_memory > max_total_memory_mb:
+            if counter.num_layers > 3:
+                # "Inline" the last op only back into new main function.
+                original_func = self.mod[name]
+                # Get last_op
+                last_op = original_func.body
+                # TODO: if tuple?
+                if len(last_op.args) > 1:
+                    new_outputs = relay.Tuple(last_op.args)
+                else:
+                    new_outputs = last_op.args[0]
+                subgraph_gv = relay.GlobalVar(name)
+                # construct new func without last_op
+                new_func = relay.Function(original_func.params, new_outputs)
+                new_func = new_func.with_attr("global_symbol", name)
+                self.new_mod[subgraph_gv] = new_func
+
+                # var_map = {}
+                # for arg, param in zip(call.args, func.params):
+                #     var_map[param] = super().visit(arg)
+                # new_body = VarReplacer(var_map).visit(func.body)
+
+                # new expr = call(func) + last_op
+                new_expr = subgraph_gv(*call.args)
+                if len(last_op.args) > 1:
+                    print('not implemented')
+                    exit(1)
+                else:
+                    call_map = {last_op.args[0]: new_expr}
+                new_expr = ExprReplacer(call_map).visit(last_op)
+
+                return new_expr
+            elif name != "main":
+                # Copy the GlobalVar (subgraph function) to the new module and call.
+                if self.rename_starting_from_0:
+                    new_name = name.split('_')[0] + "_" + str(self.count)
+                    self.count += 1
+                else:
+                    new_name = name
+                args = []
+                for arg in call.args:
+                    args.append(super().visit(arg))
+                subgraph_gv = relay.GlobalVar(new_name)
+                if self.rename_starting_from_0:
+                    subgraph_func = VarRenamer(new_name).visit(self.mod[name])
+                    subgraph_func = subgraph_func.with_attr("global_symbol", new_name)
+                    self.new_mod[subgraph_gv] = subgraph_func
+                else:
+                    self.new_mod[subgraph_gv] = self.mod[name]
+                return subgraph_gv(*args)
+        return super().visit_call(call)
+
+def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memory_mb=512):
+    """
+    Reduces size of subgraph to fit limitations.
+    """
+
+    class AddOpToMainMutator(ExprMutator):
+        def __init__(self, subgraph_name):
+            ExprMutator.__init__(self)
+            self.new_subgraph_name = new_subgraph_name
+
+        def visit_var(self, var):
+            if "_".join(var.name_hint.split('_')[:2]) != self.new_subgraph_name:
+                new_var_name = self.new_subgraph_name + "_" + var.name_hint.split('_')[2]
+                return relay.Var(new_var_name, var.checked_type)
+            return super().visit_var(var)
+
+    subgraph_names_to_remove = []
+    # Remove subgraphs with more than 1 input or tuple inputs.
+    for subgraph in mod.get_global_vars():
+        name = subgraph.name_hint
+        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+            continue
+        
+        counter = SubgraphSizeCounter()
+        counter.visit(mod[name])
+        if counter.num_layers > max_num_layers or counter.total_memory > max_total_memory_mb:
+            subgraph_names_to_remove.append(name)
+    print("Removing subgraphs due to having more than 256 layers:", subgraph_names_to_remove)
+    new_mod = tvm.IRModule()
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    return new_mod
 
 def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
     subgraph_names_to_remove = []
@@ -1314,6 +1449,8 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     print("---------- Partioned Graph ----------")
     mod = transform.PartitionGraph()(mod)
     #print(mod.astext(show_meta_data=False))
+    # Reduce size of subgraphs too big for device
+    mod = ReduceSubgraphSize(mod, compiler="tidl")
     print("---------- Unpack composite ops in the graph ----------")
     mod = UnpackComposites(mod, "tidl")
     #print(mod.astext(show_meta_data=False))
@@ -1335,3 +1472,35 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     else:
         print("Graph execution with general CPU.")
         return None
+
+def set_func_attr(func, compile_name, symbol_name):
+    func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+    func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+    func = func.with_attr("Compiler", compile_name)
+    func = func.with_attr("global_symbol", symbol_name)
+    return func
+
+def test_subgraph_reducer():
+    x = relay.var('tidl_i0', shape=(1, 3, 12, 12), dtype='float32')
+    y = relay.nn.relu(x)
+    y = relay.nn.relu(y)
+    y = relay.nn.relu(y)
+    out = relay.nn.relu(y)
+    func = relay.Function([x], out)
+    func = set_func_attr(func, "tidl", "tidl_0")
+    gv = relay.GlobalVar("tidl_0")
+
+    mod = tvm.IRModule()
+    mod[gv] = func
+    x_main = relay.var('x', shape=(1, 3, 12, 12), dtype='float32')
+    main_f = relay.Function([x_main], gv(x_main))
+    mod['main'] = main_f
+    print('@@@@@@@@ old mod @@@@@@@@@')
+    print(mod)
+    new_mod = tvm.IRModule()
+    new_mod['main'] = SubgraphReducer(mod, new_mod).visit(mod["main"])
+    
+    print('@@@@@@@@ new mod @@@@@@@@@')
+    print(new_mod)
+
+test_subgraph_reducer()
