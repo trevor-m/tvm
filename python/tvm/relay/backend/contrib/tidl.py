@@ -1302,9 +1302,9 @@ class SubgraphReducer(ExprMutator):
                 return super().visit_call(call)
             counter = SubgraphSizeCounter()
             counter.visit(self.mod[name])
-            print('counted num layers=', counter.num_layers)
+            print(name, 'counted num layers=', counter.num_layers)
             #if counter.num_layers > max_num_layers or counter.total_memory > max_total_memory_mb:
-            if counter.num_layers > 3:
+            if counter.num_layers > 1:
                 # "Inline" the last op only back into new main function.
                 original_func = self.mod[name]
                 # Get last_op
@@ -1328,31 +1328,34 @@ class SubgraphReducer(ExprMutator):
                 # new expr = call(func) + last_op
                 new_expr = subgraph_gv(*call.args)
                 if len(last_op.args) > 1:
-                    print('not implemented')
-                    exit(1)
+                    #call_map = {}
+                    #for i, arg in last_op.args:
+                        # is arg an input to subgraph?
+
+                    call_map = {arg: relay.TupleGetItem(new_expr, i) for i, arg in enumerate(last_op.args)}
                 else:
                     call_map = {last_op.args[0]: new_expr}
                 new_expr = ExprReplacer(call_map).visit(last_op)
 
                 return new_expr
-            elif name != "main":
-                # Copy the GlobalVar (subgraph function) to the new module and call.
-                if self.rename_starting_from_0:
-                    new_name = name.split('_')[0] + "_" + str(self.count)
-                    self.count += 1
-                else:
-                    new_name = name
-                args = []
-                for arg in call.args:
-                    args.append(super().visit(arg))
-                subgraph_gv = relay.GlobalVar(new_name)
-                if self.rename_starting_from_0:
-                    subgraph_func = VarRenamer(new_name).visit(self.mod[name])
-                    subgraph_func = subgraph_func.with_attr("global_symbol", new_name)
-                    self.new_mod[subgraph_gv] = subgraph_func
-                else:
-                    self.new_mod[subgraph_gv] = self.mod[name]
-                return subgraph_gv(*args)
+            # elif name != "main":
+            #     # Copy the GlobalVar (subgraph function) to the new module and call.
+            #     if self.rename_starting_from_0:
+            #         new_name = name.split('_')[0] + "_" + str(self.count)
+            #         self.count += 1
+            #     else:
+            #         new_name = name
+            #     args = []
+            #     for arg in call.args:
+            #         args.append(super().visit(arg))
+            #     subgraph_gv = relay.GlobalVar(new_name)
+            #     if self.rename_starting_from_0:
+            #         subgraph_func = VarRenamer(new_name).visit(self.mod[name])
+            #         subgraph_func = subgraph_func.with_attr("global_symbol", new_name)
+            #         self.new_mod[subgraph_gv] = subgraph_func
+            #     else:
+            #         self.new_mod[subgraph_gv] = self.mod[name]
+            #     return subgraph_gv(*args)
         return super().visit_call(call)
 
 def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memory_mb=512):
@@ -1450,9 +1453,15 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = transform.PartitionGraph()(mod)
     #print(mod.astext(show_meta_data=False))
     # Reduce size of subgraphs too big for device
-    mod = ReduceSubgraphSize(mod, compiler="tidl")
+    new_mod = tvm.IRModule()
+    new_mod['main'] = SubgraphReducer(mod, new_mod).visit(mod["main"])
+    
+    print("---------- Reduce Subgraph Size ----------")
+    print(new_mod.astext(show_meta_data=False))
+    exit(1)
+    # mod = ReduceSubgraphSize(mod, compiler="tidl")
     print("---------- Unpack composite ops in the graph ----------")
-    mod = UnpackComposites(mod, "tidl")
+    mod = UnpackComposites(new_mod, "tidl")
     #print(mod.astext(show_meta_data=False))
     print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
     print("---------- Prune Graph ----------")
@@ -1502,5 +1511,3 @@ def test_subgraph_reducer():
     
     print('@@@@@@@@ new mod @@@@@@@@@')
     print(new_mod)
-
-test_subgraph_reducer()
