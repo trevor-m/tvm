@@ -17,9 +17,35 @@
 """Unit tests for graph partitioning."""
 import os
 import sys
-import numpy as np
-from matplotlib import pyplot as plt
 
+import argparse
+parser = argparse.ArgumentParser(description="Testing TIDL code generation")
+parser.add_argument("--batch_size", type=int, default=1, help="batch size")
+parser.add_argument("--num_tidl_subgraphs", type=int, default=1, help="number of TIDL subgraphs")
+parser.add_argument("--force_arm_only", help="Force ARM-only execution", action='store_true', default=False)
+
+try:
+    args = parser.parse_args()
+except SystemExit:
+    quit()
+
+batch_size = args.batch_size
+num_tidl_subgraphs = args.num_tidl_subgraphs
+force_arm_only = args.force_arm_only
+
+if os.getenv("ARM_GCC_PATH") is None:
+  sys.exit("Environment variable ARM_GCC_PATH is not set!")
+else: 
+  arm_gcc_path = os.getenv("ARM_GCC_PATH")
+if os.getenv("TIDL_TOOLS_PATH") is None:
+    sys.exit("Environment variable TIDL_TOOLS_PATH is not set!")
+else:
+    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+tidl_calib_tool  = os.path.join(tidl_tools_path, "eve_test_dl_algo_ref.out")
+arm_gcc          = os.path.join(arm_gcc_path, "arm-linux-gnueabihf-g++")
+target           = "llvm -target=armv7l-linux-gnueabihf"
+
+import numpy as np
 import onnx
 import tvm
 import tvm.relay.testing
@@ -27,19 +53,19 @@ from tvm import relay
 from tvm.contrib import cc
 from tvm.contrib import graph_runtime
 from tvm.contrib.download import download_testdata
-from tvm.relay.backend.contrib import tidl
+import mxnet as mx
+from mxnet import image
+from matplotlib import pyplot as plt
 import tensorflow as tf
 from tvm.relay.testing import tf as tf_testing
 from gluoncv import model_zoo, data, utils
 from gluoncv.data.transforms.presets.segmentation import test_transform
-import mxnet as mx
-from mxnet import image
-
+from tvm.relay.backend.contrib import tidl
 
 def create_tf_relay_graph(model, input_node, input_shape, layout):
     model_folder = "./tf_models/"
     if model == "MobileNetV1":
-        model    = model_folder + "mobilenet_v1_1.0_224_frozen.pb"
+        model    = model_folder + "mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
         out_node = "MobilenetV1/Predictions/Softmax"
     elif model == "MobileNetV2":
         model    = model_folder + "mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
@@ -74,7 +100,7 @@ def create_tf_relay_graph(model, input_node, input_shape, layout):
     return mod, params
 
 
-def model_compile(model_name, mod_orig, params, num_tidl_subgraphs, 
+def model_compile(model_name, mod_orig, params, 
                   data_layout, input_node, input_data):
     artifacts_folder = "./artifacts_" + model_name
     if os.path.isdir(artifacts_folder):
@@ -84,11 +110,14 @@ def model_compile(model_name, mod_orig, params, num_tidl_subgraphs,
     else:
         os.mkdir(artifacts_folder)
 
-    mod = tidl.EnableTIDL(mod_orig, params, num_tidl_subgraphs, 
-                          data_layout, input_node, input_data, 
-                          artifacts_folder, tidl_calib_tool)
-    if mod == None:  # TIDL cannot be enabled - no offload to TIDL
+    if force_arm_only is True:
         mod = mod_orig
+    else:
+        mod = tidl.EnableTIDL(mod_orig, params, num_tidl_subgraphs, 
+                              data_layout, input_node, input_data, 
+                              artifacts_folder, tidl_calib_tool)
+        if mod == None:  # TIDL cannot be enabled - no offload to TIDL
+            mod = mod_orig
 
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib    = os.path.join(artifacts_folder, "deploy_lib.so")
@@ -100,7 +129,7 @@ def model_compile(model_name, mod_orig, params, num_tidl_subgraphs,
     with open(path_params, "wb") as fo:
       fo.write(relay.save_param_dict(params))
 
-def test_extern_tidl_tf(model_name, num_tidl_subgraphs):
+def test_tidl_tf(model_name):
     dtype = "float32"
     data_layout = "NHWC"
     input_shape = (1, 224, 224, 3)
@@ -109,8 +138,12 @@ def test_extern_tidl_tf(model_name, num_tidl_subgraphs):
     if x.shape != input_shape:
         sys.exit("Input data shape is not correct!")
     # Normalize input data to (-1,1)
-    input_data = x/np.amax(np.abs(x))
+    x = x/np.amax(np.abs(x))
+    # Set batch_size of input data
+    x = np.squeeze(x, axis=0)
+    input_data = np.concatenate([x[np.newaxis, :, :]]*batch_size)
     input_node = "input"
+    input_shape = input_data.shape
 
     #============= Create a Relay graph for MobileNet model ==============
     tf_mod, tf_params = create_tf_relay_graph(model = model_name,
@@ -121,14 +154,14 @@ def test_extern_tidl_tf(model_name, num_tidl_subgraphs):
     print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    model_compile(model_name, tf_mod, tf_params, num_tidl_subgraphs, data_layout, input_node, input_data)
+    model_compile(model_name, tf_mod, tf_params, data_layout, input_node, input_data)
 
-def test_extern_tidl_onnx(model_name, num_tidl_subgraphs):
+def test_tidl_onnx(model_name):
     model_folder = "./onnx_models/"
     if model_name == "resnet18v1":
-        model = model_folder + "onnx_resNet18v1/resnet18v1.onnx"
+        model = model_folder + "resNet18v1/resnet18v1.onnx"
     if model_name == "resnet18v2":
-        model = model_folder + "onnx_resNet18v2/resnet18v2.onnx"
+        model = model_folder + "resNet18v2/resnet18v2.onnx"
     if model_name == "resnet101v1":
         model = model_folder + "resnet101v1/resnet101-v1.onnx"
     if model_name == "squeezenet1.1":
@@ -145,7 +178,7 @@ def test_extern_tidl_onnx(model_name, num_tidl_subgraphs):
     onnx_mod, onnx_params = relay.frontend.from_onnx(onnx_model, shape_dict)
 
     #======================== Compile the model ========================
-    model_compile(model_name, onnx_mod, onnx_params, num_tidl_subgraphs, data_layout, input_name, input_data)
+    model_compile(model_name, onnx_mod, onnx_params, data_layout, input_name, input_data)
 
 def load_gluoncv_model(model, x, input_name, input_shape, dtype):
     block = model_zoo.get_model(model, pretrained=True)
@@ -170,7 +203,7 @@ def load_gluoncv_model(model, x, input_name, input_shape, dtype):
         mod, params = relay.frontend.from_mxnet(model_json, {input_name: input_shape}, arg_params=arg_params, aux_params=aux_params)
     return block, mod, params
 
-def test_extern_tidl_gluoncv_ssd(model_name, num_tidl_subgraphs):
+def test_tidl_gluoncv_ssd(model_name):
     im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
                                  'gluoncv/detection/street_small.jpg?raw=true',
                                  'street_small.jpg', module='data')
@@ -196,16 +229,16 @@ def test_extern_tidl_gluoncv_ssd(model_name, num_tidl_subgraphs):
     class_IDs, scores, bounding_boxs = mod.get_output(0), mod.get_output(1), mod.get_output(2)
     ax = utils.viz.plot_bbox(img, bounding_boxs.asnumpy()[0], scores.asnumpy()[0],
                              class_IDs.asnumpy()[0], class_names=block.classes)
-    plt.savefig("gluoncv_ssd_tvm.png")
+    plt.savefig("gluoncv_"+model_name+"_tvm.png")
     results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
     print("Number of outputs: " + str(len(results)))
     #for i in range(len(results)):
     #    np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
 
     #======================== Compile the model ========================
-    model_compile(model_name, ssd_mod, ssd_params, num_tidl_subgraphs, data_layout, input_name, input_data)
+    model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
 
-def test_extern_tidl_gluoncv_segmentation(model_name, num_tidl_subgraphs):
+def test_tidl_gluoncv_segmentation(model_name):
     input_name = "data"
     data_layout = "NCHW"
     dtype = "float32"
@@ -227,44 +260,146 @@ def test_extern_tidl_gluoncv_segmentation(model_name, num_tidl_subgraphs):
 #    block, seg_mod, seg_params = load_gluoncv_model(model, img, input_name, input_shape, dtype)
 
     #======================== Compile the model ========================
-    model_compile(model_name, seg_mod, seg_params, num_tidl_subgraphs, data_layout, input_name, input_data)
+    model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
+
+def test_tidl_gluoncv_deeplab():
+    """ https://gluon-cv.mxnet.io/build/examples_segmentation/demo_deeplab.html
+    """
+    model_name = "deeplab_resnet50_ade"
+    dtype = 'float32'
+    
+    url = 'https://github.com/zhanghang1989/image-data/blob/master/encoding/' + \
+        'segmentation/ade20k/ADE_val_00001755.jpg?raw=true'
+    filename = 'ade20k_example.jpg'
+    utils.download(url, filename, True)
+    img = image.imread(filename)
+    plt.imshow(img.asnumpy())
+    plt.savefig("deeplab_resnet50_ade_input.png")
+    ctx = mx.cpu(0)
+    img = test_transform(img, ctx)
+    model = model_zoo.get_model(model_name, pretrained=True)
+
+    # Execute directly from Gluon-cv
+    output = model.predict(img)
+    predict = mx.nd.squeeze(mx.nd.argmax(output, 1)).asnumpy()
+    from gluoncv.utils.viz import get_color_pallete
+    import matplotlib.image as mpimg
+    mask = get_color_pallete(predict, 'ade20k')
+    mask.save('output.png')
+    mmask = mpimg.imread('output.png')
+    plt.imshow(mmask)
+    plt.savefig("deeplab_resnet50_ade_result.png")
+
+    # Load the model to Relay
+    input_shape = img.shape
+    input_name = 'data'
+    data_layout = 'NCHW'
+    relay_mod, relay_params = relay.frontend.from_mxnet(model, shape={input_name: input_shape}, dtype=dtype)
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(relay_mod, "llvm", params=relay_params)
+
+    # Execute the model to generate reference
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    input_data = img.asnumpy()
+    np.save("deeplab_resnet50_ade_input.npy",input_data) # to be used by inference testing on the target
+    mod.set_input(input_name, input_data)
+    mod.set_input(**params)
+    mod.run()
+    tvm_output = mod.get_output(0)
+    tvm_predict = np.squeeze(np.argmax(tvm_output.asnumpy(), 1))
+    tvm_mask = get_color_pallete(tvm_predict, 'ade20k')
+    tvm_mask.save('tvm_output.png')
+    tvm_mmask = mpimg.imread('tvm_output.png')
+    plt.imshow(tvm_mmask)
+    plt.savefig("deeplab_resnet50_ade_result_tvm.png")
+
+    #======================== Compile the model ========================
+    model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
+
+def test_tidl_yolov3_ssd():
+
+    model_name = 'yolo3_mobilenet1.0_coco'
+    dtype = 'float32'
+    model = model_zoo.get_model(model_name, pretrained=True)
+
+    im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                                 'gluoncv/detection/street_small.jpg?raw=true',
+                                 'street_small.jpg', module='data')
+    x, img = data.transforms.presets.yolo.load_test(im_fname, short=224)
+    plt.imshow(img)
+    plt.savefig("yolo3_mobilenet1_coco_input.png")
+    print('Shape of pre-processed image:', x.shape)
+    class_IDs, scores, bounding_boxs = model(x)
+    ax = utils.viz.plot_bbox(img, bounding_boxs[0], scores[0],
+                            class_IDs[0], class_names=model.classes)
+    plt.savefig('yolo3_mobilenet1_coco_out.png')
+
+    # Load and execute the model in TVM
+    input_shape = x.shape
+    input_data = x.asnumpy()
+    np.save("yolo3_ssd_input.npy",input_data) # to be used by inference testing on the target
+    input_name = 'data'
+    data_layout = 'NCHW'
+    relay_mod, relay_params = relay.frontend.from_mxnet(model, shape={'data': input_shape}, dtype=dtype)
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(relay_mod, "llvm", params=relay_params)
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod.set_input(input_name, input_data)
+    mod.set_input(**params)
+    mod.run()
+    class_IDs, scores, bounding_boxs = mod.get_output(0), mod.get_output(1), mod.get_output(2)
+    ax = utils.viz.plot_bbox(img, bounding_boxs.asnumpy()[0], scores.asnumpy()[0],
+                             class_IDs.asnumpy()[0], class_names=model.classes)
+    plt.savefig('yolo3_mobilenet1_coco_out_tvm.png')
+
+    #======================== Compile the model ========================
+    model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
+
+def test_tidl_gluoncv_classification_model(model_name):
+    dtype = 'float32'
+    input_shape = (1, 3, 224, 224)
+    data_layout = "NCHW"
+    input_node  = "data"
+    x = np.load(os.path.join(tidl_tools_path, "dog.npy"))  # "NCHW"
+    input_data = x/np.amax(np.abs(x))
+
+    model = model_zoo.get_model(model_name, pretrained=True)
+    relay_mod, relay_params = relay.frontend.from_mxnet(model, shape={input_node: input_shape}, dtype=dtype)
+
+    #======================== Compile the model ========================
+    model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
 
 if __name__ == '__main__':
-    if os.getenv("ARM_GCC_PATH") is None:
-      sys.exit("Environment variable ARM_GCC_PATH is not set!")
-    else: 
-      arm_gcc_path = os.getenv("ARM_GCC_PATH")
-    if os.getenv("TIDL_TOOLS_PATH") is None:
-        sys.exit("Environment variable TIDL_TOOLS_PATH is not set!")
-    else:
-        tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
-    tidl_calib_tool  = os.path.join(tidl_tools_path, "eve_test_dl_algo_ref.out")
-    arm_gcc          = os.path.join(arm_gcc_path, "arm-linux-gnueabihf-g++")
-    target           = "llvm -target=armv7l-linux-gnueabihf"
 
-    tf_models  = [#'MobileNetV1',
-#                  'MobileNetV2',
+    tf_models  = ['MobileNetV1',
+                  'MobileNetV2',
                   'InceptionV1',
                  ]
-    onnx_models = [#'resnet18v1',
-                   #'resnet18v2',
+    onnx_models = ['resnet18v1',
+                   'resnet18v2',
                    'squeezenet1.1'
                    ]
     ssd_models = ['ssd_512_mobilenet1.0_coco',
                   'ssd_512_mobilenet1.0_voc',
-                  #'ssd_512_mobilenet2.0_coco',
-                  #'ssd_512_mobilenet2.0_voc',
                  ]
     seg_models = ['mask_rcnn_resnet18_v1b_coco',
                  ]
+    gluoncv_classification_models = [
+                 'resnet34_v1',
+                 'resnet50_v1',
+                 'densenet121',
+                 ]
 
-    #test_extern_tidl()
 #TODO: download classification models from web
 #    for tf_model in tf_models:
-#        test_extern_tidl_tf(tf_model, num_tidl_subgraphs=1)
+#        test_tidl_tf(tf_model)
 #    for onnx_model in onnx_models:
-#        test_extern_tidl_onnx(onnx_model, num_tidl_subgraphs=1)
-    for ssd_model in ssd_models:
-        test_extern_tidl_gluoncv_ssd(ssd_model, num_tidl_subgraphs=1)
-    for seg_model in seg_models:
-        test_extern_tidl_gluoncv_segmentation(seg_model, num_tidl_subgraphs=1)
+#        test_tidl_onnx(onnx_model)
+#    for ssd_model in ssd_models:
+#        test_tidl_gluoncv_ssd(ssd_model)
+#    for seg_model in seg_models:
+#        test_tidl_gluoncv_segmentation(seg_model)
+#    test_tidl_gluoncv_deeplab()
+    test_tidl_yolov3_ssd()
+#    for model in gluoncv_classification_models:
+#        test_tidl_gluoncv_classification_model(model)

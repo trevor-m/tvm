@@ -159,6 +159,14 @@ def _merge_sequential_ops(mod):
         bias_out = relay.op.nn.bias_add(dense_out, b)
         return bias_out
 
+    def _conv2d_pad_pattern():
+        x = relay.var('x')
+        w = relay.var('w')
+        p = list()
+        conv2d_out = relay.op.nn.conv2d(x, w)
+        pad_out = relay.op.nn.pad(conv2d_out,p)
+        return pad_out
+
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
@@ -177,6 +185,7 @@ def _merge_sequential_ops(mod):
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
         ('tidl.conv2d_bias', _conv2d_bias_pattern()),
         ('tidl.dense_bias', _dense_bias_pattern()),
+        ('tidl.conv2d_pad', _conv2d_pad_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
@@ -207,11 +216,11 @@ def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
 
 @reg.register("tidl.reshape_globalavgpool", "target.tidl")
 def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
-    return True
+    return _global_avg_pool_whitelist_fn(attrs, args)
 
 @reg.register("tidl.reshape_dense", "target.tidl")
 def _tidl_reshape_dense_whitelist_fn(attrs, args):
-    return True
+    return _dense_whitelist_fn(attrs, args)
 
 @reg.register("tidl.reshape_squeeze", "target.tidl")
 def _tidl_reshape_squeeze_whitelist_fn(attrs, args):
@@ -259,6 +268,13 @@ def _conv2d_bias_whitelist_fn(attrs, args):
 def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
+@reg.register("tidl.conv2d_pad", "target.tidl")
+def _conv2d_pad_whitelist_fn(attrs, args):
+    conv2d_op = args[0]
+    pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
+    conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+    return (pad_supported and conv2d_supported)
 
 @reg.register("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
@@ -400,13 +416,8 @@ def _nms_whitelist_fn(attrs, args):
 
 @reg.register("nn.pad", "target.tidl")
 def _pad_whitelist_fn(attrs, args):
-    supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
-    return supported
-
-@reg.register("nn.prelu", "target.tidl")
-def _prelu_whitelist_fn(attrs, args):
-    supported = True
-    return supported
+    # Standalone pad is not supported.
+    return False
 
 @reg.register("nn.relu", "target.tidl")
 def _relu_whitelist_fn(attrs, args):
@@ -422,9 +433,4 @@ def _slice_like_whitelist_fn(attrs, args):
 @reg.register("nn.softmax", "target.tidl")
 def _softmax_whitelist_fn(attrs, args):
     supported = (attrs.axis != 2)
-    return supported
-
-@reg.register("split", "target.tidl")
-def _split_whitelist_fn(attrs, args):
-    supported = True
     return supported

@@ -272,7 +272,6 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params = Conv2dParams()
     (conv2d_params.stride_h, conv2d_params.stride_w) = strides
     (conv2d_params.dilation_h, conv2d_params.dilation_w) = dilation
-    print("Conv2d padding: " + str(padding))
     # TODO: to pass all padding values to TIDL and use strideOffsetMethod
     # top, left, bottom, right
     if len(padding) == 1:
@@ -338,7 +337,7 @@ def tidl_import_conv2d(all_nodes, this_node, params):
 def tidl_import_pad(node):
     r""" Import pad operator to TIDL
         Get attributes pad_width, convert to array, and passs to C library.
-        A typical pad_width looks like: [[0,0],[0,1],[0,1],[0,0]
+        A typical pad_width looks like: [[0,0],[0,1],[0,1],[0,0]]
 
     Parameters
     ----------
@@ -526,7 +525,7 @@ def tidl_import_pooling(node, type):
 def tidl_import_concat(all_nodes, node):
 
     in_nodes = find_in_nodes(all_nodes, node) # node indices of input nodes
-    print("Importing concatenate layer, number of input nodes: " + str(len(in_nodes)))
+    #print("Importing concatenate layer, number of input nodes: " + str(len(in_nodes)))
     _tidlImportConcat = _tidl_mod.tidlImportConcat
     _tidlImportConcat.argtype = ctypes.c_int
     _tidlImportConcat.restype = None
@@ -703,14 +702,6 @@ def tidl_import_node(all_nodes, this_node, params):
 
     return True
 
-def traverse_expr(node, node_dict):
-    if node in node_dict:
-        return
-    if isinstance(node, relay.op.op.Op):
-        return 
-    node_dict[node] = len(node_dict)
-
-
 def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph
 
@@ -804,7 +795,7 @@ def tidl_import_tuple_node(all_nodes, node):
             _tidlImportOutData.restype = None
             _tidlImportOutData(nodes_for_this_data_layer)
     
-            # TODO: remove duplications with tidl_import_node
+            # prepare input/output nodes information for linking
             in_out_nodes = InOutNodes()    # instantiate structure
             in_out_nodes.this_node = new_node_ind
             in_out_nodes.num_in_nodes = nodes_for_this_data_layer
@@ -847,8 +838,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
     False: if TIDL import fails    
     """
 
-    # Traverse Relay IR graph and generate a dictionary of all TIDL nodes
-    # There should be a better approach to do this
+    # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
     all_nodes_main = {}
     relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes_main)) 
     tidl_subgraphs = []
@@ -892,19 +882,17 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
                 result = tidl_import_node(all_nodes_tidl, node, params)
                 if result == False:
                     return False
+
         # Import expr.Tuple node after importing all expr.call nodes
         for node in all_nodes_tidl:
             if isinstance(node, relay.expr.Tuple):
                 #node.fields: array of expr.call nodes
-                #len(node.fields)
-                print("This is a TupleNode")
                 result = tidl_import_tuple_node(all_nodes_tidl, node)
                 if result == False:
-                    print('Error importing tuplenode')
+                    print('Error importing output tuple node')
                     return False
     
         # Invoke TIDL optimization of the imported graph
-        # TODO: convert following lines into a function
         net_file = os.path.join(artifacts_folder, 'tidl_subgraph' + str(subgraph_id) + '_net.bin')
         par_file = os.path.join(artifacts_folder, 'tidl_subgraph' + str(subgraph_id) + '_params.bin')
 
@@ -914,24 +902,20 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
         net_fname = net_file.encode('utf-8')
         par_fname = par_file.encode('utf-8')
         
-        print('here1')
         if _tidlImportOptimize(net_fname, par_fname, subgraph_id) == 0:
             print('tidl import optimize failed')
             return False
 
         # Calibrate TIDL for the imported subgraph
-        print('here2')
         status, out_data_q = subgraph_calibration(tidl_calib_tool, input_quant_vec, 
                                                   input_signed, net_file, par_file)
         if status == False:
             return False
         
-        print('here3')
         # Calculate scaling factor to convert output tensor to floating point
         # Obtain output tensor from TVM graph execution
         output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
         
-        print('here4')
         # TODO: convert following lines into a function
         if output_fp is None:
             return False
@@ -945,12 +929,9 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
             output_scale.append(round(out_data_q[i]/255.0,5))  # 255 is TIDL implementation specific
         print("Output conversion: " + str(out_data_q) + ", " + str(output_scale))
         
-        print('here5')
         # Generate subgraph configuration file
         subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout, 
                          input_scale, input_signed, output_scale, output_signed)
-        
-        print('here6')
     return True
 
 def tensor_quant_flatten(input_tensor, data_layout):
@@ -1314,7 +1295,7 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = relay.transform.FoldConstant()(mod)
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
     print("---------- Original graph ----------")
-    #print(mod.astext(show_meta_data=False))
+    print(mod.astext(show_meta_data=False))
 
     #============= Annotate the graph ==============
     # Looks at annotated ops and marks them in the graph with compiler.begin 
@@ -1326,20 +1307,23 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = tidl._merge_sequential_ops(mod) 
     print("---------- Annotated Graph ----------")
     mod = transform.AnnotateTarget("tidl")(mod)
+    #print(mod.astext(show_meta_data=False))
     print("---------- Merge Compiler Regions ----------")
     mod = transform.MergeCompilerRegions()(mod)
+    #print(mod.astext(show_meta_data=False))
     print("---------- Partioned Graph ----------")
     mod = transform.PartitionGraph()(mod)
+    #print(mod.astext(show_meta_data=False))
     print("---------- Unpack composite ops in the graph ----------")
     mod = UnpackComposites(mod, "tidl")
+    #print(mod.astext(show_meta_data=False))
     print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
     print("---------- Prune Graph ----------")
     mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl")
-    print(mod.astext(show_meta_data=False))
+    #print(mod.astext(show_meta_data=False))
     mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
-    # print(mod.astext(show_meta_data=False))
-
     print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
+    print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
     subgraph_tensors = generate_subgraph_tensors(mod, params, input_node, input_data)
