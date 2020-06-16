@@ -370,60 +370,51 @@ def test_tidl_gluoncv_classification_model(model_name):
     model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
 
 def test_subgraph_reducer_conv():
+    from tvm.relay.backend.contrib.tidl import SubgraphReducer
     ishape = (1, 32, 14, 14)
     w1shape = (32, 1, 3, 3)
     dtype = "float32"
     data0 = relay.var("data", shape=(ishape), dtype=dtype)
-    input0 = relay.var("w1", shape=(w1shape), dtype=dtype)
-    input1 = relay.var("w2", shape=(w1shape), dtype=dtype)
-    depthwise_conv2d_1 = relay.nn.conv2d(data0,
+    input0 = relay.var("w0", shape=(w1shape), dtype=dtype)
+    input1 = relay.var("w1", shape=(w1shape), dtype=dtype)
+    input2 = relay.var("w2", shape=(w1shape), dtype=dtype)
+    depthwise_conv2d_0 = relay.nn.conv2d(data0,
                                             input0,
                                             kernel_size=(3, 3),
                                             padding=(1, 1),
                                             groups=32)
-    depthwise_conv2d_2 = relay.nn.conv2d(depthwise_conv2d_1,
+    depthwise_conv2d_1 = relay.nn.conv2d(depthwise_conv2d_0,
                                             input1,
                                             kernel_size=(3, 3),
                                             padding=(1, 1),
                                             groups=32)
+    depthwise_conv2d_2 = relay.nn.conv2d(depthwise_conv2d_1,
+                                            input2,
+                                            kernel_size=(3, 3),
+                                            padding=(1, 1),
+                                            groups=32)
     
-    # out = relay.add(depthwise_conv2d_1, depthwise_conv2d_2)
-    out = depthwise_conv2d_2
-    func = relay.Function([data0, input0, input1], out)
-    #func = set_func_attr(func, "tidl", "tidl_0")
-    #gv = relay.GlobalVar("tidl_0")
+    out = relay.Tuple([depthwise_conv2d_1, depthwise_conv2d_2])
+    #out = relay.add(depthwise_conv2d_1, depthwise_conv2d_2)
+
+    #print
+    #out = relay.op.nn.global_avg_pool2d(out)
+    #out = relay.op.transform.reshape(out, [1, 32])
+    # out = depthwise_conv2d_2
+    func = relay.Function([data0, input0, input1, input2], out)
 
     mod = tvm.IRModule()
     mod['main'] = func
-    # x_main = relay.var('x', shape=ishape, dtype='float32')
-    # w0_main = relay.var('w', shape=w1shape, dtype='float32')
-    # w1_main = relay.var('w1', shape=w1shape, dtype='float32')
-    # main_f = relay.Function([x_main, w0_main, w1_main], gv(x_main, w0_main, w1_main))
-    # mod['main'] = main_f
-    # perform passes
-    params = {'w1': np.random.rand(*w1shape).astype(dtype), 'w2': np.random.rand(*w1shape).astype(dtype)}
-    mod = tidl.EnableTIDL(mod, params, 4, "NCHW", "data", None, "tmp", None)
-    # from tvm.relay.build_module import bind_params_by_name
-    # mod['main'] = bind_params_by_name(mod['main'], )
-    # mod = relay.transform.FoldConstant()(mod)
-    # mod = transform.AnnotateTarget("tidl")(mod)
-    # mod = transform.MergeCompilerRegions()(mod)
-    # mod = transform.PartitionGraph()(mod)
-    # print('----------old mod----------')
-    # print(mod)
 
-    # new_mod = tvm.IRModule()
-    # new_mod['main'] = SubgraphReducer(mod, new_mod).visit(mod["main"])
+    params = {'w0': np.random.rand(*w1shape).astype(dtype), 'w1': np.random.rand(*w1shape).astype(dtype), 'w2': np.random.rand(*w1shape).astype(dtype)}
+    mod = tidl.EnableTIDL(mod, params, 4, "NCHW", "data", None, "tmp", None)
+
     print('----------new mod----------')
     print(new_mod)
-
-# test_subgraph_reducer()
 
 
 
 if __name__ == '__main__':
-    test_subgraph_reducer_conv()
-    exit(0)
     tf_models  = ['MobileNetV1',
                   'MobileNetV2',
                   'InceptionV1',
