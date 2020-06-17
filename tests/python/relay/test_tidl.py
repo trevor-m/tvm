@@ -369,51 +369,6 @@ def test_tidl_gluoncv_classification_model(model_name):
     #======================== Compile the model ========================
     model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
 
-def test_subgraph_reducer_conv():
-    from tvm.relay.backend.contrib.tidl import SubgraphReducer
-    ishape = (1, 32, 14, 14)
-    w1shape = (32, 1, 3, 3)
-    dtype = "float32"
-    data0 = relay.var("data", shape=(ishape), dtype=dtype)
-    input0 = relay.var("w0", shape=(w1shape), dtype=dtype)
-    input1 = relay.var("w1", shape=(w1shape), dtype=dtype)
-    input2 = relay.var("w2", shape=(w1shape), dtype=dtype)
-    depthwise_conv2d_0 = relay.nn.conv2d(data0,
-                                            input0,
-                                            kernel_size=(3, 3),
-                                            padding=(1, 1),
-                                            groups=32)
-    depthwise_conv2d_1 = relay.nn.conv2d(depthwise_conv2d_0,
-                                            input1,
-                                            kernel_size=(3, 3),
-                                            padding=(1, 1),
-                                            groups=32)
-    depthwise_conv2d_2 = relay.nn.conv2d(depthwise_conv2d_1,
-                                            input2,
-                                            kernel_size=(3, 3),
-                                            padding=(1, 1),
-                                            groups=32)
-    
-    out = relay.Tuple([depthwise_conv2d_1, depthwise_conv2d_2])
-    #out = relay.add(depthwise_conv2d_1, depthwise_conv2d_2)
-
-    #print
-    #out = relay.op.nn.global_avg_pool2d(out)
-    #out = relay.op.transform.reshape(out, [1, 32])
-    # out = depthwise_conv2d_2
-    func = relay.Function([data0, input0, input1, input2], out)
-
-    mod = tvm.IRModule()
-    mod['main'] = func
-
-    params = {'w0': np.random.rand(*w1shape).astype(dtype), 'w1': np.random.rand(*w1shape).astype(dtype), 'w2': np.random.rand(*w1shape).astype(dtype)}
-    mod = tidl.EnableTIDL(mod, params, 4, "NCHW", "data", None, "tmp", None)
-
-    print('----------new mod----------')
-    print(new_mod)
-
-
-
 if __name__ == '__main__':
     tf_models  = ['MobileNetV1',
                   'MobileNetV2',

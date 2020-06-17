@@ -28,10 +28,8 @@ def model_compile(model_name, mod_orig, params, input_data, num_tidl_subgraphs=4
     mod = tidl.EnableTIDL(mod_orig, params, num_tidl_subgraphs, 
                           data_layout, input_node, input_data, 
                           artifacts_folder, os.path.join(os.getenv("TIDL_TOOLS_PATH"), "eve_test_dl_algo_ref.out"))
-    if mod == None:  # TIDL cannot be enabled - no offload to TIDL
-        print('offload failed')
-        exit(1)
-        mod = mod_orig
+    # We expect somethign to be offloaded to TIDL.
+    assert mod is not None
 
     target = "llvm -target=armv7l-linux-gnueabihf"
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
@@ -57,28 +55,28 @@ def test_tidl_gluon():
 
     latency = {}
     models = [
-        # 'alexnet',
-        # 'resnet18_v1',
-        # 'resnet34_v1',
-        # 'resnet50_v1',
-        # 'resnet101_v1',
-        # 'resnet152_v1',
-        # 'resnet18_v2',
-        # 'resnet34_v2',
-        # 'resnet50_v2',
+        'alexnet',
+        'resnet18_v1',
+        'resnet34_v1',
+        'resnet50_v1',
+        'resnet101_v1',
+        'resnet152_v1',
+        'resnet18_v2',
+        'resnet34_v2',
+        'resnet50_v2',
         'resnet101_v2',
-        # 'resnet152_v2',
-        # 'squeezenet1.0',
-        # 'mobilenet0.25',
-        # 'mobilenet0.5',
-        # 'mobilenet0.75',
-        # 'mobilenet1.0',
-        # 'mobilenetv2_0.25',
-        # 'mobilenetv2_0.5',
-        # 'mobilenetv2_0.75',
-        # 'mobilenetv2_1.0',
-        # 'vgg11',
-        # 'vgg16',
+        'resnet152_v2',
+        'squeezenet1.0',
+        'mobilenet0.25',
+        'mobilenet0.5',
+        'mobilenet0.75',
+        'mobilenet1.0',
+        'mobilenetv2_0.25',
+        'mobilenetv2_0.5',
+        'mobilenetv2_0.75',
+        'mobilenetv2_1.0',
+        'vgg11',
+        'vgg16',
         'densenet121',
         'densenet169',
         'densenet201',
@@ -95,14 +93,14 @@ def test_tidl_gluoncv():
         block = gluoncv.model_zoo.get_model(model, pretrained=True)
         mod, params = relay.frontend.from_mxnet(block, shape={'data': input_shape}, dtype=dtype)
 
-        input_data = np.random.normal(0, 1, input_shape) #np.load(os.path.join(os.getenv("TIDL_TOOLS_PATH"), 'dog.npy'))
+        input_data = np.random.normal(0, 1, input_shape)
         input_data = input_data/np.amax(np.abs(input_data))
         model_compile(model, mod, params, input_node='data', input_data=input_data)
 
     latency = {}
     models = [
-        ('deeplab_resnet50_ade', (1, 3, 480, 480)),
-        ('yolo3_mobilenet1.0_coco', (1, 3, 224, 224)),
+        ('deeplab_resnet101_ade', (1, 3, 480, 480)),
+        #('yolo3_mobilenet1.0_coco', (1, 3, 224, 224)),
     ]
     
     dtype = 'float32'
@@ -111,5 +109,5 @@ def test_tidl_gluoncv():
         test_model(model, input_shape, dtype, use_tidl=True)
 
 if __name__ == "__main__":
-    test_tidl_gluon()
-    # test_tidl_gluoncv()
+    # test_tidl_gluon()
+    test_tidl_gluoncv()

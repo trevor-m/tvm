@@ -1214,7 +1214,8 @@ class VarRenamer(ExprMutator):
         self.new_subgraph_name = new_subgraph_name
 
     def visit_var(self, var):
-        if "_".join(var.name_hint.split('_')[:2]) != self.new_subgraph_name:
+        # TODO: Make sure input isn't from a composite func.
+        if var.name_hint.startswith("tidl") and "_".join(var.name_hint.split('_')[:2]) != self.new_subgraph_name:
             new_var_name = self.new_subgraph_name + "_" + var.name_hint.split('_')[2]
             return relay.Var(new_var_name, var.checked_type)
         return super().visit_var(var)
@@ -1260,17 +1261,40 @@ class SubgraphRemover(ExprMutator):
         return super().visit_call(call)
 
 class SubgraphSizeCounter(ExprVisitor):
+    """
+    Pass to count size of subgraph, both number of layers and estimated total memory usage.
+    Used by SubgraphReducer pass.
+    """
     def __init__(self):
         ExprVisitor.__init__(self)
         self.num_layers = 0
         self.total_memory = 0
 
+    def get_total_memory_mb(self):
+        return self.total_memory / (1024.0 * 1024.0)
+
     def visit_call(self, call):
+        # Don't visit composite function body.
+        for arg in call.args:
+            super().visit(arg)
         self.num_layers += 1
-        super().visit_call(call)
+        # Add total size of weights (16 bits per)
+        for arg in call.args:
+            if isinstance(arg, tvm.relay.expr.Constant):
+                self.total_memory += 2 * np.prod(list(map(int, arg.checked_type.shape)))
+        # Add activation size (8 bits per)
+        if isinstance(call.checked_type, tvm.relay.TensorType):
+            self.total_memory += np.prod(list(map(int, call.checked_type.shape)))
 
 def FindCommonAncestor(expr0, expr1):
+    """
+    Find the closest common ancestor to expr0 and expr1.
+    Returns distance from both.
+    """
     class CommonAncestor(ExprVisitor):
+        """
+        Creates a map of node -> distance from expr
+        """
         def __init__(self):
             ExprVisitor.__init__(self)
             self.ancestors_with_distance = {}
@@ -1288,15 +1312,19 @@ def FindCommonAncestor(expr0, expr1):
                 else:
                     self.call_outputs[arg] = [expr]
 
-            #self.ancestors_with_distance[call] = max([self.ancestors_with_distance[output] for output in self.call_outputs[call]] + [0]) + 1
             if expr in self.call_outputs and len(self.call_outputs[expr]) > 0:
                 self.ancestors_with_distance[expr] = max([self.ancestors_with_distance[output] for output in self.call_outputs[expr]]) + 1
             else:
+                # Op did not have any outputs that we have already visited.
                 self.ancestors_with_distance[expr] = 0
 
         def visit_tuple_getitem(self, tuplegetitem):
             self._update(tuplegetitem, [tuplegetitem.tuple_value])
             super().visit_tuple_getitem(tuplegetitem)
+
+        def visit_tuple(self, tup):
+            self._update(tup, tup.fields)
+            super().visit_tuple(tup)
 
         def visit_call(self, call):
             self._update(call, call.args)
@@ -1339,7 +1367,7 @@ class SubgraphReducer(ExprMutator):
             # Compute size of subgraph to see if we need to reduce it.
             counter = SubgraphSizeCounter()
             counter.visit(self.mod[name])
-            if counter.num_layers > self.max_num_layers or counter.total_memory > self.max_total_memory_mb:
+            if counter.num_layers > self.max_num_layers or counter.get_total_memory_mb() > self.max_total_memory_mb:
                 # Mark that we have reduced the subgraph size.
                 self.reduced = True
                 # "Inline" the last op only back into new main function.
@@ -1480,49 +1508,27 @@ def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
 
 def EnableTIDL(mod, params, num_tidl_subgraphs, 
                data_layout, input_node, input_data, 
-               artifacts_folder, calib_tool):
-
+               artifacts_folder, calib_tool, max_num_layers=256, max_total_memory_mb=512):
     mod = relay.transform.RemoveUnusedFunctions()(mod)
-    # Bind params so that weights will appear as constants instead of variables 
+    # Bind params so that weights will appear as constants instead of variables.
     mod['main'] = bind_params_by_name(mod['main'], params)
     mod = relay.transform.FoldConstant()(mod)
+    # Remove multiply by one.
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
-    # print("---------- Original graph ----------")
-    # print(mod.astext(show_meta_data=False))
-
-    #============= Annotate the graph ==============
-    # Looks at annotated ops and marks them in the graph with compiler.begin 
-    # and compiler.end.
-    # Merges annotated regions together that use the same external target, 
-    # and combines marked regions for each target
-    #Merge sequence of ops into composite functions/ops
-    # print("---------- Merge Composite Functions ----------")
-    mod = tidl._merge_sequential_ops(mod) 
-    # print("---------- Annotated Graph ----------")
+    # Annotate and partition.
+    mod = tidl._merge_sequential_ops(mod)
     mod = transform.AnnotateTarget("tidl")(mod)
-    #print(mod.astext(show_meta_data=False))
-    # print("---------- Merge Compiler Regions ----------")
     mod = transform.MergeCompilerRegions()(mod)
-    #print(mod.astext(show_meta_data=False))
-    print("---------- Partioned Graph ----------")
     mod = transform.PartitionGraph()(mod)
-    print(mod.astext(show_meta_data=False))
-    # Reduce size of subgraphs too big for device
-    
-    print("---------- Reduce Subgraph Size ----------")
-    
-    mod = ReduceSubgraphSize(mod, compiler="tidl")
-    print(mod.astext(show_meta_data=False))
-    print("---------- Unpack composite ops in the graph ----------")
-    mod = UnpackComposites(mod, "tidl")
-    #print(mod.astext(show_meta_data=False))
-    print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
-    print("---------- Prune Graph ----------")
+    # Remove invalid subgraphs. >1 input is not supported.
     mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl")
-    #print(mod.astext(show_meta_data=False))
+    # Reduce size of subgraphs too big for device. Must be done while composite functions are
+    # still together to avoid breaking sequences.
+    mod = ReduceSubgraphSize(mod, max_num_layers=max_num_layers, max_total_memory_mb=max_total_memory_mb, compiler="tidl")
+    # Unpack composite functions.
+    mod = UnpackComposites(mod, "tidl")
+    # Prune to biggest 4 subgraphs.
     mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
-    print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
-    print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
     subgraph_tensors = generate_subgraph_tensors(mod, params, input_node, input_data)
@@ -1534,33 +1540,3 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     else:
         print("Graph execution with general CPU.")
         return None
-
-def set_func_attr(func, compile_name, symbol_name):
-    func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
-    func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
-    func = func.with_attr("Compiler", compile_name)
-    func = func.with_attr("global_symbol", symbol_name)
-    return func
-
-def test_subgraph_reducer():
-    x = relay.var('tidl_i0', shape=(1, 3, 12, 12), dtype='float32')
-    y = relay.nn.relu(x)
-    y = relay.nn.relu(y)
-    y = relay.nn.relu(y)
-    out = relay.nn.relu(y)
-    func = relay.Function([x], out)
-    func = set_func_attr(func, "tidl", "tidl_0")
-    gv = relay.GlobalVar("tidl_0")
-
-    mod = tvm.IRModule()
-    mod[gv] = func
-    x_main = relay.var('x', shape=(1, 3, 12, 12), dtype='float32')
-    main_f = relay.Function([x_main], gv(x_main))
-    mod['main'] = main_f
-    print('@@@@@@@@ old mod @@@@@@@@@')
-    print(mod)
-    new_mod = tvm.IRModule()
-    new_mod['main'] = SubgraphReducer(mod, new_mod).visit(mod["main"])
-    
-    print('@@@@@@@@ new mod @@@@@@@@@')
-    print(new_mod)
