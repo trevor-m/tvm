@@ -127,6 +127,13 @@ def _merge_sequential_ops(mod):
         relu_out = relay.op.nn.relu(bn_out[0])
         return relu_out
 
+    def _add_relu_pattern():
+        x = relay.var('x')
+        y = relay.var('y')
+        add_out = relay.op.add(x, y)
+        relu_out = relay.op.nn.relu(add_out)
+        return relu_out
+
     def _dense_relu_pattern():
         x = relay.var('x')
         w = relay.var('w')
@@ -181,6 +188,7 @@ def _merge_sequential_ops(mod):
         ('tidl.conv2d_relu', _conv2d_relu_pattern()),
         ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
         ('tidl.bn_relu', _bn_relu_pattern()),
+        ('tidl.add_relu',_add_relu_pattern()),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
         ('tidl.conv2d_bias', _conv2d_bias_pattern()),
@@ -248,6 +256,11 @@ def _conv2d_bias_relu_whitelist_fn(attrs, args):
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
     return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
+
+@reg.register("tidl.add_relu", "target.tidl")
+def _add_relu_whitelist_fn(attrs, args):
+    add_op = args[0]
+    return _add_whitelist_fn(add_op.attrs, add_op.args)
 
 @reg.register("tidl.dense_relu", "target.tidl")
 def _dense_relu_whitelist_fn(attrs, args):
@@ -347,6 +360,7 @@ def _conv2d_whitelist_fn(attrs, args):
     strides       = get_const_tuple(attrs.strides)
     dilation      = get_const_tuple(attrs.dilation)
     kernel_size   = get_const_tuple(attrs.kernel_size)
+    groups        = attrs.groups
 
     (dh, dw) = dilation
     (kh, kw) = kernel_size
@@ -354,7 +368,9 @@ def _conv2d_whitelist_fn(attrs, args):
     stride_supported  = (strides[0] <= 2 and strides[1] <= 2)
     dilation_supported = (dh == 1 or dh == 2 or dh == 4) and (dw == 1 or dw == 2 or dw == 4)
     kernel_supported = (((kh-1)*dh+1) <= 9) and (((kw-1)*dw+1) <= 9)
-    supported = channel_supported and stride_supported and dilation_supported and kernel_supported
+    groups_supported = (groups <= 1024)
+    supported = channel_supported and stride_supported and dilation_supported \
+                and kernel_supported and groups_supported
 
     return supported
 

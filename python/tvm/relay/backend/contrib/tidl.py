@@ -1,4 +1,22 @@
-
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+"""TIDL backend compiler"""
+import os
+import sys
 import subprocess
 
 import numpy as np
@@ -7,7 +25,6 @@ from tvm import relay
 import topi
 from topi.util import get_const_tuple
 import ctypes
-import os
 import re
 
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
@@ -19,9 +36,8 @@ from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
 from tvm.relay.op.contrib import tidl
 
-#TODO: get tidl_import_lib from upper level test code - test_tidl.py
 if os.getenv("TIDL_TOOLS_PATH") is None:
-    sys.exit("Environment variable TIDL_TOOLS_PATH is not set!")
+    tidl_tools_path = "../../../3rdparty/tidl-utils/x86/bin"
 else:
     tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
 tidl_import_lib = os.path.join(tidl_tools_path, "tidl_relayImport.so")
@@ -137,7 +153,7 @@ def find_in_nodes(all_nodes, this_node):
         elif isinstance(node, relay.expr.Tuple):
             input_nodes = input_nodes + find_in_nodes(all_nodes, node)
         elif isinstance(node, relay.expr.Var):
-            if "tidl_" in node.name_hint and "_i" in node.name_hint:
+            if "tidl" in node.name_hint and "_i" in node.name_hint:
                 # this is the input to the subgraph
                 input_nodes.append(-1)
         #else: ignore all other types of nodes: var, const, etc.
@@ -457,11 +473,6 @@ def tidl_import_batch_norm(node, params):
         beta = params[node.args[2].name_hint].asnumpy()
         mean = params[node.args[3].name_hint].asnumpy()
         var  = params[node.args[4].name_hint].asnumpy()
-    #print('Batch norm parameters:')
-    #print(gama)
-    #print(beta)
-    #print(mean)
-    #print(var )
     bn_params.gama = gama.ctypes.data
     bn_params.beta = beta.ctypes.data
     bn_params.mean = mean.ctypes.data
@@ -820,7 +831,7 @@ def tidl_import_tuple_node(all_nodes, node):
         # this is not the last node of the graph - ignore it
         return True
 
-def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
+def import_relay_ir(tidl_target, mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
     r""" Relay IR import to TIDL 
 
     Parameters
@@ -844,7 +855,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
     tidl_subgraphs = []
     for node in all_nodes_main:
         if isinstance(node, relay.expr.GlobalVar):
-            if 'tidl' in node.name_hint:
+            if tidl_target in node.name_hint:
                 tidl_subgraphs.append(node.name_hint)
 
     if len(tidl_subgraphs) == 0:
@@ -854,7 +865,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
     # For each TIDL subgraph, import to TIDL and calibrate 
     for tidl_subgraph in tidl_subgraphs:
         # Extract subgraph id and input/output tensor names from subgraph name
-        subgraph_id = int(tidl_subgraph.replace('tidl_',''))
+        subgraph_id = int(tidl_subgraph.replace(tidl_target+'_',''))
         in_tensor_name  = tidl_subgraph + '_i'
         out_tensor_name = tidl_subgraph + '_o'
 
@@ -1150,7 +1161,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return expr.args[1]
         return super().visit_call(expr)
 
-def generate_subgraph_tensors(mod, params, input_node, input_data):
+def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     """
     """
 
@@ -1158,7 +1169,7 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
-    my_mutator = CalibrationGraphMutator("tidl")
+    my_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
     #print("Calibration module:", mod_tvm)
     print("Input map:", my_mutator.name_map)
@@ -1285,53 +1296,112 @@ def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def EnableTIDL(mod, params, num_tidl_subgraphs, 
-               data_layout, input_node, input_data, 
-               artifacts_folder, calib_tool):
+class TIDLCompiler:
+    """TIDL compiler module.
 
-    mod = relay.transform.RemoveUnusedFunctions()(mod)
-    # Bind params so that weights will appear as constants instead of variables 
-    mod['main'] = bind_params_by_name(mod['main'], params)
-    mod = relay.transform.FoldConstant()(mod)
-    mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
-    print("---------- Original graph ----------")
-    print(mod.astext(show_meta_data=False))
+    This module tries to compile a given Relay IR graph to deploy on devices with TIDL.
+    If compilation for TIDL succeeds, artifacts for heterogeneous compute with TIDL
+    will be generated.
 
-    #============= Annotate the graph ==============
-    # Looks at annotated ops and marks them in the graph with compiler.begin 
-    # and compiler.end.
-    # Merges annotated regions together that use the same external target, 
-    # and combines marked regions for each target
-    #Merge sequence of ops into composite functions/ops
-    print("---------- Merge Composite Functions ----------")
-    mod = tidl._merge_sequential_ops(mod) 
-    print("---------- Annotated Graph ----------")
-    mod = transform.AnnotateTarget("tidl")(mod)
-    #print(mod.astext(show_meta_data=False))
-    print("---------- Merge Compiler Regions ----------")
-    mod = transform.MergeCompilerRegions()(mod)
-    #print(mod.astext(show_meta_data=False))
-    print("---------- Partioned Graph ----------")
-    mod = transform.PartitionGraph()(mod)
-    #print(mod.astext(show_meta_data=False))
-    print("---------- Unpack composite ops in the graph ----------")
-    mod = UnpackComposites(mod, "tidl")
-    #print(mod.astext(show_meta_data=False))
-    print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
-    print("---------- Prune Graph ----------")
-    mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl")
-    #print(mod.astext(show_meta_data=False))
-    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
-    print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
-    print(mod.astext(show_meta_data=False))
+    Parameters
+    ----------
+    platform : string
+        The platform to deploy the graph on.
+    version : tuple
+        The Processor-SDK version for the platform.
+    **kwargs : keyword arguments to pass what's needed for Relay IR graph conversion
+        num_tidl_subgraphs : int
+            Number of subgraphs to run on TIDL
+        data_layout : string
+            Data layout, "NCHW" or "NHWC"
+        artifacts_folder : string
+            Folder to hold TIDL artifacts
+        calib_tool : string
+            TIDL calibration tool binary file
+    """
 
-    #============= Generate subgraph boundary tensors ==============
-    subgraph_tensors = generate_subgraph_tensors(mod, params, input_node, input_data)
+    def __init__(self, platform, version, **kwargs):
+        if platform == "AM57" and version >= (6,3):
+            for key in ('num_tidl_subgraphs', 'data_layout', 'artifacts_folder', 'calib_tool'):
+                if key in kwargs:
+                    setattr(self, key, kwargs[key])
+            self.tidl_target = "tidl"
+        else:
+            sys.exit("Unsupported TIDL platform or version!")
 
-    #======================== Import the graph to TIDL ========================
-    if import_relay_ir(mod, params, subgraph_tensors, data_layout, calib_tool, artifacts_folder) == True:
-        print("Graph execution with TIDL.")
-        return mod
-    else:
-        print("Graph execution with general CPU.")
-        return None
+    def enable(self, mod, params, input):
+        """ Enable TIDL compilation
+
+        This function tries to partition and compile the given Relay IR graph.
+        If it succeeds, artifacts for heterogeneous compute with TIDL will be 
+        generated, and the partitioned graph will be returned. Otherwise, it will 
+        return None.
+
+        Parameters
+        ----------
+        mod : tvm.relay.Module 
+            Relay IR graph
+        params : dict of str to tvm.NDArray
+            The parameter dict to be used by relay
+        input: dictionary
+            A dictionary where the key in input name and the value is input tensor
+
+        Returns
+        -------
+        mod : tvm.relay.Module 
+            Paritioned graph with subgraphs to run with TIDL
+        """
+
+        if len(input) > 1:
+            print("TIDL currently only supports 1 input tensor");
+            return None
+        for key, value in input.items():
+            input_node = key
+            input_data = value
+
+        mod = relay.transform.RemoveUnusedFunctions()(mod)
+        # Bind params so that weights will appear as constants instead of variables 
+        mod['main'] = bind_params_by_name(mod['main'], params)
+        mod = relay.transform.FoldConstant()(mod)
+        mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+        print("---------- Original graph ----------")
+        print(mod.astext(show_meta_data=False))
+
+        #============= Annotate the graph ==============
+        # Looks at annotated ops and marks them in the graph with compiler.begin 
+        # and compiler.end.
+        # Merges annotated regions together that use the same external target, 
+        # and combines marked regions for each target
+        #Merge sequence of ops into composite functions/ops
+        print("---------- Merge Composite Functions ----------")
+        mod = tidl._merge_sequential_ops(mod) 
+        print("---------- Annotated Graph ----------")
+        mod = transform.AnnotateTarget(self.tidl_target)(mod)
+        #print(mod.astext(show_meta_data=False))
+        print("---------- Merge Compiler Regions ----------")
+        mod = transform.MergeCompilerRegions()(mod)
+        #print(mod.astext(show_meta_data=False))
+        print("---------- Partioned Graph ----------")
+        mod = transform.PartitionGraph()(mod)
+        #print(mod.astext(show_meta_data=False))
+        print("---------- Unpack composite ops in the graph ----------")
+        mod = UnpackComposites(mod, compiler=self.tidl_target)
+        #print(mod.astext(show_meta_data=False))
+        print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith(self.tidl_target)]))
+        print("---------- Prune Graph ----------")
+        mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=self.tidl_target)
+        #print(mod.astext(show_meta_data=False))
+        mod = PruneSubgraphs(mod, compiler=self.tidl_target, num_subgraphs_to_keep=self.num_tidl_subgraphs)
+        print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith(self.tidl_target)]))
+        print(mod.astext(show_meta_data=False))
+
+        #============= Generate subgraph boundary tensors ==============
+        subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, input_node, input_data)
+
+        #======================== Import the graph to TIDL ========================
+        if import_relay_ir(self.tidl_target, mod, params, subgraph_tensors, self.data_layout, self.calib_tool, self.artifacts_folder) == True:
+            print("Graph execution with TIDL.")
+            return mod
+        else:
+            print("Graph execution with general CPU.")
+            return None

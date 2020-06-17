@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Unit tests for graph partitioning."""
+"""Unit tests for TIDL compilation."""
 import os
 import sys
 
@@ -38,7 +38,8 @@ if os.getenv("ARM_GCC_PATH") is None:
 else: 
   arm_gcc_path = os.getenv("ARM_GCC_PATH")
 if os.getenv("TIDL_TOOLS_PATH") is None:
-    sys.exit("Environment variable TIDL_TOOLS_PATH is not set!")
+    print("Environment variable TIDL_TOOLS_PATH is not set. Using default path: 3rdparty/tidl-utils/x86/bin")
+    tidl_tools_path = "../../../3rdparty/tidl-utils/x86/bin"
 else:
     tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
 tidl_calib_tool  = os.path.join(tidl_tools_path, "eve_test_dl_algo_ref.out")
@@ -112,12 +113,19 @@ def model_compile(model_name, mod_orig, params,
 
     if force_arm_only is True:
         mod = mod_orig
+        tidlEnabled = False
     else:
-        mod = tidl.EnableTIDL(mod_orig, params, num_tidl_subgraphs, 
-                              data_layout, input_node, input_data, 
-                              artifacts_folder, tidl_calib_tool)
+        tidl_compiler = tidl.TIDLCompiler("AM57", (6,3), 
+                                          num_tidl_subgraphs = num_tidl_subgraphs, 
+                                          data_layout = data_layout, 
+                                          artifacts_folder = artifacts_folder, 
+                                          calib_tool = tidl_calib_tool)
+        input = {input_node: input_data}
+        mod = tidl_compiler.enable(mod_orig, params, input)
+        tidlEnabled = True
         if mod == None:  # TIDL cannot be enabled - no offload to TIDL
             mod = mod_orig
+            tidlEnabled = False
 
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib    = os.path.join(artifacts_folder, "deploy_lib.so")
@@ -128,6 +136,8 @@ def model_compile(model_name, mod_orig, params,
       fo.write(graph)
     with open(path_params, "wb") as fo:
       fo.write(relay.save_param_dict(params))
+
+    return tidlEnabled
 
 def test_tidl_tf(model_name):
     dtype = "float32"
@@ -154,7 +164,7 @@ def test_tidl_tf(model_name):
     print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    model_compile(model_name, tf_mod, tf_params, data_layout, input_node, input_data)
+    assert model_compile(model_name, tf_mod, tf_params, data_layout, input_node, input_data)
 
 def test_tidl_onnx(model_name):
     model_folder = "./onnx_models/"
@@ -178,7 +188,7 @@ def test_tidl_onnx(model_name):
     onnx_mod, onnx_params = relay.frontend.from_onnx(onnx_model, shape_dict)
 
     #======================== Compile the model ========================
-    model_compile(model_name, onnx_mod, onnx_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, onnx_mod, onnx_params, data_layout, input_name, input_data)
 
 def load_gluoncv_model(model, x, input_name, input_shape, dtype):
     block = model_zoo.get_model(model, pretrained=True)
@@ -236,7 +246,7 @@ def test_tidl_gluoncv_ssd(model_name):
     #    np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
 
     #======================== Compile the model ========================
-    model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
 
 def test_tidl_gluoncv_segmentation(model_name):
     input_name = "data"
@@ -260,7 +270,7 @@ def test_tidl_gluoncv_segmentation(model_name):
 #    block, seg_mod, seg_params = load_gluoncv_model(model, img, input_name, input_shape, dtype)
 
     #======================== Compile the model ========================
-    model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
 
 def test_tidl_gluoncv_deeplab():
     """ https://gluon-cv.mxnet.io/build/examples_segmentation/demo_deeplab.html
@@ -314,7 +324,7 @@ def test_tidl_gluoncv_deeplab():
     plt.savefig("deeplab_resnet50_ade_result_tvm.png")
 
     #======================== Compile the model ========================
-    model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
 
 def test_tidl_yolov3_ssd():
 
@@ -353,7 +363,7 @@ def test_tidl_yolov3_ssd():
     plt.savefig('yolo3_mobilenet1_coco_out_tvm.png')
 
     #======================== Compile the model ========================
-    model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, relay_mod, relay_params, data_layout, input_name, input_data)
 
 def test_tidl_gluoncv_classification_model(model_name):
     dtype = 'float32'
@@ -367,7 +377,7 @@ def test_tidl_gluoncv_classification_model(model_name):
     relay_mod, relay_params = relay.frontend.from_mxnet(model, shape={input_node: input_shape}, dtype=dtype)
 
     #======================== Compile the model ========================
-    model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
+    assert model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
 
 if __name__ == '__main__':
 
@@ -379,15 +389,15 @@ if __name__ == '__main__':
                    'resnet18v2',
                    'squeezenet1.1'
                    ]
-    ssd_models = ['ssd_512_mobilenet1.0_coco',
+    ssd_models = [#'ssd_512_mobilenet1.0_coco',
                   'ssd_512_mobilenet1.0_voc',
                  ]
     seg_models = ['mask_rcnn_resnet18_v1b_coco',
                  ]
     gluoncv_classification_models = [
-                 'resnet34_v1',
+                 #'resnet34_v1',
                  'resnet50_v1',
-                 'densenet121',
+                 #'densenet121',
                  ]
 
 #TODO: download classification models from web
@@ -395,11 +405,11 @@ if __name__ == '__main__':
 #        test_tidl_tf(tf_model)
 #    for onnx_model in onnx_models:
 #        test_tidl_onnx(onnx_model)
-#    for ssd_model in ssd_models:
-#        test_tidl_gluoncv_ssd(ssd_model)
+    for ssd_model in ssd_models:
+        test_tidl_gluoncv_ssd(ssd_model)
 #    for seg_model in seg_models:
 #        test_tidl_gluoncv_segmentation(seg_model)
 #    test_tidl_gluoncv_deeplab()
-    test_tidl_yolov3_ssd()
+#    test_tidl_yolov3_ssd()
 #    for model in gluoncv_classification_models:
 #        test_tidl_gluoncv_classification_model(model)
