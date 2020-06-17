@@ -370,6 +370,7 @@ def test_tidl_gluoncv_classification_model(model_name):
     model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
 
 if __name__ == '__main__':
+
     tf_models  = ['MobileNetV1',
                   'MobileNetV2',
                   'InceptionV1',

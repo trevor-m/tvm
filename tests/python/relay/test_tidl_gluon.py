@@ -99,8 +99,9 @@ def test_tidl_gluoncv():
 
     latency = {}
     models = [
+        ('deeplab_resnet50_ade', (1, 3, 480, 480)),
         ('deeplab_resnet101_ade', (1, 3, 480, 480)),
-        #('yolo3_mobilenet1.0_coco', (1, 3, 224, 224)),
+        ('yolo3_mobilenet1.0_coco', (1, 3, 224, 224)),
     ]
     
     dtype = 'float32'
@@ -109,5 +110,5 @@ def test_tidl_gluoncv():
         test_model(model, input_shape, dtype, use_tidl=True)
 
 if __name__ == "__main__":
-    # test_tidl_gluon()
+    test_tidl_gluon()
     test_tidl_gluoncv()

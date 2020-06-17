@@ -1189,6 +1189,9 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     return subgraph_tensors
 
 class VarReplacer(ExprMutator):
+    """
+    Replaces vars in expr according to var_map.
+    """
     def __init__(self, var_map):
         ExprMutator.__init__(self)
         self.var_map = var_map
@@ -1199,6 +1202,9 @@ class VarReplacer(ExprMutator):
         return super().visit_var(var)
 
 class ExprReplacer(ExprMutator):
+    """
+    Replaces call nodes in expr according to call_map
+    """
     def __init__(self, call_map):
         ExprMutator.__init__(self)
         self.call_map = call_map
@@ -1209,18 +1215,28 @@ class ExprReplacer(ExprMutator):
         return super().visit_call(call)
 
 class VarRenamer(ExprMutator):
+    """
+    Renames vars to match the new subgraph name. Used when subgraphs are renamed starting from zero.
+    If subgraph was originally "tidl_34", it would have inputs named like "tidl_34_i0". 
+    IF new_subgraph_name is "tidl_0", pass will that input to "tidl_0_i0".
+    """
     def __init__(self, new_subgraph_name):
         ExprMutator.__init__(self)
         self.new_subgraph_name = new_subgraph_name
 
     def visit_var(self, var):
         # TODO: Make sure input isn't from a composite func.
+        # TODO: Doesn't account for tuple inputs (not possible due to PruneSubgraphsWithMoreThanOneInput)
         if var.name_hint.startswith("tidl") and "_".join(var.name_hint.split('_')[:2]) != self.new_subgraph_name:
             new_var_name = self.new_subgraph_name + "_" + var.name_hint.split('_')[2]
             return relay.Var(new_var_name, var.checked_type)
         return super().visit_var(var)
 
 class SubgraphRemover(ExprMutator):
+    """
+    Removes subgraphs which are in the list subgraphs_to_remove and returns them back to regular
+    TVM compilation in main function.
+    """
     def __init__(self, subgraphs_to_remove, mod, new_mod, rename_starting_from_0=True):
         ExprVisitor.__init__(self)
         self.subgraphs_to_remove = subgraphs_to_remove
@@ -1290,6 +1306,7 @@ def FindCommonAncestor(expr0, expr1):
     """
     Find the closest common ancestor to expr0 and expr1.
     Returns distance from both.
+    Used by SubgraphReducer pass.
     """
     class CommonAncestor(ExprVisitor):
         """
@@ -1350,6 +1367,10 @@ def FindCommonAncestor(expr0, expr1):
     return first_common_ancestor, distance_to_0, distance_to_1
 
 class SubgraphReducer(ExprMutator):
+    """
+    Removes a single op from end of subgraphs which exceed max_num_layers or max_total_memory_mb.
+    If an op is removed, reduced will be set to True.
+    """
     def __init__(self, mod, new_mod, max_num_layers=256, max_total_memory_mb=512, compiler="tidl"):
         ExprVisitor.__init__(self)
         self.mod = mod
@@ -1401,8 +1422,7 @@ class SubgraphReducer(ExprMutator):
                 elif isinstance(last_op, tvm.relay.expr.Call):
                     last_op_args = last_op.args
                 else:
-                    print('Input to last op is not call or tuple')
-                    exit(1)
+                    raise ValueError("Input to last op is not call or tuple")
                 # Gather new outputs of the subgraph - from removed op's inputs
                 # This map will map Expr to index in new_outputs tuple
                 #print('last_op_args', last_op_args)
@@ -1419,8 +1439,7 @@ class SubgraphReducer(ExprMutator):
                     elif len(new_outputs) == 1:
                         new_outputs_expr = new_outputs[0]
                     else:
-                        print('No outputs left in subgraph')
-                        exit(1)
+                        raise ValueError("No ops left in subgraph after reducing size")
                 else:
                     new_outputs = [last_op_args[0]]
                     new_outputs_expr = new_outputs[0]
