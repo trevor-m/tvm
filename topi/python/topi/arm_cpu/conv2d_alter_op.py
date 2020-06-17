@@ -59,6 +59,10 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
     data, kernel = tinfos
     out_dtype = out_type.dtype
 
+    # We only perform layout alteration for NCHW data layout.
+    if data_layout == "NHWC":
+        return None
+
     # Extract data types
     data_tensor, kernel_tensor = tinfos
     data_dtype = data_tensor.dtype
@@ -113,10 +117,11 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
         weight_expr = relay.reshape(weight_expr,
                                     newshape=(KH + tile_size - 1,
                                               KW + tile_size - 1,
-                                              idxd(CO, VC), VC, CI))
+                                              CO // VC, VC, CI))
         weight_expr = relay.transpose(weight_expr, axes=[0, 1, 2, 4, 3])
 
         new_attrs['tile_size'] = tile_size
+        new_attrs['channels'] = CO
 
         new_data = data
         new_kernel = te.placeholder((KH + tile_size - 1,
@@ -135,6 +140,7 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
         assert data_layout == "NCHW" and kernel_layout == "OIHW"
         N, CI, H, W = get_const_tuple(data.shape)
         CO, _, KH, KW = get_const_tuple(kernel.shape)
+        new_attrs['channels'] = CO
 
         # pre-compute winograd_nnpack transform
         # for winograd_nnpack_fp16, the the precompute prune pass must run on device,

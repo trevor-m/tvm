@@ -29,7 +29,6 @@ import re
 
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar
-from tvm.relay.op import Op
 from tvm.relay.function import Function
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name

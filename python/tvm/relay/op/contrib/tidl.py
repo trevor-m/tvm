@@ -17,11 +17,11 @@
 # pylint: disable=invalid-name, unused-argument
 """TIDL library supported operators.
 """
-from ... import op as reg
 from topi.util import get_const_tuple
 from tvm import relay
 from tvm.relay.frontend.common import infer_shape
 from tvm.relay.frontend.common import infer_type
+import tvm.ir
 
 target = "target.tidl"
 
@@ -178,8 +178,6 @@ def _merge_sequential_ops(mod):
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
         ('tidl.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
-        ('tidl.multibox_prior_concat', _multibox_prior_concat_pattern()),
-        ('tidl.mutlibox_prior_nms', _multibox_prior_nms_pattern()),
         ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
         ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
         ('tidl.reshape_dense', _reshape_dense_pattern()),
@@ -198,103 +196,95 @@ def _merge_sequential_ops(mod):
 
     return relay.transform.MergeComposite(pattern_table)(mod)
 
-@reg.register("tidl.squeeze_reshape", "target.tidl")
+@tvm.ir.register_op_attr("tidl.squeeze_reshape", "target.tidl")
 def _tidl_squeeze_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.transpose_reshape", "target.tidl")
+@tvm.ir.register_op_attr("tidl.transpose_reshape", "target.tidl")
 def _tidl_transpose_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.transpose_batch_reshape", "target.tidl")
+@tvm.ir.register_op_attr("tidl.transpose_batch_reshape", "target.tidl")
 def _tidl_transpose_batch_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.multibox_prior_concat", "target.tidl")
-def _tidl_multibox_prior_concat_whitelist_fn(attrs, args):
-    return True
-
-@reg.register("tidl.mutlibox_prior_nms", "target.tidl")
-def _tidl_mutlibox_prior_nms_whitelist_fn(attrs, args):
-    return True
-
-@reg.register("tidl.reshape_avgpool", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_avgpool", "target.tidl")
 def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
     return _avg_pool_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_globalavgpool", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_globalavgpool", "target.tidl")
 def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
     return _global_avg_pool_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_dense", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_dense", "target.tidl")
 def _tidl_reshape_dense_whitelist_fn(attrs, args):
     return _dense_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_squeeze", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_squeeze", "target.tidl")
 def _tidl_reshape_squeeze_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.reshape_softmax", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_softmax", "target.tidl")
 def _tidl_reshape_softmax_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.reshape_transpose", "target.tidl")
+@tvm.ir.register_op_attr("tidl.reshape_transpose", "target.tidl")
 def _tidl_reshape_transpose_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.conv2d_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.conv2d_relu", "target.tidl")
 def _conv2d_relu_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.conv2d_bias_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.conv2d_bias_relu", "target.tidl")
 def _conv2d_bias_relu_whitelist_fn(attrs, args):
     conv2d_op = args[0].args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.bn_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.bn_relu", "target.tidl")
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
     return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
 
-@reg.register("tidl.add_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.add_relu", "target.tidl")
 def _add_relu_whitelist_fn(attrs, args):
     add_op = args[0]
     return _add_whitelist_fn(add_op.attrs, add_op.args)
 
-@reg.register("tidl.dense_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.dense_relu", "target.tidl")
 def _dense_relu_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.dense_bias_relu", "target.tidl")
+@tvm.ir.register_op_attr("tidl.dense_bias_relu", "target.tidl")
 def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0].args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.conv2d_bias", "target.tidl")
+@tvm.ir.register_op_attr("tidl.conv2d_bias", "target.tidl")
 def _conv2d_bias_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.dense_bias", "target.tidl")
+@tvm.ir.register_op_attr("tidl.dense_bias", "target.tidl")
 def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.conv2d_pad", "target.tidl")
+@tvm.ir.register_op_attr("tidl.conv2d_pad", "target.tidl")
 def _conv2d_pad_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
     conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
     return (pad_supported and conv2d_supported)
 
-@reg.register("add", "target.tidl")
+@tvm.ir.register_op_attr("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.argmax", "target.tidl")
+@tvm.ir.register_op_attr("nn.argmax", "target.tidl")
 def _argmax_whitelist_fn(attrs, args):
     keepdims = attrs.keepdims
     exclude = attrs.exclude
@@ -304,14 +294,14 @@ def _argmax_whitelist_fn(attrs, args):
     supported = (int(infer_shape(data)[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
     return supported
 
-@reg.register("nn.avg_pool2d", "target.tidl")
+@tvm.ir.register_op_attr("nn.avg_pool2d", "target.tidl")
 def _avg_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides = get_const_tuple(attrs.strides)
     supported = (pool_size[0] <= 9 and pool_size[1] <= 9 and strides[0] <= 3 and strides[1] <=2)
     return supported
 
-@reg.register("nn.batch_flatten", "target.tidl")
+@tvm.ir.register_op_attr("nn.batch_flatten", "target.tidl")
 def _batch_flatten_fn(attrs, args):
     data = args[0]
     if(len(infer_shape(data)) == 4):
@@ -320,7 +310,7 @@ def _batch_flatten_fn(attrs, args):
         supported = True
     return supported
 
-@reg.register("nn.batch_norm", "target.tidl")
+@tvm.ir.register_op_attr("nn.batch_norm", "target.tidl")
 def _batch_norm_whitelist_fn(attrs, args):
     #These are the relay arguments... look up the operator to get the actual name...
     data1 = infer_type(args[1])
@@ -333,24 +323,24 @@ def _batch_norm_whitelist_fn(attrs, args):
 
     return supported
 
-@reg.register("nn.bias_add", "target.tidl")
+@tvm.ir.register_op_attr("nn.bias_add", "target.tidl")
 def _bias_add_whitelist_fn(attrs, args):
     # Standalone bias_add is not supported.
     return False
 
-@reg.register("clip", "target.tidl")
+@tvm.ir.register_op_attr("clip", "target.tidl")
 def _clip_whitelist_fn(attrs, args):
     a_min = attrs.a_min
     a_max = attrs.a_max
     supported = (a_min == 0 and a_max == 6)
     return supported
 
-@reg.register("concatenate", "target.tidl")
+@tvm.ir.register_op_attr("concatenate", "target.tidl")
 def _concatenate_whitelist_fn(attrs, args):
     supported = (attrs.axis == 1) or (attrs.axis == 3)
     return supported
 
-@reg.register("nn.conv2d", "target.tidl")
+@tvm.ir.register_op_attr("nn.conv2d", "target.tidl")
 def _conv2d_whitelist_fn(attrs, args):
     weight = infer_type(args[1])
     if weight.checked_type.dtype != 'float32':
@@ -374,7 +364,7 @@ def _conv2d_whitelist_fn(attrs, args):
 
     return supported
 
-@reg.register("nn.conv2d_transpose", "target.tidl")
+@tvm.ir.register_op_attr("nn.conv2d_transpose", "target.tidl")
 def _conv2d_transpose_whitelist_fn(attrs, args):
     weight = args[1]
     weight_shape  = get_const_tuple(infer_shape(weight))
@@ -383,7 +373,7 @@ def _conv2d_transpose_whitelist_fn(attrs, args):
     supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) and (strides[1] == 2)
     return supported
 
-@reg.register("nn.dense", "target.tidl")
+@tvm.ir.register_op_attr("nn.dense", "target.tidl")
 def _dense_whitelist_fn(attrs, args):
     weight = args[1]
 
@@ -394,12 +384,12 @@ def _dense_whitelist_fn(attrs, args):
     supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
     return supported
 
-@reg.register("nn.dropout", "target.tidl")
+@tvm.ir.register_op_attr("nn.dropout", "target.tidl")
 def _dropout_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.global_avg_pool2d", "target.tidl")
+@tvm.ir.register_op_attr("nn.global_avg_pool2d", "target.tidl")
 def _global_avg_pool_whitelist_fn(attrs, args):
     shape = list(map(int, args[0].checked_type.shape))
     layout = attrs.layout
@@ -412,41 +402,41 @@ def _global_avg_pool_whitelist_fn(attrs, args):
     supported = height * width <= 4096
     return supported
 
-@reg.register("nn.max_pool2d", "target.tidl")
+@tvm.ir.register_op_attr("nn.max_pool2d", "target.tidl")
 def _max_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides   = get_const_tuple(attrs.strides)
     supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) and (strides[1] <= 2)
     return supported
 
-@reg.register("multiply", "target.tidl")
+@tvm.ir.register_op_attr("multiply", "target.tidl")
 def _multiply_whitelist_fn(attrs, args):
     #supported = True
     supported = False
     return supported
 
-@reg.register("nn.nms", "target.tidl")
+@tvm.ir.register_op_attr("nn.nms", "target.tidl")
 def _nms_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.pad", "target.tidl")
+@tvm.ir.register_op_attr("nn.pad", "target.tidl")
 def _pad_whitelist_fn(attrs, args):
     # Standalone pad is not supported.
     return False
 
-@reg.register("nn.relu", "target.tidl")
+@tvm.ir.register_op_attr("nn.relu", "target.tidl")
 def _relu_whitelist_fn(attrs, args):
     # Standalone relu is not supported.
     return False
 
-@reg.register("nn.slice_like", "target.tidl")
+@tvm.ir.register_op_attr("nn.slice_like", "target.tidl")
 def _slice_like_whitelist_fn(attrs, args):
     #supported = (attrs.axis == 1)
     supported = False
     return supported
 
-@reg.register("nn.softmax", "target.tidl")
+@tvm.ir.register_op_attr("nn.softmax", "target.tidl")
 def _softmax_whitelist_fn(attrs, args):
     supported = (attrs.axis != 2)
     return supported
