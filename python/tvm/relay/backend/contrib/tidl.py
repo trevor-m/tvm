@@ -59,7 +59,7 @@ class RelayGraphParams:
 def traverse_expr(node, node_dict):
     if node in node_dict:
         return
-    if isinstance(node, relay.op.op.Op):
+    if isinstance(node, tvm.ir.Op):
         return 
     node_dict[node] = len(node_dict)
 
