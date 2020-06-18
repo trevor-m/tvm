@@ -22,6 +22,7 @@ from tvm import relay
 from tvm.relay.frontend.common import infer_shape
 from tvm.relay.frontend.common import infer_type
 import tvm.ir
+from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 
 target = "target.tidl"
 
@@ -30,149 +31,111 @@ def _merge_sequential_ops(mod):
     """
     # Squeeze has to be followed by reshape.
     def _squeeze_reshape_pattern():
-        x = relay.var('x')
-        squeeze_out = relay.op.transform.squeeze(x)
-        reshape_out = relay.op.transform.reshape(squeeze_out, [])
+        squeeze_out = is_op('squeeze')(wildcard())
+        reshape_out = is_op('reshape')(squeeze_out)
         return reshape_out
 
     #tranpose has to be followed by reshape (special pattern)
     #transpose has to be preceded by reshape (special pattern, reshape transpose reshape)
     def _transpose_reshape_pattern():
-        x = relay.var('x')
-        reshape_out1 = relay.op.transform.reshape(x, [])
-        transpose_out = relay.op.transform.transpose(reshape_out1)
-        reshape_out2 = relay.op.transform.reshape(transpose_out, [])
+        reshape_out1 = is_op('reshape')(wildcard())
+        transpose_out = is_op('transpose')(reshape_out1)
+        reshape_out2 = is_op('reshape')(transpose_out)
         return reshape_out2
 
     def _transpose_batch_reshape_pattern():
-        x = relay.var('x')
-        reshape_out1 = relay.op.transform.reshape(x, [])
-        transpose_out = relay.op.transform.transpose(reshape_out1)
-        batch_flatten_out = relay.op.nn.batch_flatten(transpose_out)
-        reshape_out2 = relay.op.transform.reshape(batch_flatten_out, [])
+        reshape_out1 = is_op('transpose')(wildcard())
+        transpose_out = is_op('reshape')(reshape_out1)
+        batch_flatten_out = is_op('nn.batch_flatten')(transpose_out)
+        reshape_out2 = is_op('reshape')(batch_flatten_out)
         return reshape_out2
 
     #multibox_prior has to be followed by nn.concatenate or vision.nms
     def _multibox_prior_concat_pattern():
-        x = relay.var('x')
-        y = relay.var('y')
-        multibox_prior_out = relay.op.vision.multibox.multibox_prior(x)
-        concatenate_out = relay.op.tensor.concatenate((multibox_prior_out, y), 0)
+        multibox_prior_out = is_op('vision.multibox.multibox_prior')(wildcard())
+        concatenate_out = is_op('concatenate')(multibox_prior_out, wildcard())
         return concatenate_out
 
     def _multibox_prior_nms_pattern():
-        x = relay.var('x')
-        y = relay.var('y')
-        multibox_prior_out = relay.op.vision.multibox.multibox_prior(x)
-        nms_out = relay.op.vision.nms.non_max_suppression(multibox_prior_out, y)
+        multibox_prior_out = is_op('vision.multibox.multibox_prior')(wildcard())
+        nms_out = is_op('vision.non_max_suppression')(multibox_prior_out, wildcard())
         return nms_out
 
     #reshape has to be preced by nn.avg_pool2d, nn.global_avg_pool2d, nn.dense, squeeze, transpose (if transpose, special path)
     #reshape should be followed by softmax or transpose (special path, has to be transpose, reshape, transpose)
     def _reshape_avg_pool_pattern():
-        x = relay.var('x')
-        avg_pool_out = relay.op.nn.avg_pool2d(x)
-        reshape_out = relay.op.transform.reshape(avg_pool_out, [])
+        avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
+        reshape_out = is_op('reshape')(avg_pool_out)
         return reshape_out
 
     def _reshape_global_avg_pool_pattern():
-        x = relay.var('x')
-        global_avg_pool_out = relay.op.nn.global_avg_pool2d(x)
-        reshape_out = relay.op.transform.reshape(global_avg_pool_out, [])
+        global_avg_pool_out = is_op('nn.global_avg_pool2d')(wildcard())
+        reshape_out = is_op('reshape')(global_avg_pool_out)
         return reshape_out
 
     def _reshape_dense_pattern():
-        x = relay.var('x')
-        y = relay.var('y')
-        dense_out = relay.op.nn.dense(x, y)
-        reshape_out = relay.op.transform.reshape(dense_out, [])
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        reshape_out = is_op('reshape')(dense_out)
         return reshape_out
 
     def _reshape_softmax_pattern():
-        x = relay.var('x')
-        reshape_out = relay.op.transform.reshape(x, [])
-        softmax_out = relay.op.nn.softmax(reshape_out)
+        reshape_out = is_op('reshape')(wildcard())
+        softmax_out = is_op('nn.softmax')(reshape_out)
         return softmax_out
 
     def _reshape_transpose_pattern():
-        x = relay.var('x')
-        transpose_out = relay.op.transform.transpose(x)
-        reshape_out = relay.op.transform.reshape(transpose_out, [])
-        transpose_out1 = relay.op.transform.transpose(reshape_out)
+        transpose_out = is_op('transpose')(wildcard())
+        reshape_out = is_op('reshape')(transpose_out)
+        transpose_out1 = is_op('reshape')(reshape_out)
         return transpose_out1
 
     def _conv2d_relu_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        conv2d_out = relay.op.nn.conv2d(x, w)
-        relu_out = relay.op.nn.relu(conv2d_out)
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        relu_out = is_op('nn.relu')(conv2d_out)
         return relu_out
 
     def _conv2d_bias_relu_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        b = relay.var('b')
-        conv2d_out = relay.op.nn.conv2d(x, w)
-        bias_out = relay.op.nn.bias_add(conv2d_out, b)
-        relu_out = relay.op.nn.relu(bias_out)
-        return relu_out
-
-    def _bn_relu_pattern():
-        x = relay.var('x')
-        gamma = relay.var("gamma")
-        beta = relay.var("beta")
-        moving_mean = relay.var("moving_mean")
-        moving_var = relay.var("moving_var")
-        bn_out = relay.op.nn.batch_norm(x, gamma, beta, moving_mean, moving_var)
-        relu_out = relay.op.nn.relu(bn_out[0])
-        return relu_out
-
-    def _add_relu_pattern():
-        x = relay.var('x')
-        y = relay.var('y')
-        add_out = relay.op.add(x, y)
-        relu_out = relay.op.nn.relu(add_out)
-        return relu_out
-
-    def _dense_relu_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        dense_out = relay.op.nn.dense(x, w)
-        relu_out = relay.op.nn.relu(dense_out)
-        return relu_out
-
-    def _dense_bias_relu_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        b = relay.var('b')
-        dense_out = relay.op.nn.dense(x, w)
-        bias_out = relay.op.nn.bias_add(dense_out, b)
-        relu_out = relay.op.nn.relu(bias_out)
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
+        relu_out = is_op('nn.relu')(bias_out)
         return relu_out
 
     def _conv2d_bias_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        b = relay.var('b')
-        conv2d_out = relay.op.nn.conv2d(x, w)
-        bias_out = relay.op.nn.bias_add(conv2d_out, b)
-        return bias_out
-
-    def _dense_bias_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        b = relay.var('b')
-        dense_out = relay.op.nn.dense(x, w)
-        bias_out = relay.op.nn.bias_add(dense_out, b)
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         return bias_out
 
     def _conv2d_pad_pattern():
-        x = relay.var('x')
-        w = relay.var('w')
-        p = list()
-        conv2d_out = relay.op.nn.conv2d(x, w)
-        pad_out = relay.op.nn.pad(conv2d_out,p)
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        pad_out = is_op('nn.pad')(conv2d_out)
         return pad_out
+
+    def _bn_relu_pattern():
+        bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(), wildcard())
+        tuple_get_item_node = is_tuple_get_item(bn_out, 0)
+        relu_out = is_op('nn.relu')(tuple_get_item_node)
+        return relu_out
+
+    def _add_relu_pattern():
+        add_out = is_op('add')(wildcard(), wildcard())
+        relu_out = is_op('nn.relu')(add_out)
+        return relu_out
+
+    def _dense_relu_pattern():
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        relu_out = is_op('nn.relu')(dense_out)
+        return relu_out
+
+    def _dense_bias_relu_pattern():
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        bias_out = is_op('nn.bias_add')(dense_out, is_constant())
+        relu_out = is_op('nn.relu')(bias_out)
+        return relu_out
+
+    def _dense_bias_pattern():
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        bias_out = is_op('nn.bias_add')(dense_out, is_constant())
+        return bias_out
 
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
@@ -185,13 +148,13 @@ def _merge_sequential_ops(mod):
         ('tidl.reshape_transpose', _reshape_transpose_pattern()),
         ('tidl.conv2d_relu', _conv2d_relu_pattern()),
         ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
+        ('tidl.conv2d_bias', _conv2d_bias_pattern()),
+        ('tidl.conv2d_pad', _conv2d_pad_pattern()),
         ('tidl.bn_relu', _bn_relu_pattern()),
         ('tidl.add_relu',_add_relu_pattern()),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
-        ('tidl.conv2d_bias', _conv2d_bias_pattern()),
         ('tidl.dense_bias', _dense_bias_pattern()),
-        ('tidl.conv2d_pad', _conv2d_pad_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
