@@ -1529,6 +1529,8 @@ class TIDLCompiler:
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             self.tidl_target = "tidl"
+            self.max_num_layers = max_num_layers
+            self.max_total_memory_mb = max_total_memory_mb
         else:
             sys.exit("Unsupported TIDL platform or version!")
 
