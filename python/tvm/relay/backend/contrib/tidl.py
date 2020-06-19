@@ -36,9 +36,10 @@ from tvm.contrib import graph_runtime
 from tvm.relay.op.contrib import tidl
 
 if os.getenv("TIDL_TOOLS_PATH") is None:
-    tidl_tools_path = "../../../3rdparty/tidl-utils/x86/bin"
+    sys.exit("Environment variable TIDL_TOOLS_PATH is not set!")
 else:
     tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+tidl_calib_tool = os.path.join(tidl_tools_path, "eve_test_dl_algo_ref.out")
 tidl_import_lib = os.path.join(tidl_tools_path, "tidl_relayImport.so")
 _tidl_mod = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
 
@@ -287,8 +288,7 @@ def tidl_import_conv2d(all_nodes, this_node, params):
     conv2d_params = Conv2dParams()
     (conv2d_params.stride_h, conv2d_params.stride_w) = strides
     (conv2d_params.dilation_h, conv2d_params.dilation_w) = dilation
-    # TODO: to pass all padding values to TIDL and use strideOffsetMethod
-    # top, left, bottom, right
+    # top, left, bottom, right padding
     if len(padding) == 1:
         pad_t = pad_l = pad_b = pad_r = padding[0]
     elif len(padding) == 2:
@@ -830,7 +830,7 @@ def tidl_import_tuple_node(all_nodes, node):
         # this is not the last node of the graph - ignore it
         return True
 
-def import_relay_ir(tidl_target, mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
+def import_relay_ir(tidl_target, mod, params, subgraph_tensors, data_layout, artifacts_folder):
     r""" Relay IR import to TIDL 
 
     Parameters
@@ -1140,7 +1140,6 @@ class CalibrationGraphMutator(ExprMutator):
         # Create new function with added subgraph inputs + outputs
         return relay.Function(expr.params, relay.Tuple(outputs + self.additional_outputs))
 
-#TODO: move enable_tidl to tidl.py
 class RemoveMultiplyByOne(ExprMutator):
     """
     Removes multiply by 1.0f. This pass when followed by
@@ -1315,8 +1314,6 @@ class TIDLCompiler:
             Data layout, "NCHW" or "NHWC"
         artifacts_folder : string
             Folder to hold TIDL artifacts
-        calib_tool : string
-            TIDL calibration tool binary file
     """
 
     def __init__(self, platform, version, **kwargs):
@@ -1398,7 +1395,7 @@ class TIDLCompiler:
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, input_node, input_data)
 
         #======================== Import the graph to TIDL ========================
-        if import_relay_ir(self.tidl_target, mod, params, subgraph_tensors, self.data_layout, self.calib_tool, self.artifacts_folder) == True:
+        if import_relay_ir(self.tidl_target, mod, params, subgraph_tensors, self.data_layout, self.artifacts_folder) == True:
             print("Graph execution with TIDL.")
             return mod
         else:
