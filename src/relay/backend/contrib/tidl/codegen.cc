@@ -21,19 +21,19 @@
  * \file src/relay/backend/contrib/tidl/codegen.cc
  * \brief Implementation of TIDL codegen APIs.
  */
+#include <tvm/ir/module.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
 #include <tvm/relay/type.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/object.h>
-#include <tvm/ir/module.h>
 
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
 
-#include "../codegen_c/codegen_c.h"
 #include "../../../../runtime/contrib/tidl/tidl_runtime.h"
+#include "../codegen_c/codegen_c.h"
 
 namespace tvm {
 namespace relay {
@@ -44,11 +44,11 @@ namespace contrib {
  * does not contain the TIDL representation, since the conversion from Relay to
  * TIDL representation needs to be done before codegen. The TIDLModule only
  * contains total number of subgraphs, and number of inputs and outputs for each
- * subgraph. 
+ * subgraph.
  */
 class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
  public:
-  /*! 
+  /*!
    * \brief Get the number of inputs and number of outputs for a subgraph.
    * \param func A relay function that will be executed by TIDL as a subgraph.
    * \return The TIDL runtime module.
@@ -57,12 +57,12 @@ class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
     auto subgraph_name = GetExtSymbol(func);
     const int num_inputs = func->params.size();
     subgraph_num_inputs[subgraph_name] = num_inputs;
-    const int num_outputs = func->ret_type.as<TensorTypeNode>() ? 1 
-                            : func->ret_type.as<TupleTypeNode>()->fields.size();
+    const int num_outputs =
+        func->ret_type.as<TensorTypeNode>() ? 1 : func->ret_type.as<TupleTypeNode>()->fields.size();
     subgraph_num_outputs[subgraph_name] = num_outputs;
   }
 
-  /*! 
+  /*!
    * \brief Create TIDL module from Relay funtion or IRModule.
    * \param ref An object ref that could be either a Relay function or IRModule.
    * \return The TIDL runtime module.
@@ -81,11 +81,9 @@ class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
         GetSubgraphInfo(func);
       }
     } else {
-      LOG(FATAL)
-          << "The input ref is expected to be a Relay function or module.";
+      LOG(FATAL) << "The input ref is expected to be a Relay function or module.";
     }
-    return runtime::TIDLModuleCreate(total_subgraphs, subgraph_num_inputs, 
-                                     subgraph_num_outputs);
+    return runtime::TIDLModuleCreate(total_subgraphs, subgraph_num_inputs, subgraph_num_outputs);
   }
 
  private:

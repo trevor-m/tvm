@@ -28,67 +28,62 @@
 #include <tvm/relay/type.h>
 #include <tvm/runtime/ndarray.h>
 
-#include <dmlc/logging.h>
 #include <dlfcn.h>
-#include <iostream>
+#include <dmlc/logging.h>
+#include <time.h>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "../../file_util.h"
-#include <time.h>
-
 #include "tidl_runtime.h"
 
-//#define TVM_RUNTIME_DBG_TIDL_TIMER
+// #define TVM_RUNTIME_DBG_TIDL_TIMER
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
-struct timespec t0,t1;
-#define tick()  clock_gettime(CLOCK_MONOTONIC, &t0);
-#define tock() (clock_gettime(CLOCK_MONOTONIC, &t1), \
-                        t1.tv_sec - t0.tv_sec + (t1.tv_nsec - t0.tv_nsec) / 1e9)
+struct timespec t0, t1;
+#define tick() clock_gettime(CLOCK_MONOTONIC, &t0);
+#define tock() \
+  (clock_gettime(CLOCK_MONOTONIC, &t1), t1.tv_sec - t0.tv_sec + (t1.tv_nsec - t0.tv_nsec) / 1e9)
 #endif
 
 extern "C" {
 extern void TidlRunSubgraph(
-    int total_subgraphs,   // total number of subgraphs to be executed on TIDL
-    int subgraph_id,       // subgraph id: 0, 1, 2, etc.
-    int batch_size,        // batch value of input tensor
-    int num_inputs,        // number of inputs to the subgraph
-    int num_outputs,       // number of outputs of the subgraph
-    float **inputTensors,  // array of input tensors
-    float **outputTensors  // array of output tensors
-    );
+    int total_subgraphs,     // total number of subgraphs to be executed on TIDL
+    int subgraph_id,         // subgraph id: 0, 1, 2, etc.
+    int batch_size,          // batch value of input tensor
+    int num_inputs,          // number of inputs to the subgraph
+    int num_outputs,         // number of outputs of the subgraph
+    float** inputTensors,    // array of input tensors
+    float** outputTensors);  // array of output tensors
 }
-typedef void (*tidl_subgraph_t)(int, int, int, int, int, float **, float **);
+typedef void (*tidl_subgraph_t)(int, int, int, int, int, float**, float**);
 
 inline std::string ToJSON(int total_subgraphs,
                           const std::unordered_map<std::string, int>& num_inputs_,
-                          const std::unordered_map<std::string, int>& num_outputs_)
-{
+                          const std::unordered_map<std::string, int>& num_outputs_) {
   std::ostringstream os;
   dmlc::JSONWriter writer(&os);
   writer.BeginObject();
-  writer.WriteObjectKeyValue("total subgraphs",  total_subgraphs);
-  writer.WriteObjectKeyValue("subgraph inputs",  num_inputs_);
+  writer.WriteObjectKeyValue("total subgraphs", total_subgraphs);
+  writer.WriteObjectKeyValue("subgraph inputs", num_inputs_);
   writer.WriteObjectKeyValue("subgraph outputs", num_outputs_);
   writer.EndObject();
   return os.str();
 }
 
-inline void FromJSON(const std::string& str,
-                     int &total_subgraphs,
-                     std::unordered_map<std::string, int>& num_inputs,
-                     std::unordered_map<std::string, int>& num_outputs)
-{
+inline void FromJSON(const std::string& str, int* total_subgraphs,
+                     std::unordered_map<std::string, int>* num_inputs,
+                     std::unordered_map<std::string, int>* num_outputs) {
   std::istringstream is(str);
   dmlc::JSONReader reader(&is);
   dmlc::JSONObjectReadHelper helper;
   // Read total subgraphs
-  helper.DeclareField("total subgraphs", &total_subgraphs);
+  helper.DeclareField("total subgraphs", total_subgraphs);
   // Read num_inputs
-  helper.DeclareField("subgraph inputs", &num_inputs);
+  helper.DeclareField("subgraph inputs", num_inputs);
   // Read num_outputs
-  helper.DeclareField("subgraph outputs",&num_outputs);
+  helper.DeclareField("subgraph outputs", num_outputs);
   helper.ReadAllFields(&reader);
 }
 
@@ -98,47 +93,45 @@ namespace runtime {
 /*! \brief A module for TIDL runtime. */
 class TIDLModule : public runtime::ModuleNode {
  public:
-  explicit TIDLModule(int total_subgraphs, 
-                      const std::unordered_map<std::string, int>& num_inputs,
+  explicit TIDLModule(int total_subgraphs, const std::unordered_map<std::string, int>& num_inputs,
                       const std::unordered_map<std::string, int>& num_outputs) {
     this->total_subgraphs_ = total_subgraphs;
-    this->num_inputs_  = num_inputs;
+    this->num_inputs_ = num_inputs;
     this->num_outputs_ = num_outputs;
-    this->tidl_handle  = NULL;
+    this->tidl_handle = NULL;
   }
 
-  /*! 
-   * \brief Initialize TIDL runtime by loading subgraph execution function from 
-   * TIDL library. 
+  /*!
+   * \brief Initialize TIDL runtime by loading subgraph execution function from
+   * TIDL library.
    */
   void TidlInit() {
-    if(!tidl_handle) {
+    if (!tidl_handle) {
       // Load TIDL shared library
       dlerror();
-      tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL );
-      const char *dlsym_error1 = dlerror();
+      tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL);
+      const char* dlsym_error1 = dlerror();
       if (dlsym_error1) {
         LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
       }
       // Load TIDL subgraph execution function
       dlerror();
-      tidl_subgraph = (tidl_subgraph_t) dlsym(tidl_handle, "TidlRunSubgraph");
-      const char *dlsym_error2 = dlerror();
+      tidl_subgraph = (tidl_subgraph_t)dlsym(tidl_handle, "TidlRunSubgraph");
+      const char* dlsym_error2 = dlerror();
       if (dlsym_error2) {
-         LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
-         dlclose(tidl_handle);
+        LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
+        dlclose(tidl_handle);
       }
     }
   }
 
-  /*! 
-   * \brief Provides a packed function implementation for TVM runtime to execute,  
+  /*!
+   * \brief Provides a packed function implementation for TVM runtime to execute,
    *  when TVM runtime wants to execute a subgraph with "tidl_" tag.
-   * \param name Subgraph name which contains "tidl_" prefix if the subgraph is 
+   * \param name Subgraph name which contains "tidl_" prefix if the subgraph is
    *  to run on TIDL.
    */
-  PackedFunc GetFunction(const std::string& name,
-                         const ObjectPtr<Object>& sptr_to_self) final {
+  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) final {
     if (name.find("tidl_") == std::string::npos) {
       return PackedFunc(nullptr);
     }
@@ -151,40 +144,40 @@ class TIDLModule : public runtime::ModuleNode {
 #endif
       std::string subgraph_name = (std::string)name;
       // Get subgraph id which is after "tidl_" (5 characters)
-      int subgraph_id = std::stoi(subgraph_name.erase(0,5));
+      int subgraph_id = std::stoi(subgraph_name.erase(0, 5));
       // Get batch size of input data
-      DLTensor *arg0 = (DLTensor *)args[0];
+      DLTensor* arg0 = (DLTensor*)args[0];
       const int batch_size = arg0->shape[0];
       // Prepare input and output tensors for TIDL to execute on
-      int num_inputs  = num_inputs_[name];
+      int num_inputs = num_inputs_[name];
       int num_outputs = num_outputs_[name];
-      std::vector<float *> inputs;
-      std::vector<float *> outputs;
+      std::vector<float*> inputs;
+      std::vector<float*> outputs;
       for (int batch = 0; batch < batch_size; batch++) {
         for (int i = 0; i < num_inputs; i++) {
-          DLTensor *arg = (DLTensor *)args[i];
+          DLTensor* arg = (DLTensor*)args[i];
           int tensor_size = 1;
           for (int dim = 1; dim < arg->ndim; dim++) {
             tensor_size *= arg->shape[dim];
           }
-          float *input_ptr = reinterpret_cast<float*>(arg->data);
-          inputs.push_back(&(input_ptr[batch*tensor_size]));
+          float* input_ptr = reinterpret_cast<float*>(arg->data);
+          inputs.push_back(&(input_ptr[batch * tensor_size]));
         }
-      
+
         for (int i = 0; i < num_outputs; i++) {
           const int index_in_args = num_inputs + i;
-          DLTensor *arg = (DLTensor *)args[index_in_args];
+          DLTensor* arg = (DLTensor*)args[index_in_args];
           int tensor_size = 1;
           for (int dim = 1; dim < arg->ndim; dim++) {
             tensor_size *= arg->shape[dim];
           }
-          float *output_ptr = reinterpret_cast<float*>(arg->data);
-          outputs.push_back(&(output_ptr[batch*tensor_size]));
+          float* output_ptr = reinterpret_cast<float*>(arg->data);
+          outputs.push_back(&(output_ptr[batch * tensor_size]));
         }
       }
       // Execute the subgraph on TIDL
-      tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, 
-                    num_inputs, num_outputs, &inputs[0], &outputs[0]);
+      tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, num_inputs, num_outputs, &inputs[0],
+                    &outputs[0]);
 
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
       double time_secs = tock();
@@ -195,8 +188,7 @@ class TIDLModule : public runtime::ModuleNode {
 
   const char* type_key() const { return "tidl"; }
 
-  void SaveToFile(const std::string& file_name,
-                  const std::string& format) final {
+  void SaveToFile(const std::string& file_name, const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
     SaveBinaryToFile(file_name, ToJSON(total_subgraphs_, num_inputs_, num_outputs_));
@@ -216,7 +208,7 @@ class TIDLModule : public runtime::ModuleNode {
     std::string graph_info(size, ' ');
     filep.seekg(0);
     filep.read(&graph_info[0], size);
-    FromJSON(graph_info, total_subgraphs, num_inputs, num_outputs);
+    FromJSON(graph_info, &total_subgraphs, &num_inputs, &num_outputs);
 
     return TIDLModuleCreate(total_subgraphs, num_inputs, num_outputs);
   }
@@ -228,7 +220,7 @@ class TIDLModule : public runtime::ModuleNode {
     dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
     std::string graph_info;
     stream->Read(&graph_info);
-    FromJSON(graph_info, total_subgraphs, num_inputs, num_outputs);
+    FromJSON(graph_info, &total_subgraphs, &num_inputs, &num_outputs);
     return TIDLModuleCreate(total_subgraphs, num_inputs, num_outputs);
   }
 
@@ -236,24 +228,21 @@ class TIDLModule : public runtime::ModuleNode {
   int total_subgraphs_;
   std::unordered_map<std::string, int> num_inputs_;
   std::unordered_map<std::string, int> num_outputs_;
-  void *tidl_handle;
+  void* tidl_handle;
   tidl_subgraph_t tidl_subgraph;
 };
 
-Module TIDLModuleCreate(int total_subgraphs, 
-                        const std::unordered_map<std::string, int>& num_inputs,
+Module TIDLModuleCreate(int total_subgraphs, const std::unordered_map<std::string, int>& num_inputs,
                         const std::unordered_map<std::string, int>& num_outputs) {
   auto n = make_object<TIDLModule>(total_subgraphs, num_inputs, num_outputs);
   return Module(n);
 }
 
-TVM_REGISTER_GLOBAL("runtime.module.loadfile_tidl")
-.set_body([](TVMArgs args, TVMRetValue* rv) {
+TVM_REGISTER_GLOBAL("runtime.module.loadfile_tidl").set_body([](TVMArgs args, TVMRetValue* rv) {
   *rv = TIDLModule::LoadFromFile(args[0]);
 });
 
-TVM_REGISTER_GLOBAL("runtime.module.loadbinary_tidl")
-.set_body_typed(TIDLModule::LoadFromBinary);
+TVM_REGISTER_GLOBAL("runtime.module.loadbinary_tidl").set_body_typed(TIDLModule::LoadFromBinary);
 
 }  // namespace runtime
 }  // namespace tvm

@@ -39,8 +39,7 @@ namespace runtime {
  * \param num_outputs Map of subgraph name to number of outputs
  * \return TIDLModule created from subgraphs.
  */
-Module TIDLModuleCreate(int total_subgraphs, 
-                        const std::unordered_map<std::string, int>& num_inputs,
+Module TIDLModuleCreate(int total_subgraphs, const std::unordered_map<std::string, int>& num_inputs,
                         const std::unordered_map<std::string, int>& num_outputs);
 }  // namespace runtime
 }  // namespace tvm
