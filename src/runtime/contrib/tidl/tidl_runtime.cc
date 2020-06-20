@@ -22,22 +22,24 @@
  * \brief TIDLModule is the runtime module for TIDL backend.
  */
 
+#include "tidl_runtime.h"
+
+#include <dlfcn.h>
+#include <dmlc/logging.h>
 #include <stdlib.h>
+#include <time.h>
 #include <tvm/node/serialization.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/type.h>
 #include <tvm/runtime/ndarray.h>
 
-#include <dlfcn.h>
-#include <dmlc/logging.h>
-#include <time.h>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "../../file_util.h"
-#include "tidl_runtime.h"
 
 // #define TVM_RUNTIME_DBG_TIDL_TIMER
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
