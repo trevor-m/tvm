@@ -146,8 +146,9 @@ class TIDLModule : public runtime::ModuleNode {
       // Get subgraph id which is after "tidl_" (5 characters)
       int subgraph_id = std::stoi(subgraph_name.erase(0, 5));
       // Get batch size of input data
-      DLTensor* arg0 = (DLTensor*)args[0];
-      const int batch_size = arg0->shape[0];
+      void* arg0 = args[0];
+      DLTensor* tensor = reinterpret_cast<DLTensor*>(arg0);
+      const int batch_size = tensor->shape[0];
       // Prepare input and output tensors for TIDL to execute on
       int num_inputs = num_inputs_[name];
       int num_outputs = num_outputs_[name];
@@ -155,24 +156,11 @@ class TIDLModule : public runtime::ModuleNode {
       std::vector<float*> outputs;
       for (int batch = 0; batch < batch_size; batch++) {
         for (int i = 0; i < num_inputs; i++) {
-          DLTensor* arg = (DLTensor*)args[i];
-          int tensor_size = 1;
-          for (int dim = 1; dim < arg->ndim; dim++) {
-            tensor_size *= arg->shape[dim];
-          }
-          float* input_ptr = reinterpret_cast<float*>(arg->data);
-          inputs.push_back(&(input_ptr[batch * tensor_size]));
+          inputs.push_back(GetTensorAddress(args[i], batch));
         }
 
         for (int i = 0; i < num_outputs; i++) {
-          const int index_in_args = num_inputs + i;
-          DLTensor* arg = (DLTensor*)args[index_in_args];
-          int tensor_size = 1;
-          for (int dim = 1; dim < arg->ndim; dim++) {
-            tensor_size *= arg->shape[dim];
-          }
-          float* output_ptr = reinterpret_cast<float*>(arg->data);
-          outputs.push_back(&(output_ptr[batch * tensor_size]));
+          outputs.push_back(GetTensorAddress(args[num_inputs + i], batch));
         }
       }
       // Execute the subgraph on TIDL
@@ -187,6 +175,16 @@ class TIDLModule : public runtime::ModuleNode {
   }
 
   const char* type_key() const { return "tidl"; }
+
+  float* GetTensorAddress(void* arg, int batch) {
+    DLTensor* tensor = reinterpret_cast<DLTensor*>(arg);
+    int tensor_size = 1;
+    for (int dim = 1; dim < tensor->ndim; dim++) {
+      tensor_size *= tensor->shape[dim];
+    }
+    float* tensor_ptr = reinterpret_cast<float*>(tensor->data);
+    return (&(tensor_ptr[batch * tensor_size]));
+  }
 
   void SaveToFile(const std::string& file_name, const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
