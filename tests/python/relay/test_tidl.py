@@ -58,8 +58,14 @@ def get_tidl_tools_path():
 def model_compile(model_name, mod_orig, params, data_layout, input_node, input_data,
                   num_tidl_subgraphs=1):
 
-    tmpdir = tempfile.TemporaryDirectory(suffix="_"+model_name)
-    tidl_artifacts_folder = tmpdir.name
+    tidl_artifacts_folder = "./artifacts_" + model_name
+    if os.path.isdir(tidl_artifacts_folder):
+        filelist = [ f for f in os.listdir(tidl_artifacts_folder)]
+        for file in filelist:
+            os.remove(os.path.join(tidl_artifacts_folder, file))
+    else:
+        os.mkdir(tidl_artifacts_folder)
+
     tidl_compiler = tidl.TIDLCompiler("AM57", (6, 3),
                                       num_tidl_subgraphs=num_tidl_subgraphs,
                                       data_layout=data_layout,
@@ -90,7 +96,7 @@ def model_compile(model_name, mod_orig, params, data_layout, input_node, input_d
     with open(path_params, "wb") as fo:
         fo.write(relay.save_param_dict(params))
 
-    printf("Artifacts can be found at " + tidl_artifacts_folder)
+    print("Artifacts can be found at " + tidl_artifacts_folder)
     return
 
 def load_gluoncv_model(model, x, input_name, input_shape, dtype):
@@ -177,7 +183,7 @@ def test_tidl_object_detection():
         model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
 
 def test_tidl_segmentation():
-    segmentation_models = ['mask_rcnn_fpn_resnet18_v1b_coco']
+    segmentation_models = ['mask_rcnn_resnet18_v1b_coco']
 
     input_name = "data"
     data_layout = "NCHW"
@@ -204,6 +210,6 @@ def test_tidl_segmentation():
         model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
 
 if __name__ == '__main__':
-#    test_tidl_classification()
+    test_tidl_classification()
     test_tidl_object_detection()
-#    test_tidl_segmentation()
+    test_tidl_segmentation()

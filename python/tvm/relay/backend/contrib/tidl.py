@@ -150,12 +150,9 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
     in_out_nodes.this_node = all_nodes[this_node]
 
     in_nodes = find_in_nodes(all_nodes, this_node, input_prefix) # node indices of input nodes
-    #print('number of input nodes: ' + str(len(in_nodes)))
     if len(in_nodes) == 0:
         in_out_nodes.in_nodes = None  # this is the first node
     else:
-        #for idx in range(len(in_nodes)):
-        #    print('input node: ' + str(in_nodes[idx]) + ', ' + node_dict_key_list[in_nodes[idx]].op.name)
         # convert list to numpy arrary in order to pass to C library
         in_nodes_array = np.asarray(in_nodes, dtype=np.int32)
         in_out_nodes.in_nodes = ctypes.c_void_p(in_nodes_array.ctypes.data)
@@ -163,12 +160,9 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
     in_out_nodes.num_in_nodes = len(in_nodes)
 
     out_nodes = find_out_nodes(all_nodes, this_node) # node indices of output nodes
-    #print('number of output nodes: ' + str(len(out_nodes)))
     if len(out_nodes) == 0:
         in_out_nodes.out_nodes = None # this is the last node
     else:
-        #for idx in range(len(out_nodes)):
-        #    print('output node: ' + str(out_nodes[idx]) + ', ' + node_dict_key_list[out_nodes[idx]].op.name)
         # convert list to numpy arrary in order to pass to C library
         out_nodes_array = np.asarray(out_nodes, dtype=np.int32)
         in_out_nodes.out_nodes = ctypes.c_void_p(out_nodes_array.ctypes.data)
@@ -348,8 +342,6 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     mod_tvm = relay.transform.Inline()(mod_tvm)
     my_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
-    #print("Calibration module:", mod_tvm)
-    print("Input map:", my_mutator.name_map)
 
     # Build and execute calibration graph to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
@@ -359,7 +351,6 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     mod.set_input(input_node, input_data)
     mod.set_input(**params)
     mod.run()
-    #mod.run(data=input_data, weight1=params_w1, weight2=params_w2)
 
     results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
     np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
@@ -370,12 +361,8 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     for i in range(len(results)):
         if i in my_mutator.name_map:
             subgraph_tensors[my_mutator.name_map[i]]=results[i]
-            #print("Subgraph input: ", my_mutator.name_map[i], " tensor: ", results[i])
             file_name = my_mutator.name_map[i] + ".txt"
             np.savetxt(file_name, results[i].flatten(), fmt='%10.5f')
-
-    for key, value in subgraph_tensors.items():
-        print("Subgraph tensor: ", key, value.shape)
 
     return subgraph_tensors
 
@@ -447,10 +434,8 @@ def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
         name = subgraph.name_hint
         if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
             continue
-        print("SUBGRAPH PARAMS", mod[name].params)
         if len(mod[name].params) != 1 or isinstance(mod[name].params[0].checked_type, relay.TupleType):
             subgraph_names_to_remove.append(name)
-    print("Removing subgraphs due to having more than one input:", subgraph_names_to_remove)
     new_mod = tvm.IRModule()
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
@@ -464,9 +449,7 @@ def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
         num_macs = relay.analysis.get_total_mac_number(mod[name])
         subgraph_with_macs.append([name, num_macs])
     subgraph_with_macs = sorted(subgraph_with_macs, key=lambda x: int(x[1]))
-    print("Subgraphs with computed # of MACS:", subgraph_with_macs)
     subgraphs_to_remove = subgraph_with_macs[:-num_subgraphs_to_keep]
-    print("Will remove these subgraphs:", subgraphs_to_remove)
     subgraph_names_to_remove = set([x[0] for x in subgraphs_to_remove])
     # Create new pruned module
     new_mod = tvm.IRModule()
@@ -727,7 +710,6 @@ class TIDLImport:
         if isinstance(weight,tvm.relay.expr.Constant):
             weights = weight.data
         else:
-            #print(weight_name)
             weight_name = weight.name_hint
             weights = params[weight_name] 
         # Convert to numpy array and then pass to C
@@ -958,7 +940,6 @@ class TIDLImport:
     def tidl_import_concat(self, all_nodes, node):
     
         in_nodes = find_in_nodes(all_nodes, node, self.tidl_target) # node indices of input nodes
-        #print("Importing concatenate layer, number of input nodes: " + str(len(in_nodes)))
         _tidlImportConcat = self.import_lib.tidlImportConcat
         _tidlImportConcat.argtype = ctypes.c_int
         _tidlImportConcat.restype = None
@@ -1050,8 +1031,6 @@ class TIDLImport:
         True if import succeeds or False if import fails    
         """
     
-        #print('----- Node ' + str(all_nodes[this_node]) + ', ' + this_node.op.name + '-----')
-    
         status = True
         if this_node.op.name == 'nn.conv2d':
             status = self.tidl_import_conv2d(all_nodes, this_node, params)
@@ -1110,10 +1089,8 @@ class TIDLImport:
             _tidlImportBatchFlatten.restype = None
             _tidlImportBatchFlatten()
         elif this_node.op.name == 'multiply':
-            #print("Importing multiply")
             self.tidl_import_mul(this_node)
         elif this_node.op.name == 'nn.dense':
-            #print("Importing dense")
             self.tidl_import_dense(this_node)
         else:
             print("Operator " + this_node.op.name + " is not supported!")
@@ -1153,7 +1130,6 @@ class TIDLImport:
                     nodes_for_this_data_layer = MAX_NUM_OUTPUTS_PER_DATA_LAYER
                     this_is_the_last_one = False
             
-                print("Importing out data layer, number of input nodes: " + str(nodes_for_this_data_layer))
                 _tidlImportOutData = self.import_lib.tidlImportOutData
                 _tidlImportOutData.argtype = ctypes.c_int
                 _tidlImportOutData.restype = None
