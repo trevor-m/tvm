@@ -135,6 +135,20 @@ def _merge_sequential_ops(mod):
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
         return bias_out
 
+    def _bn_tuple_get_item():
+        bn_out = is_op('nn.batch_norm')(wildcard(), is_constant(), is_constant(), is_constant(), is_constant())
+        tuple_get_item_node = is_tuple_get_item(bn_out, 0)
+        return tuple_get_item_node
+
+    def _bn_tuple_get_item_checker(extract):
+        bn_op = extract.tuple_value
+        data1 = infer_type(bn_op.args[1])
+        if data1.checked_type.dtype != 'float32':
+            return False
+        elif bn_op.attrs.axis != 1 and bn_op.attrs.axis != 3:
+            return False
+        return True
+
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         ('tidl.transpose_reshape', _transpose_reshape_pattern()),
@@ -153,6 +167,7 @@ def _merge_sequential_ops(mod):
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
         ('tidl.dense_bias', _dense_bias_pattern()),
+        ('tidl.bn_tuple_get_item', _bn_tuple_get_item(), _bn_tuple_get_item_checker),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
@@ -206,7 +221,12 @@ def _conv2d_bias_relu_whitelist_fn(attrs, args):
 @tvm.ir.register_op_attr("tidl.bn_relu", "target.tidl")
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
-    return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
+    data1 = infer_type(bn_op.args[1])
+    if data1.checked_type.dtype != 'float32':
+        return False
+    elif bn_op.attrs.axis != 1 and bn_op.attrs.axis != 3:
+        return False
+    return True
 
 @tvm.ir.register_op_attr("tidl.add_relu", "target.tidl")
 def _add_relu_whitelist_fn(attrs, args):
@@ -239,6 +259,10 @@ def _conv2d_pad_whitelist_fn(attrs, args):
     pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
     conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
     return (pad_supported and conv2d_supported)
+
+@tvm.ir.register_op_attr("tidl.bn_tuple_get_item", "target.tidl")
+def _bn_tuple_get_item_whitelist_fn(attrs, args):
+    return True
 
 @tvm.ir.register_op_attr("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
@@ -273,16 +297,8 @@ def _batch_flatten_fn(attrs, args):
 
 @tvm.ir.register_op_attr("nn.batch_norm", "target.tidl")
 def _batch_norm_whitelist_fn(attrs, args):
-    #These are the relay arguments... look up the operator to get the actual name...
-    data1 = infer_type(args[1])
-    supported = True
-
-    if data1.checked_type.dtype != 'float32':
-        supported = False
-    elif attrs.axis != 1 and attrs.axis != 3:
-        supported = False
-
-    return supported
+    # Standalone batch_norm is supported only as a pattern (bn_tuple_get_item).
+    return False
 
 @tvm.ir.register_op_attr("nn.bias_add", "target.tidl")
 def _bias_add_whitelist_fn(attrs, args):

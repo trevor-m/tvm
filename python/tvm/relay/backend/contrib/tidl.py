@@ -455,19 +455,19 @@ class SubgraphSizeCounter(ExprVisitor):
         return self.total_memory / (1024.0 * 1024.0)
 
     def visit_call(self, call):
-        # Don't visit composite function body.
-        for arg in call.args:
-            super().visit(arg)
-        self.num_layers += 1
-        # Add total size of weights (16 bits per)
-        for arg in call.args:
-            if isinstance(arg, tvm.relay.expr.Constant):
-                self.total_memory += 2 * np.prod(list(map(int, arg.checked_type.shape)))
-        # Add activation size (8 bits per)
-        if isinstance(call.checked_type, tvm.relay.TensorType):
-            self.total_memory += np.prod(list(map(int, call.checked_type.shape)))
+        super().visit_call(call)
+        # Don't count twice for composite op
+        if not isinstance(call.op, Function):
+            self.num_layers += 1
+            # Add total size of weights (16 bits per)
+            for arg in call.args:
+                if isinstance(arg, tvm.relay.expr.Constant):
+                    self.total_memory += 2 * np.prod(list(map(int, arg.checked_type.shape)))
+            # Add activation size (8 bits per)
+            if isinstance(call.checked_type, tvm.relay.TensorType):
+                self.total_memory += np.prod(list(map(int, call.checked_type.shape)))
 
-def FindCommonAncestor(expr0, expr1):
+def FindCommonAncestor(expr):
     """
     Find the closest common ancestor to expr0 and expr1.
     Returns distance from both.
@@ -475,16 +475,23 @@ def FindCommonAncestor(expr0, expr1):
     """
     class CommonAncestor(ExprVisitor):
         """
-        Creates a map of node -> distance from expr
+        Creates a map of nodes -> distance from expr
         """
-        def __init__(self):
+        def __init__(self, expr, ancestors_from_first_traversal=None):
+            """
+            Parameters
+            ----------
+            expr : tvm.relay.Expr
+                Output node
+            ancestors_from_first_traversal : Dict[tvm.relay.ir.expr, int]
+                CommonAncestor.ancestors_with_distance from previous traversal of a different
+                output of the same graph. Will be used to terminate traversal early to avoid
+                visiting nodes unnecessarily.
+            """
             ExprVisitor.__init__(self)
-            self.ancestors_with_distance = {}
-            self.call_outputs = {}
-
-        def Find(self, expr):
-            self.ancestors_with_distance[expr] = 0
-            self.call_outputs[expr] = []
+            self.ancestors_with_distance = {expr: 0}
+            self.call_outputs = {expr: []}
+            self.ancestors_from_first_traversal = ancestors_from_first_traversal
             super().visit(expr)
 
         def _update(self, expr, expr_inputs):
@@ -495,30 +502,39 @@ def FindCommonAncestor(expr0, expr1):
                     self.call_outputs[arg] = [expr]
 
             if expr in self.call_outputs and len(self.call_outputs[expr]) > 0:
-                self.ancestors_with_distance[expr] = max([self.ancestors_with_distance[output] for output in self.call_outputs[expr]]) + 1
+                self.ancestors_with_distance[expr] = \
+                        max([self.ancestors_with_distance[output] for output in self.call_outputs[expr]]) + 1
             else:
                 # Op did not have any outputs that we have already visited.
                 self.ancestors_with_distance[expr] = 0
 
+        def _terminate_early(self, node):
+            # Second traversal (from fields[1] can stop when it reaches any node already visited
+            # by first traversal).
+            return self.ancestors_from_first_traversal and \
+                   node in self.ancestors_from_first_traversal
+
         def visit_tuple_getitem(self, tuplegetitem):
             self._update(tuplegetitem, [tuplegetitem.tuple_value])
-            super().visit_tuple_getitem(tuplegetitem)
+            if not self._terminate_early(tuplegetitem):
+                super().visit_tuple_getitem(tuplegetitem)
 
         def visit_tuple(self, tup):
             self._update(tup, tup.fields)
-            super().visit_tuple(tup)
+            if not self._terminate_early(tup):
+                super().visit_tuple(tup)
 
         def visit_call(self, call):
             self._update(call, call.args)
-            # Don't visit function body 
-            # We don't care what's inside composite functions, we will just remove the whole func.
-            for arg in call.args:
-                super().visit(arg)
+            if not self._terminate_early(call):
+                # Don't visit function body 
+                # We don't care what's inside composite functions, we will just remove the whole func.
+                for arg in call.args:
+                    super().visit(arg)
 
-    common0 = CommonAncestor()
-    common0.Find(expr0)
-    common1 = CommonAncestor()
-    common1.Find(expr1)
+    assert len(expr.fields) == 2, "Only subgraphs with 1 or 2 outputs are supported by ReduceSubgraphSize"
+    common0 = CommonAncestor(expr.fields[0])
+    common1 = CommonAncestor(expr.fields[1], common0.ancestors_with_distance)
     # Find common
     first_common_ancestor = None
     distance_to_0 = 999999
@@ -529,6 +545,7 @@ def FindCommonAncestor(expr0, expr1):
                 first_common_ancestor = node
                 distance_to_0 = common0.ancestors_with_distance[node]
                 distance_to_1 = common1.ancestors_with_distance[node]
+    assert first_common_ancestor is not None
     return first_common_ancestor, distance_to_0, distance_to_1
 
 class SubgraphReducer(ExprMutator):
@@ -563,27 +580,26 @@ class SubgraphReducer(ExprMutator):
                 last_op_args = []
                 if isinstance(last_op, tvm.relay.expr.Tuple):
                     # Subgraph has multiple outputs!
-                    assert len(last_op.fields) == 2
-                    ancestor, dist0, dist1 = FindCommonAncestor(last_op.fields[0], last_op.fields[1])
-                    if dist0 == 0 and dist1 == 0:
+                    ancestor, dist0, dist1 = FindCommonAncestor(last_op)
+
+                    def get_args(field, exclude):
+                        """Gather args from field, excluding exclude node"""
+                        args = []
+                        assert isinstance(field, tvm.relay.expr.Call)
+                        for arg in field.args:
+                            if arg != exclude:
+                                args.append(arg)
+                        return args
+
+                    # If all fields in tuple are not CallNodes, we will just remove all up to common ancestor.
+                    if (dist0 == 0 and dist1 == 0):
                         last_op_args = ancestor.args
                     elif dist0 > dist1:
-                        # field[0] is further from LCA.
-                        # Remove it by replacing it with its args.
-                        # Keep field[1]
-                        last_op_args = []
-                        for arg in last_op.fields[0].args:
-                            if arg != last_op.fields[1]:
-                                last_op_args.append(arg)
-                        last_op_args.append(last_op.fields[1])
+                        # field[0] is further from LCA, remove it by replacing it with its args.
+                        last_op_args = get_args(last_op.fields[0], exclude=last_op.fields[1]) + [last_op.fields[1]]
                     elif dist1 >= dist0:
-                        # field[1] is further from LCA.
-                        # Remove it by replacing it with its args.
-                        # Keep field[0]
-                        last_op_args = [last_op.fields[0]]
-                        for arg in last_op.fields[1].args:
-                            if arg != last_op_args[0]:
-                                last_op_args.append(arg)
+                        # field[1] is further from LCA, Remove it by replacing it with its args.
+                        last_op_args = [last_op.fields[0]] + get_args(last_op.fields[1], exclude=last_op.fields[0])
                 elif isinstance(last_op, tvm.relay.expr.Call):
                     last_op_args = last_op.args
                 else:
@@ -649,6 +665,7 @@ def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memor
     while sanity_counter > 0:
         new_mod = tvm.IRModule()
         reducer = SubgraphReducer(mod, new_mod, max_num_layers, max_total_memory_mb)
+        # TODO(trevmorr): Models with Preclude not supported (multiple functions other than main).
         new_mod['main'] = reducer.visit(mod["main"])
         # If no subgraphs where reduced in size, we are done.
         if not reducer.reduced:
@@ -1523,7 +1540,7 @@ class TIDLCompiler:
             Folder to hold TIDL artifacts
     """
 
-    def __init__(self, platform, version, max_num_layers=256, max_total_memory_mb=512, **kwargs):
+    def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=128, **kwargs):
         if platform == "AM57" and version >= (6,3):
             for key in ('num_tidl_subgraphs', 'data_layout', 'artifacts_folder', 'tidl_tools_path'):
                 if key in kwargs:

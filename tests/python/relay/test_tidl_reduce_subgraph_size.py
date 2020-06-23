@@ -171,8 +171,9 @@ def test_reduce_subgraph_size_multiple_output():
     # Will remove 2nd conv2d.
     ref_mod = expected_2()
     reduced = ReduceSubgraphSize(create_graph(), max_num_layers=1, compiler="tidl")
+    print('reduced', reduced)
     assert tvm.ir.structural_equal(reduced, ref_mod, map_free_vars=True)
 
 if __name__ == '__main__':
-    test_reduce_subgraph_size_single_output()
+    #test_reduce_subgraph_size_single_output()
     test_reduce_subgraph_size_multiple_output()
