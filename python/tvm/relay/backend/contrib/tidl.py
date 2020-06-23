@@ -22,9 +22,9 @@ import subprocess
 import numpy as np
 import tvm
 from tvm import relay
-import topi
 from topi.util import get_const_tuple
 import ctypes
+import _ctypes
 import re
 
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
@@ -340,8 +340,8 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
-    my_mutator = CalibrationGraphMutator(tidl_target)
-    mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
+    calib_mutator = CalibrationGraphMutator(tidl_target)
+    mod_tvm["main"] = calib_mutator.make_calibration_graph(mod_tvm["main"])
 
     # Build and execute calibration graph to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
@@ -359,22 +359,12 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
     subgraph_tensors = {}
     for i in range(len(results)):
-        if i in my_mutator.name_map:
-            subgraph_tensors[my_mutator.name_map[i]]=results[i]
-            file_name = my_mutator.name_map[i] + ".txt"
+        if i in calib_mutator.name_map:
+            subgraph_tensors[calib_mutator.name_map[i]]=results[i]
+            file_name = calib_mutator.name_map[i] + ".txt"
             np.savetxt(file_name, results[i].flatten(), fmt='%10.5f')
 
     return subgraph_tensors
-
-class VarReplacer(ExprMutator):
-    def __init__(self, var_map):
-        ExprMutator.__init__(self)
-        self.var_map = var_map
-
-    def visit_var(self, var):
-        if var in self.var_map:
-            return self.var_map[var]
-        return super().visit_var(var)
 
 class VarRenamer(ExprMutator):
     def __init__(self, new_subgraph_name):
@@ -556,7 +546,7 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
         return False, None
 
     # Find output dataQs
-    if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
+    if console_out.find('error') == -1 and console_out.find('ERROR') == -1 and error == '':
         output_dataQ_token = "Number of output dataQ:"
         out_buf_ind = console_out.rfind(output_dataQ_token)
         if out_buf_ind == -1:
@@ -678,7 +668,6 @@ class TIDLImport:
         """
     
         weight = this_node.args[1]
-        #data_shape    = get_const_tuple(data.checked_type.shape)
         weight_shape  = get_const_tuple(weight.checked_type.shape)
         weight_type   = weight.checked_type.dtype
         strides       = get_const_tuple(this_node.attrs.strides)
@@ -737,8 +726,6 @@ class TIDLImport:
     
         if weight_type == 'float32':
             conv2d_params.weights_type  = b'float32'
-        #elif weight_type == 'int8':
-        #    conv2d_params.weights_type  = b'int8'
         else:
             print('Weight type ' + weight_type + ' not supported')
             return False
@@ -824,8 +811,6 @@ class TIDLImport:
     
         if bias.checked_type.dtype == 'float32':
             bias_params_dtype = b'float32'
-        #elif bias.checked_type.dtype == 'int8':
-        #    bias_params_dtype = b'int8'
         else:
             print('Unsupported data type of bias_add')
             return False
@@ -859,8 +844,6 @@ class TIDLImport:
         bn_params = BatchNormParams()
         if node.args[1].checked_type.dtype == 'float32':
             bn_params.params_dtype = b'float32'
-        #elif node.args[1].checked_type.dtype == 'int8':
-        #    bn_params.params_dtype = b'int8'
         else:
             print('Unsupported data type of batch norm')
             return False
@@ -1338,7 +1321,7 @@ class TIDLCompiler:
 
         if len(input) > 1:
             print("TIDL currently only supports 1 input tensor");
-            return None
+            return mod_orig, -1
         for key, value in input.items():
             input_node = key
             input_data = value
@@ -1365,11 +1348,13 @@ class TIDLCompiler:
         if self.tidl_tools_path is not None:
             tidl_calib_tool = os.path.join(self.tidl_tools_path, "eve_test_dl_algo_ref.out")
             tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_relayImport.so")
-            import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
             if os.path.exists(tidl_calib_tool) and os.path.exists(tidl_import_lib):
+                import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
                 tidl_import = TIDLImport(import_lib, tidl_calib_tool, self.artifacts_folder,
                                          self.tidl_target, self.data_layout)
-                if tidl_import.ImportRelayIR(mod, params, subgraph_tensors) == True:
+                import_success = tidl_import.ImportRelayIR(mod, params, subgraph_tensors)
+                _ctypes.dlclose(import_lib._handle)
+                if import_success:
                     print("TIDL import of Relay IR graph succeeded.")
                     return mod, 1        # TIDL Compilation success
                 else:

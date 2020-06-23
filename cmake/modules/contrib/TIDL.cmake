@@ -15,8 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Plugin rules for cblas
-if(USE_TIDL)
+if(USE_TIDL STREQUAL "ON")
   message(STATUS "Build with contrib.tidl")
   file(GLOB TIDL_RELAY_CONTRIB_SRC src/relay/backend/contrib/tidl/*.cc)
   list(APPEND COMPILER_SRCS ${TIDL_RELAY_CONTRIB_SRC})

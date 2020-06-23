@@ -24,8 +24,6 @@ from tvm.relay.frontend.common import infer_type
 import tvm.ir
 from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 
-target = "target.tidl"
-
 def _merge_sequential_ops(mod):
     """Fuse sequential ops for op registration. Ops: vision.multibox_prior, nn.reshape, squeeze, transpose
     """

@@ -17,19 +17,15 @@
 """Unit tests for TIDL compilation."""
 
 import os
-import sys
-import tempfile
 import numpy as np
 from PIL import Image
 import tvm
 import tvm.relay.testing
 from tvm import relay
-from tvm.contrib import cc
 from tvm.contrib import graph_runtime
 from tvm.contrib.download import download_testdata
 import mxnet as mx
 from mxnet import image
-from matplotlib import pyplot as plt
 from gluoncv import model_zoo, data, utils
 from gluoncv.data.transforms.presets.segmentation import test_transform
 from tvm.relay.backend.contrib import tidl
