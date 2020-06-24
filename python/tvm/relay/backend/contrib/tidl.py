@@ -1598,7 +1598,7 @@ class TIDLCompiler:
         mod = transform.MergeCompilerRegions()(mod)
         mod = transform.PartitionGraph()(mod)
         mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=self.tidl_target)
-        mod = ReduceSubgraphSize(mod, max_num_layers=max_num_layers, max_total_memory_mb=max_total_memory_mb, compiler=self.tidl_target)
+        mod = ReduceSubgraphSize(mod, max_num_layers=self.max_num_layers, max_total_memory_mb=self.max_total_memory_mb, compiler=self.tidl_target)
         mod = UnpackComposites(mod, compiler=self.tidl_target)
         mod = PruneSubgraphs(mod, compiler=self.tidl_target, num_subgraphs_to_keep=self.num_tidl_subgraphs)
 
