@@ -25,7 +25,7 @@ import tvm.ir
 from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 
 def _merge_sequential_ops(mod):
-    """Fuse sequential ops for op registration. Ops: vision.multibox_prior, nn.reshape, squeeze, transpose
+    """Fuse sequential ops for op registration. 
     """
     # Squeeze has to be followed by reshape.
     def _squeeze_reshape_pattern():
@@ -33,34 +33,21 @@ def _merge_sequential_ops(mod):
         reshape_out = is_op('reshape')(squeeze_out)
         return reshape_out
 
-    #tranpose has to be followed by reshape (special pattern)
-    #transpose has to be preceded by reshape (special pattern, reshape transpose reshape)
-    def _transpose_reshape_pattern():
-        reshape_out1 = is_op('reshape')(wildcard())
-        transpose_out = is_op('transpose')(reshape_out1)
-        reshape_out2 = is_op('reshape')(transpose_out)
-        return reshape_out2
+    #tranpose has to be preceded and followed by reshape
+    #TODO: add import of op 'transpose' and uncomment 2 patterns below
+    #def _transpose_reshape_pattern():
+    #    reshape_out1 = is_op('reshape')(wildcard())
+    #    transpose_out = is_op('transpose')(reshape_out1)
+    #    reshape_out2 = is_op('reshape')(transpose_out)
+    #    return reshape_out2
 
-    def _transpose_batch_reshape_pattern():
-        reshape_out1 = is_op('transpose')(wildcard())
-        transpose_out = is_op('reshape')(reshape_out1)
-        batch_flatten_out = is_op('nn.batch_flatten')(transpose_out)
-        reshape_out2 = is_op('reshape')(batch_flatten_out)
-        return reshape_out2
+    #tranpose has to be followed by batch_flatten
+    #def _transpose_batch_flatten_pattern():
+    #    transpose_out = is_op('transpose')(wildcard())
+    #    batch_flatten_out = is_op('nn.batch_flatten')(transpose_out)
+    #    return batch_flatten_out
 
-    #multibox_prior has to be followed by nn.concatenate or vision.nms
-    def _multibox_prior_concat_pattern():
-        multibox_prior_out = is_op('vision.multibox.multibox_prior')(wildcard())
-        concatenate_out = is_op('concatenate')(multibox_prior_out, wildcard())
-        return concatenate_out
-
-    def _multibox_prior_nms_pattern():
-        multibox_prior_out = is_op('vision.multibox.multibox_prior')(wildcard())
-        nms_out = is_op('vision.non_max_suppression')(multibox_prior_out, wildcard())
-        return nms_out
-
-    #reshape has to be preced by nn.avg_pool2d, nn.global_avg_pool2d, nn.dense, squeeze, transpose (if transpose, special path)
-    #reshape should be followed by softmax or transpose (special path, has to be transpose, reshape, transpose)
+    #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense
     def _reshape_avg_pool_pattern():
         avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
         reshape_out = is_op('reshape')(avg_pool_out)
@@ -76,38 +63,38 @@ def _merge_sequential_ops(mod):
         reshape_out = is_op('reshape')(dense_out)
         return reshape_out
 
+    #reshape has to be followed by softmax
     def _reshape_softmax_pattern():
         reshape_out = is_op('reshape')(wildcard())
         softmax_out = is_op('nn.softmax')(reshape_out)
         return softmax_out
 
-    def _reshape_transpose_pattern():
-        transpose_out = is_op('transpose')(wildcard())
-        reshape_out = is_op('reshape')(transpose_out)
-        transpose_out1 = is_op('reshape')(reshape_out)
-        return transpose_out1
-
+    #relu has to be preceded by conv2d
     def _conv2d_relu_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         relu_out = is_op('nn.relu')(conv2d_out)
         return relu_out
 
+    #relu has to be preceded by conv2d and bias_add
     def _conv2d_bias_relu_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
 
+    #bias_add has be preceded by conv2d
     def _conv2d_bias_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         return bias_out
 
+    #pad has be preceded by conv2d
     def _conv2d_pad_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         pad_out = is_op('nn.pad')(conv2d_out)
         return pad_out
 
+    #relu has to be preceded by batch_norm, add, dense
     def _bn_relu_pattern():
         bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(), wildcard())
         tuple_get_item_node = is_tuple_get_item(bn_out, 0)
@@ -124,12 +111,14 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(dense_out)
         return relu_out
 
+    #relu has to be preceded by dense and bias_add
     def _dense_bias_relu_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
 
+    #bias_add has to be preceded by dense
     def _dense_bias_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
@@ -137,19 +126,19 @@ def _merge_sequential_ops(mod):
 
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
-        ('tidl.transpose_reshape', _transpose_reshape_pattern()),
-        ('tidl.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
+        #TODO: add import of op 'transpose' and uncomment 2 items below        
+        #('tidl.transpose_reshape', _transpose_reshape_pattern()),
+        #('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
         ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
         ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
         ('tidl.reshape_dense', _reshape_dense_pattern()),
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
-        ('tidl.reshape_transpose', _reshape_transpose_pattern()),
         ('tidl.conv2d_relu', _conv2d_relu_pattern()),
         ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
         ('tidl.conv2d_bias', _conv2d_bias_pattern()),
         ('tidl.conv2d_pad', _conv2d_pad_pattern()),
         ('tidl.bn_relu', _bn_relu_pattern()),
-        ('tidl.add_relu',_add_relu_pattern()),
+        ('tidl.add_relu', _add_relu_pattern()),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
         ('tidl.dense_bias', _dense_bias_pattern()),
@@ -161,13 +150,14 @@ def _merge_sequential_ops(mod):
 def _tidl_squeeze_reshape_whitelist_fn(attrs, args):
     return True
 
-@tvm.ir.register_op_attr("tidl.transpose_reshape", "target.tidl")
-def _tidl_transpose_reshape_whitelist_fn(attrs, args):
-    return True
+#TODO: add import of op 'transpose' and uncomment 2 functions below
+#@tvm.ir.register_op_attr("tidl.transpose_reshape", "target.tidl")
+#def _tidl_transpose_reshape_whitelist_fn(attrs, args):
+#    return True
 
-@tvm.ir.register_op_attr("tidl.transpose_batch_reshape", "target.tidl")
-def _tidl_transpose_batch_reshape_whitelist_fn(attrs, args):
-    return True
+#@tvm.ir.register_op_attr("tidl.tanspose_batch_flatten", "target.tidl")
+#def _tidl_transpose_batch_flatten_whitelist_fn(attrs, args):
+#    return True
 
 @tvm.ir.register_op_attr("tidl.reshape_avgpool", "target.tidl")
 def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
@@ -181,16 +171,8 @@ def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
 def _tidl_reshape_dense_whitelist_fn(attrs, args):
     return _dense_whitelist_fn(attrs, args)
 
-@tvm.ir.register_op_attr("tidl.reshape_squeeze", "target.tidl")
-def _tidl_reshape_squeeze_whitelist_fn(attrs, args):
-    return True
-
 @tvm.ir.register_op_attr("tidl.reshape_softmax", "target.tidl")
 def _tidl_reshape_softmax_whitelist_fn(attrs, args):
-    return True
-
-@tvm.ir.register_op_attr("tidl.reshape_transpose", "target.tidl")
-def _tidl_reshape_transpose_whitelist_fn(attrs, args):
     return True
 
 @tvm.ir.register_op_attr("tidl.conv2d_relu", "target.tidl")
@@ -229,7 +211,7 @@ def _conv2d_bias_whitelist_fn(attrs, args):
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
 @tvm.ir.register_op_attr("tidl.dense_bias", "target.tidl")
-def _dense_bias_relu_whitelist_fn(attrs, args):
+def _dense_bias_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
@@ -238,7 +220,8 @@ def _conv2d_pad_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
     conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-    return (pad_supported and conv2d_supported)
+    supported = pad_supported and conv2d_supported
+    return supported
 
 @tvm.ir.register_op_attr("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
@@ -259,13 +242,13 @@ def _argmax_whitelist_fn(attrs, args):
 def _avg_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides = get_const_tuple(attrs.strides)
-    supported = (pool_size[0] <= 9 and pool_size[1] <= 9 and strides[0] <= 3 and strides[1] <=2)
+    supported = (pool_size[0] <= 9 and pool_size[1] <= 9 and strides[0] <= 3 and strides[1] <= 2)
     return supported
 
 @tvm.ir.register_op_attr("nn.batch_flatten", "target.tidl")
 def _batch_flatten_fn(attrs, args):
     data = args[0]
-    if(len(infer_shape(data)) == 4):
+    if len(infer_shape(data)) == 4:
         supported = (int(infer_shape(data)[2]) <= 65535 and int(infer_shape(data)[3]) <= 65535)
     else:
         supported = True
@@ -307,17 +290,17 @@ def _conv2d_whitelist_fn(attrs, args):
     if weight.checked_type.dtype != 'float32':
         return False
 
-    weight_shape  = get_const_tuple(infer_shape(weight))
-    strides       = get_const_tuple(attrs.strides)
-    dilation      = get_const_tuple(attrs.dilation)
-    kernel_size   = get_const_tuple(attrs.kernel_size)
-    groups        = attrs.groups
+    weight_shape = get_const_tuple(infer_shape(weight))
+    strides = get_const_tuple(attrs.strides)
+    dilation = get_const_tuple(attrs.dilation)
+    kernel_size = get_const_tuple(attrs.kernel_size)
+    groups = attrs.groups
 
     (dh, dw) = dilation
     (kh, kw) = kernel_size
     channel_supported = (weight_shape[0] <= 2048 and weight_shape[1] <= 2048)
-    stride_supported  = (strides[0] <= 2 and strides[1] <= 2)
-    dilation_supported = (dh == 1 or dh == 2 or dh == 4) and (dw == 1 or dw == 2 or dw == 4)
+    stride_supported = (strides[0] <= 2 and strides[1] <= 2)
+    dilation_supported = (dh in (1, 2, 4)) and (dw in (1, 2, 4))
     kernel_supported = (((kh-1)*dh+1) <= 9) and (((kw-1)*dw+1) <= 9)
     groups_supported = (groups <= 1024)
     supported = channel_supported and stride_supported and dilation_supported \
@@ -328,7 +311,7 @@ def _conv2d_whitelist_fn(attrs, args):
 @tvm.ir.register_op_attr("nn.conv2d_transpose", "target.tidl")
 def _conv2d_transpose_whitelist_fn(attrs, args):
     weight = args[1]
-    weight_shape  = get_const_tuple(infer_shape(weight))
+    weight_shape = get_const_tuple(infer_shape(weight))
     strides = get_const_tuple(attrs.strides)
     groups = attrs.groups
     supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) and (strides[1] == 2)
@@ -340,7 +323,7 @@ def _dense_whitelist_fn(attrs, args):
 
     #weight_shape = get_const_tuple(weight.checked_type.shape)
     weight_shape = infer_shape(weight)
-    w_in  = weight_shape[1]
+    w_in = weight_shape[1]
     w_out = weight_shape[0]
     supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
     return supported
@@ -356,18 +339,19 @@ def _global_avg_pool_whitelist_fn(attrs, args):
     layout = attrs.layout
     if layout == "NCHW":
         height = shape[2]
-        width  = shape[3]
+        width = shape[3]
     else:
         height = shape[1]
-        width  = shape[2]
+        width = shape[2]
     supported = height * width <= 4096
     return supported
 
 @tvm.ir.register_op_attr("nn.max_pool2d", "target.tidl")
 def _max_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
-    strides   = get_const_tuple(attrs.strides)
-    supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) and (strides[1] <= 2)
+    strides = get_const_tuple(attrs.strides)
+    supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) \
+                and (strides[1] <= 2)
     return supported
 
 @tvm.ir.register_op_attr("multiply", "target.tidl")
