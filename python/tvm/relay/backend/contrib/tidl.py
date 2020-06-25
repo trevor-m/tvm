@@ -379,6 +379,11 @@ class ExprReplacer(ExprMutator):
             return self.call_map[call]
         return super().visit_call(call)
 
+    def visit_tuple_getitem(self, tuplegetitem):
+        if tuplegetitem in self.call_map:
+            return self.call_map[tuplegetitem]
+        return super().visit_tuple_getitem(tuplegetitem)
+
 class VarRenamer(ExprMutator):
     """
     Renames vars to match the new subgraph name. Used when subgraphs are renamed starting from zero.
@@ -571,24 +576,50 @@ class SubgraphReducer(ExprMutator):
             counter = SubgraphSizeCounter()
             counter.visit(self.mod[name])
             if counter.num_layers > self.max_num_layers or counter.get_total_memory_mb() > self.max_total_memory_mb:
-                # Mark that we have reduced the subgraph size.
-                self.reduced = True
                 # "Inline" the last op only back into new main function.
                 original_func = self.mod[name]
-                # Get last_op
                 last_op = original_func.body
+                if isinstance(last_op, tvm.relay.expr.Tuple) and len(last_op.fields) > 2:
+                    # Currently can't reduce when there are more than 2 outputs.
+                    args = []
+                    for arg in call.args:
+                        args.append(super().visit(arg))
+                    subgraph_gv = relay.GlobalVar(name)
+                    self.new_mod[subgraph_gv] = self.mod[name]
+                    return subgraph_gv(*args)
+                # Mark that we have reduced the subgraph size.
+                self.reduced = True
                 last_op_args = []
                 if isinstance(last_op, tvm.relay.expr.Tuple):
                     # Subgraph has multiple outputs!
                     ancestor, dist0, dist1 = FindCommonAncestor(last_op)
 
+                    def get_field(field, exclude):
+                        """Get field as it is, unless it is a TupleGetItem which we will remove."""
+                        if isinstance(field, tvm.relay.expr.Call):
+                            return [field]
+                        elif isinstance(field, tvm.relay.expr.TupleGetItem):
+                            args = []
+                            for arg in field.tuple_value.args:
+                                if arg not in exclude:
+                                    args.append(arg)
+                            return args
+                        else:
+                            raise ValueError("New output of subgraph must be Call node.")
+
                     def get_args(field, exclude):
                         """Gather args from field, excluding exclude node"""
                         args = []
-                        assert isinstance(field, tvm.relay.expr.Call)
-                        for arg in field.args:
-                            if arg != exclude:
-                                args.append(arg)
+                        if isinstance(field, tvm.relay.expr.Call):
+                            for arg in field.args:
+                                if arg not in exclude:
+                                    args.append(arg)
+                        elif isinstance(field, tvm.relay.expr.TupleGetItem):
+                            for arg in field.tuple_value.args:
+                                if arg not in exclude:
+                                    args.append(arg)
+                        else:
+                            raise ValueError("New output of subgraph must be Call node.")
                         return args
 
                     # If all fields in tuple are not CallNodes, we will just remove all up to common ancestor.
@@ -596,14 +627,22 @@ class SubgraphReducer(ExprMutator):
                         last_op_args = ancestor.args
                     elif dist0 > dist1:
                         # field[0] is further from LCA, remove it by replacing it with its args.
-                        last_op_args = get_args(last_op.fields[0], exclude=last_op.fields[1]) + [last_op.fields[1]]
+                        from_field_0 = get_args(last_op.fields[0], exclude=[last_op.fields[1]])
+                        from_field_1 = get_field(last_op.fields[1], exclude=from_field_0)
+                        last_op_args = from_field_0 + from_field_1
                     elif dist1 >= dist0:
                         # field[1] is further from LCA, Remove it by replacing it with its args.
-                        last_op_args = [last_op.fields[0]] + get_args(last_op.fields[1], exclude=last_op.fields[0])
+                        from_field_0 = get_field(last_op.fields[0], exclude=[last_op.fields[1]])
+                        from_field_1 = get_args(last_op.fields[1], exclude=from_field_0)
+                        last_op_args = from_field_0 + from_field_1
                 elif isinstance(last_op, tvm.relay.expr.Call):
                     last_op_args = last_op.args
+                elif isinstance(last_op, tvm.relay.expr.TupleGetItem):
+                    last_op_arg = []
+                    for arg in last_op.tuple_value.args:
+                        last_op_arg.append(arg)
                 else:
-                    raise ValueError("Input to last op is not call or tuple")
+                    raise ValueError("Last op is not Call, Tuple, or TupleGetItem")
                 # Gather new outputs of the subgraph - from removed op's inputs
                 # This map will map Expr to index in new_outputs tuple
                 #print('last_op_args', last_op_args)
@@ -669,11 +708,25 @@ def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memor
         new_mod['main'] = reducer.visit(mod["main"])
         # If no subgraphs where reduced in size, we are done.
         if not reducer.reduced:
-            return new_mod
+            break
         mod = new_mod
         # Avoid infinite loop.
         sanity_counter -= 1
-    return mod
+
+    # Fallback: Completely remove all subgraphs still in violation.
+    # SubgraphReducer can only handle subgraphs with 1 or 2 outputs.
+    subgraph_names_to_remove = []
+    for subgraph in mod.get_global_vars():
+        name = subgraph.name_hint
+        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+            continue
+        counter = SubgraphSizeCounter()
+        counter.visit(mod[name])
+        if counter.num_layers > max_num_layers or counter.get_total_memory_mb() > max_total_memory_mb:
+            subgraph_names_to_remove.append(name)
+    new_mod = tvm.IRModule()
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    return new_mod
 
 def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
     subgraph_names_to_remove = []
