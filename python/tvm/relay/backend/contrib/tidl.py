@@ -18,7 +18,8 @@
 import os
 import sys
 import subprocess
-
+import shutil
+import tempfile
 import numpy as np
 import tvm
 from tvm import relay
@@ -332,7 +333,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return expr.args[1]
         return super().visit_call(expr)
 
-def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
+def generate_subgraph_tensors(tidl_target, mod, params, graph_input):
     """
     """
 
@@ -348,7 +349,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     with relay.build_config(opt_level=0):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
-    mod.set_input(input_node, input_data)
+    mod.set_input(**graph_input)
     mod.set_input(**params)
     mod.run()
 
@@ -813,33 +814,36 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
 
 def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, params_file):
 
+    # Prepare for calibration
+    temp_folder = './tempDir/'
+    if os.path.isdir(temp_folder):
+        shutil.rmtree(temp_folder)
+    os.mkdir(temp_folder)
+
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
-    calib_raw_image = './calib_raw_data.bin'
+    calib_raw_image = temp_folder + 'calib_raw_data.bin'
     if input_signed == 1:
         input_quant_vec.astype('int8').tofile(calib_raw_image);
     else:
         input_quant_vec.astype('uint8').tofile(calib_raw_image);
 
-    # Prepare for calibration
-    output_tmp_file = './tempDir/precalib_net.bin'
-    proc = subprocess.Popen(['rm', '-rf', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc = subprocess.Popen(['mkdir', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc = subprocess.Popen(['cp', net_file, output_tmp_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output_tmp_file = temp_folder + 'precalib_net.bin'
+    shutil.copyfile(net_file, output_tmp_file)
 
-    calib_config_file = './tempDir/configFilesList.txt'
+    calib_config_file = temp_folder + 'configFilesList.txt'
+    quant_config_file = './tempDir/quant_stats_config.txt'
     with open(calib_config_file, 'w') as config_file:
-        config_file.write('1 ./tempDir/quant_stats_config.txt\n')
+        config_file.write('1 ' + quant_config_file + '\n')
         config_file.write('0\n')
 
-    quant_config_file = './tempDir/quant_stats_config.txt'
     with open(quant_config_file, 'w') as quant_file:
         quant_file.write('rawImage    = 1\n')
         quant_file.write('numFrames   = 1\n')
         quant_file.write('preProcType = 0\n')
         quant_file.write('inData      = {}\n'.format(calib_raw_image))
-        quant_file.write('outData     = {}\n'.format('./tempDir/stats_tool_out.bin'))
-        quant_file.write('traceDumpBaseName  = {}\n'.format('./tempDir/trace_dump_'))
+        quant_file.write('outData     = {}\n'.format(temp_folder + 'stats_tool_out.bin'))
+        quant_file.write('traceDumpBaseName  = {}\n'.format(temp_folder + 'trace_dump_'))
         quant_file.write('updateNetWithStats = 1\n')
         quant_file.write('outputNetBinFile   = {}\n'.format(net_file))
         quant_file.write('paramsBinFile      = {}\n'.format(params_file))
@@ -1387,7 +1391,7 @@ class TIDLImport:
         elif this_node.op.name == 'nn.dense':
             self.tidl_import_dense(this_node)
         else:
-            print("Operator " + this_node.op.name + " is not supported!")
+            print("Operator " + this_node.op.name + " is not supported by TIDL!")
             status = False
     
         if status == False:
@@ -1402,7 +1406,7 @@ class TIDLImport:
         _tidlImportLinkNodes.restype = ctypes.c_int
         if _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
             return False
-    
+
         return True
     
     def tidl_import_tuple_node(self, all_nodes, node):
@@ -1595,16 +1599,24 @@ class TIDLCompiler:
 
     def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=128, **kwargs):
         if platform == "AM57" and version >= (6,3):
+            # Set default values for AM57 6.3
+            self.tidl_target = "tidl"
+            self.num_tidl_subgraphs = 1
+            self.data_layout = "NCHW"
+            self.artifacts_folder = None
+            self.tidl_tools_path = None
+            # Read arguments provided through regular args
+            self.max_num_layers = max_num_layers
+            self.max_total_memory_mb = max_total_memory_mb
+            # Read arguments provided through **kwargs
             for key in ('num_tidl_subgraphs', 'data_layout', 'artifacts_folder', 'tidl_tools_path'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
-            self.tidl_target = "tidl"
-            self.max_num_layers = max_num_layers
-            self.max_total_memory_mb = max_total_memory_mb
+            assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         else:
             sys.exit("Unsupported TIDL platform or version!")
 
-    def enable(self, mod_orig, params, input):
+    def enable(self, mod_orig, params, graph_input):
         """ Enable TIDL compilation
 
         This function tries to partition and compile the given Relay IR graph.
@@ -1632,13 +1644,6 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
-        if len(input) > 1:
-            print("TIDL currently only supports 1 input tensor");
-            return mod_orig, -1
-        for key, value in input.items():
-            input_node = key
-            input_data = value
-
         mod = relay.transform.RemoveUnusedFunctions()(mod_orig)
         # Bind params so that weights will appear as constants instead of variables 
         mod['main'] = bind_params_by_name(mod['main'], params)
@@ -1651,12 +1656,15 @@ class TIDLCompiler:
         mod = transform.MergeCompilerRegions()(mod)
         mod = transform.PartitionGraph()(mod)
         mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=self.tidl_target)
-        mod = ReduceSubgraphSize(mod, max_num_layers=self.max_num_layers, max_total_memory_mb=self.max_total_memory_mb, compiler=self.tidl_target)
+        mod = ReduceSubgraphSize(mod, max_num_layers=self.max_num_layers, 
+                                 max_total_memory_mb=self.max_total_memory_mb, 
+                                 compiler=self.tidl_target)
         mod = UnpackComposites(mod, compiler=self.tidl_target)
-        mod = PruneSubgraphs(mod, compiler=self.tidl_target, num_subgraphs_to_keep=self.num_tidl_subgraphs)
+        mod = PruneSubgraphs(mod, compiler=self.tidl_target, 
+                             num_subgraphs_to_keep=self.num_tidl_subgraphs)
 
         #============= Generate subgraph boundary tensors ==============
-        subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, input_node, input_data)
+        subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
 
         #================ Import the graph to TIDL =====================
         if self.tidl_tools_path is not None:
@@ -1670,6 +1678,7 @@ class TIDLCompiler:
                 _ctypes.dlclose(import_lib._handle)
                 if import_success:
                     print("TIDL import of Relay IR graph succeeded.")
+                    print("TIDL artifacts are stored at " + self.artifacts_folder)
                     return mod, 1        # TIDL Compilation success
                 else:
                     print("TIDL import of Relay IR graph failed.")

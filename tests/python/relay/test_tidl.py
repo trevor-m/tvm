@@ -67,8 +67,7 @@ def model_compile(model_name, mod_orig, params, data_layout, input_node, input_d
                                       data_layout=data_layout,
                                       artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path())
-    input = {input_node: input_data}
-    mod, status = tidl_compiler.enable(mod_orig, params, input)
+    mod, status = tidl_compiler.enable(mod_orig, params, {input_node: input_data})
     assert status != -1   # For CI test
 
     arm_gcc = get_compiler_path()
@@ -120,7 +119,7 @@ def load_gluoncv_model(model, x, input_name, input_shape, dtype):
     return block, mod, params
 
 def test_tidl_classification():
-    classification_models = ['mobilenet1.0', 'mobilenetv2_1.0']
+    classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
     dtype = 'float32'
     input_shape = (1, 3, 224, 224)
     data_layout = "NCHW"

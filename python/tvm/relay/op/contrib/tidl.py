@@ -30,7 +30,7 @@ def _merge_sequential_ops(mod):
     # Squeeze has to be followed by reshape.
     def _squeeze_reshape_pattern():
         squeeze_out = is_op('squeeze')(wildcard())
-        reshape_out = is_op('reshape')(squeeze_out)
+        reshape_out = is_op('reshape')(squeeze_out, wildcard())
         return reshape_out
 
     #tranpose has to be preceded and followed by reshape
