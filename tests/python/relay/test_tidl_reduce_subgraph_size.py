@@ -243,7 +243,7 @@ def test_reduce_subgraph_size_tuple_get_item():
     reduced = ReduceSubgraphSize(create_graph(), max_num_layers=2, compiler="tidl")
     assert tvm.ir.structural_equal(reduced, ref_mod, map_free_vars=True)
 
-def test_reduce_subgraph_size_three_outputs_fallback():
+def test_reduce_subgraph_size_three_outputs():
     def create_graph():
         ishape = (1, 32, 14, 14)
         dtype = "float32"
@@ -293,8 +293,59 @@ def test_reduce_subgraph_size_three_outputs_fallback():
     reduced = ReduceSubgraphSize(create_graph(), max_num_layers=3, compiler="tidl")
     assert tvm.ir.structural_equal(reduced, ref_mod, map_free_vars=True)
 
+def test_reduce_subgraph_size_concat():
+    def create_graph():
+        ishape = (1, 8, 14, 14)
+        dtype = "float32"
+        data0 = relay.var("tidl_0_i0", shape=(ishape), dtype=dtype)
+        r = relay.nn.relu(data0)
+        r0 = relay.nn.relu(r)
+        r1 = relay.tanh(r)
+        r2 = relay.sin(r)
+        out = relay.concatenate((r0, r1, r2), axis=1)
+        func = relay.Function([data0], out)
+        func = set_func_attr(func, "tidl", "tidl_0")
+        gv = relay.GlobalVar("tidl_0")
+
+        mod = tvm.IRModule()
+        mod[gv] = func
+        x_main = relay.var('x', shape=ishape, dtype='float32')
+        main_f = relay.Function([x_main], gv(x_main))
+        mod['main'] = main_f
+        return mod
+
+    def expected():
+        ishape = (1, 8, 14, 14)
+        dtype = "float32"
+        data0 = relay.var("tidl_0_i0", shape=(ishape), dtype=dtype)
+        r = relay.nn.relu(data0)
+        r1 = relay.tanh(r)
+        r2 = relay.sin(r)
+        out = relay.Tuple([r, r1, r2])
+        func = relay.Function([data0], out)
+        func = set_func_attr(func, "tidl", "tidl_0")
+        gv = relay.GlobalVar("tidl_0")
+
+        mod = tvm.IRModule()
+        mod[gv] = func
+        x_main = relay.var('x', shape=ishape, dtype='float32')
+        call = gv(x_main)
+        get_output_0 = relay.TupleGetItem(call, 0)
+        r0 = relay.nn.relu(get_output_0)
+        get_output_1 = relay.TupleGetItem(call, 1)
+        get_output_2 = relay.TupleGetItem(call, 2)
+        out = relay.concatenate([r0, get_output_1, get_output_2], axis=1)
+        main_f = relay.Function([x_main], out)
+        mod['main'] = main_f
+        return mod
+    
+    ref_mod = expected()
+    reduced = ReduceSubgraphSize(create_graph(), max_num_layers=3, compiler="tidl")
+    assert tvm.ir.structural_equal(reduced, ref_mod, map_free_vars=True)
+
 if __name__ == '__main__':
     test_reduce_subgraph_size_single_output()
     test_reduce_subgraph_size_multiple_output()
     test_reduce_subgraph_size_tuple_get_item()
-    test_reduce_subgraph_size_three_outputs_fallback()
+    test_reduce_subgraph_size_three_outputs()
+    test_reduce_subgraph_size_concat()

@@ -394,6 +394,11 @@ class ExprReplacer(ExprMutator):
             return self.call_map[tuplegetitem]
         return super().visit_tuple_getitem(tuplegetitem)
 
+    def visit_tuple(self, tup):
+        if tup in self.call_map:
+            return self.call_map[tup]
+        return super().visit_tuple(tup)
+
 class VarRenamer(ExprMutator):
     """
     Renames vars to match the new subgraph name. Used when subgraphs are renamed starting from zero.
@@ -613,10 +618,21 @@ class SubgraphReducer(ExprMutator):
                     def get_field(field):
                         """Get field as it is, unless it is a TupleGetItem which we will remove."""
                         if isinstance(field, tvm.relay.expr.Call):
+                            # Handle concat
+                            if isinstance(field.args[0], tvm.relay.expr.Tuple):
+                                args = []
+                                for f in field.args[0].fields:
+                                    args.append(f)
+                                return args
                             return [field]
                         elif isinstance(field, tvm.relay.expr.TupleGetItem):
                             args = []
                             for arg in field.tuple_value.args:
+                                args.append(arg)
+                            return args
+                        elif isinstance(field, tvm.relay.expr.Tuple):
+                            args = []
+                            for arg in field.fields:
                                 args.append(arg)
                             return args
                         else:
@@ -627,9 +643,17 @@ class SubgraphReducer(ExprMutator):
                         args = []
                         if isinstance(field, tvm.relay.expr.Call):
                             for arg in field.args:
-                                args.append(arg)
+                                # Handle concat
+                                if isinstance(arg, tvm.relay.expr.Tuple):
+                                    for f in arg.fields:
+                                        args.append(f)
+                                else:
+                                    args.append(arg)
                         elif isinstance(field, tvm.relay.expr.TupleGetItem):
                             for arg in field.tuple_value.args:
+                                args.append(arg)
+                        elif isinstance(field, tvm.relay.expr.Tuple):
+                            for arg in field.fields:
                                 args.append(arg)
                         else:
                             raise ValueError("New output of subgraph must be Call node.")
