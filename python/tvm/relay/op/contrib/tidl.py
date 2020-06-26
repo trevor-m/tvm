@@ -25,7 +25,7 @@ import tvm.ir
 from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 
 def _merge_sequential_ops(mod):
-    """Fuse sequential ops for op registration. 
+    """Fuse sequential ops for op registration.
     """
     # Squeeze has to be followed by reshape.
     def _squeeze_reshape_pattern():
@@ -126,7 +126,7 @@ def _merge_sequential_ops(mod):
 
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
-        #TODO: add import of op 'transpose' and uncomment 2 items below        
+        #TODO: add import of op 'transpose' and uncomment 2 items below
         #('tidl.transpose_reshape', _transpose_reshape_pattern()),
         #('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
         ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
@@ -188,12 +188,7 @@ def _conv2d_bias_relu_whitelist_fn(attrs, args):
 @tvm.ir.register_op_attr("tidl.bn_relu", "target.tidl")
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
-    data1 = infer_type(bn_op.args[1])
-    if data1.checked_type.dtype != 'float32':
-        return False
-    elif bn_op.attrs.axis != 1 and bn_op.attrs.axis != 3:
-        return False
-    return True
+    return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
 
 @tvm.ir.register_op_attr("tidl.add_relu", "target.tidl")
 def _add_relu_whitelist_fn(attrs, args):
@@ -263,10 +258,12 @@ def _batch_flatten_fn(attrs, args):
 def _batch_norm_whitelist_fn(attrs, args):
     data1 = infer_type(args[1])
     if data1.checked_type.dtype != 'float32':
-        return False
+        supported = False
     elif attrs.axis != 1 and attrs.axis != 3:
-        return False
-    return True
+        supported = False
+    else:
+        supported = True
+    return supported
 
 @tvm.ir.register_op_attr("nn.bias_add", "target.tidl")
 def _bias_add_whitelist_fn(attrs, args):
@@ -315,7 +312,8 @@ def _conv2d_transpose_whitelist_fn(attrs, args):
     weight_shape = get_const_tuple(infer_shape(weight))
     strides = get_const_tuple(attrs.strides)
     groups = attrs.groups
-    supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) and (strides[1] == 2)
+    supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) \
+                and (strides[1] == 2)
     return supported
 
 @tvm.ir.register_op_attr("nn.dense", "target.tidl")
