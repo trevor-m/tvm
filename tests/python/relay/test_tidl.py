@@ -17,17 +17,9 @@
 """Unit tests for TIDL compilation."""
 
 import os
-import numpy as np
-from PIL import Image
-import tvm
-import tvm.relay.testing
 from tvm import relay
-from tvm.contrib import graph_runtime
 from tvm.contrib.download import download_testdata
-import mxnet as mx
-from mxnet import image
-from gluoncv import model_zoo, data, utils
-from gluoncv.data.transforms.presets.segmentation import test_transform
+from gluoncv import model_zoo, data
 from tvm.relay.backend.contrib import tidl
 
 def get_compiler_path():
@@ -94,115 +86,65 @@ def model_compile(model_name, mod_orig, params, data_layout, input_node, input_d
     print("Artifacts can be found at " + tidl_artifacts_folder)
     return
 
-def load_gluoncv_model(model, x, input_name, input_shape, dtype):
-    block = model_zoo.get_model(model, pretrained=True)
-
-    if 'faster' in model:
-        mod, params = relay.frontend.from_mxnet(block, shape={input_name: input_shape}, dtype=dtype)
-    else:
-        block.hybridize()
-        block.forward(x)
-        block.export('temp') # create file temp-symbol.json and temp-0000.params
-
-        model_json = mx.symbol.load('temp-symbol.json')
-        save_dict = mx.ndarray.load('temp-0000.params')
-        arg_params = {}
-        aux_params = {}
-        for k, v in save_dict.items():
-            tp, name = k.split(':', 1)
-            if tp == 'arg':
-                arg_params[name] = v
-            elif tp == 'aux':
-                aux_params[name] = v
-        mod, params = relay.frontend.from_mxnet(model_json, {input_name: input_shape},
-                                                arg_params=arg_params, aux_params=aux_params)
-    return block, mod, params
-
 def test_tidl_classification():
     classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
-    dtype = 'float32'
-    input_shape = (1, 3, 224, 224)
+    image_size = 224
     data_layout = "NCHW"
-    input_node = "data"
-
-    img_url = 'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true'
-    img_name = 'cat.png'
-    img_path = download_testdata(img_url, 'cat.png', module='data')
-    image = Image.open(img_path).resize((224, 224))
-    x = np.array(image)
-    x = x.transpose((2, 0, 1))
-    x = x[np.newaxis, :]
-    input_data = x/np.amax(np.abs(x))
-
-    for model_name in classification_models:
-        model = model_zoo.get_model(model_name, pretrained=True)
-        relay_mod, relay_params = relay.frontend.from_mxnet(model,
-                                                            shape={input_node: input_shape},
-                                                            dtype=dtype)
-
-        #======================== Compile the model ========================
-        model_compile(model_name, relay_mod, relay_params, data_layout, input_node, input_data)
-
-
-def test_tidl_object_detection():
-    object_detection_models = ['ssd_512_mobilenet1.0_voc', 'yolo3_mobilenet1.0_coco']
-    im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
-                                 'gluoncv/detection/street_small.jpg?raw=true',
-                                 'street_small.jpg', module='data')
-    image_size = 512
-    data_layout = "NCHW"
-    dtype = "float32"
     input_name = "data"
 
     #======================== Load testing image ===========================
-    input_shape = (1, 3, image_size, image_size)
-    x, img = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
-    input_data = x.asnumpy()
+    im_fname = download_testdata('https://github.com/dmlc/mxnet.js/blob/master/' +
+                                 'data/cat.png?raw=true', 'cat.png', module='data')
+    img_norm, _ = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
+    input_data = img_norm.asnumpy()
+
+    for model_name in classification_models:
+        #======================== Load the model ========================
+        model = model_zoo.get_model(model_name, pretrained=True)
+        mod, params = relay.frontend.from_mxnet(model, shape={input_name: input_data.shape})
+
+        #======================== Compile the model ========================
+        model_compile(model_name, mod, params, data_layout, input_name, input_data)
+
+def test_tidl_object_detection():
+    object_detection_models = ['ssd_512_mobilenet1.0_voc', 'yolo3_mobilenet1.0_coco']
+    image_size = 512
+    data_layout = "NCHW"
+    input_name = "data"
+
+    #======================== Load testing image ===========================
+    im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                                 'gluoncv/detection/street_small.jpg?raw=true',
+                                 'street_small.jpg', module='data')
+    img_norm, _ = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
+    input_data = img_norm.asnumpy()
 
     for model_name in object_detection_models:
-        block, ssd_mod, ssd_params = load_gluoncv_model(model_name, x, input_name,
-                                                        input_shape, dtype)
-
-        #======================== Execute the full graph on TVM ====================
-        with relay.build_config(opt_level=3):
-            graph, lib, params = relay.build(ssd_mod, "llvm", params=ssd_params)
-        mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
-        mod.set_input(input_name, input_data)
-        mod.set_input(**params)
-        mod.run()
-        class_IDs, scores, bounding_boxs = mod.get_output(0), mod.get_output(1), mod.get_output(2)
-        ax = utils.viz.plot_bbox(img, bounding_boxs.asnumpy()[0], scores.asnumpy()[0],
-                                 class_IDs.asnumpy()[0], class_names=block.classes)
+        #======================== Load the model ========================
+        model = model_zoo.get_model(model_name, pretrained=True)
+        ssd_mod, ssd_params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
 
         #======================== Compile the model ========================
         model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
 
 def test_tidl_segmentation():
-    segmentation_models = ['mask_rcnn_resnet18_v1b_coco']
-
+    model_name = 'mask_rcnn_resnet18_v1b_coco'
     input_name = "data"
     data_layout = "NCHW"
-    dtype = "float32"
 
-    #======================== Load testing image and model ====================
-    img_url = 'https://raw.githubusercontent.com/dmlc/web-data/master/gluoncv/\
-              segmentation/voc_examples/1.jpg'
-    filename = 'example.jpg'
-    utils.download(img_url, filename)
-    img = image.imread(filename)
-    img = test_transform(img, ctx=mx.cpu(0))
-    input_shape = img.shape
-    input_data = img.asnumpy()
+    #======================== Load testing image =======================
+    im_fname = download_testdata('https://raw.githubusercontent.com/dmlc/web-data/master/' +
+                                 'gluoncv/segmentation/voc_examples/1.jpg', 'example.jpg',
+                                 module='data')
+    img_norm, _ = data.transforms.presets.rcnn.load_test(im_fname)
+    input_data = img_norm.asnumpy()
 
-    for model_name in segmentation_models:
-        model = model_zoo.get_model(model_name, pretrained=True)
-        model.hybridize()
-        model.forward(img)
-        model.export('gluoncv-temp')    # create file gluoncv-temp-symbol.json
-        seg_mod, seg_params = relay.frontend.from_mxnet(model, {input_name:input_shape})
+    #======================== Load the model ========================
+    model = model_zoo.get_model(model_name, pretrained=True)
+    seg_mod, seg_params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
 
-        #======================== Compile the model ========================
-        model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
+    #======================== Compile the model ========================
+    model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
 
 if __name__ == '__main__':
     test_tidl_classification()
