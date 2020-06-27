@@ -17,10 +17,15 @@
 """Unit tests for TIDL compilation."""
 
 import os
+import numpy as np
 from tvm import relay
 from tvm.contrib.download import download_testdata
-from gluoncv import model_zoo, data
 from tvm.relay.backend.contrib import tidl
+try:
+    from gluoncv import model_zoo, data
+    GLUONCV_INSTALLED = True
+except ModuleNotFoundError:
+    print("gluoncv not installed. Skipping Gluon-CV model compilation.")
 
 def get_compiler_path():
     arm_gcc_path = os.getenv("ARM_GCC_PATH")
@@ -43,12 +48,33 @@ def get_tidl_tools_path():
     else:
         return tidl_tools_path
 
-def model_compile(model_name, mod_orig, params, data_layout, input_node, input_data,
-                  num_tidl_subgraphs=1):
+def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=1):
+    """ Compile a model in Relay IR graph
+
+    Parameters
+    ----------
+    model_name : string
+        Name of the model
+    mod_orig : tvm.relay.Module
+        Original Relay IR graph
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+    model_input : dictionary
+        A dictionary where the key in input name and the value is input tensor
+    num_tidl_subgraphs : int
+        Number of subgraphs to offload to TIDL
+    Returns
+    -------
+    status: int
+        Status of compilation:
+            1  - compilation for TIDL offload succeeded
+            -1 - compilation for TIDL offload failed - failure for CI testing
+            0  - no compilation due to missing TIDL tools or GCC ARM tools
+    """
 
     tidl_artifacts_folder = "./artifacts_" + model_name
     if os.path.isdir(tidl_artifacts_folder):
-        filelist = [ f for f in os.listdir(tidl_artifacts_folder)]
+        filelist = [f for f in os.listdir(tidl_artifacts_folder)]
         for file in filelist:
             os.remove(os.path.join(tidl_artifacts_folder, file))
     else:
@@ -56,20 +82,18 @@ def model_compile(model_name, mod_orig, params, data_layout, input_node, input_d
 
     tidl_compiler = tidl.TIDLCompiler("AM57", (6, 3),
                                       num_tidl_subgraphs=num_tidl_subgraphs,
-                                      data_layout=data_layout,
                                       artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path())
-    mod, status = tidl_compiler.enable(mod_orig, params, {input_node: input_data})
-    assert status != -1   # For CI test
+    mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
     arm_gcc = get_compiler_path()
     if arm_gcc is None:
         print("Skip build because ARM_GCC_PATH is not set")
-        return
+        return 0  # No graph compilation
 
-    if status == 1:
+    if status == 1: # TIDL compilation succeeded
         print("Graph execution with TIDL")
-    else:
+    else: # TIDL compilation failed or no TIDL compilation due to missing tools
         print("Graph execution without TIDL")
 
     target = "llvm -target=armv7l-linux-gnueabihf" # for AM57x or J6 devices
@@ -84,67 +108,62 @@ def model_compile(model_name, mod_orig, params, data_layout, input_node, input_d
         fo.write(relay.save_param_dict(params))
 
     print("Artifacts can be found at " + tidl_artifacts_folder)
-    return
+    return status
+
+def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", batch_size=1):
+    if GLUONCV_INSTALLED:
+        #======================== Obtain input data ========================
+        if img_norm == "rcnn":
+            img_norm, _ = data.transforms.presets.rcnn.load_test(img_file)
+        else:
+            img_norm, _ = data.transforms.presets.ssd.load_test(img_file, short=img_size)
+        input_data = img_norm.asnumpy()
+        input_data = np.concatenate([input_data]*batch_size)
+
+        #======================== Load the model ===========================
+        input_name = "data"
+        model = model_zoo.get_model(model_name, pretrained=True)
+        mod, params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
+
+        #======================== Compile the model ========================
+        status = model_compile(model_name, mod, params, {input_name:input_data})
+        assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_classification():
     classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
     image_size = 224
-    data_layout = "NCHW"
-    input_name = "data"
 
     #======================== Load testing image ===========================
-    im_fname = download_testdata('https://github.com/dmlc/mxnet.js/blob/master/' +
+    img_file = download_testdata('https://github.com/dmlc/mxnet.js/blob/master/' +
                                  'data/cat.png?raw=true', 'cat.png', module='data')
-    img_norm, _ = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
-    input_data = img_norm.asnumpy()
 
     for model_name in classification_models:
-        #======================== Load the model ========================
-        model = model_zoo.get_model(model_name, pretrained=True)
-        mod, params = relay.frontend.from_mxnet(model, shape={input_name: input_data.shape})
-
-        #======================== Compile the model ========================
-        model_compile(model_name, mod, params, data_layout, input_name, input_data)
+        #======================== Load and compile the model ========================
+        gluoncv_compile_model(model_name, img_file, img_size=image_size)
 
 def test_tidl_object_detection():
     object_detection_models = ['ssd_512_mobilenet1.0_voc', 'yolo3_mobilenet1.0_coco']
     image_size = 512
-    data_layout = "NCHW"
-    input_name = "data"
 
     #======================== Load testing image ===========================
-    im_fname = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+    img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
                                  'gluoncv/detection/street_small.jpg?raw=true',
                                  'street_small.jpg', module='data')
-    img_norm, _ = data.transforms.presets.ssd.load_test(im_fname, short=image_size)
-    input_data = img_norm.asnumpy()
 
     for model_name in object_detection_models:
-        #======================== Load the model ========================
-        model = model_zoo.get_model(model_name, pretrained=True)
-        ssd_mod, ssd_params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
-
-        #======================== Compile the model ========================
-        model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
+        #======================== Load and compile the model ========================
+        gluoncv_compile_model(model_name, img_file, img_size=image_size)
 
 def test_tidl_segmentation():
     model_name = 'mask_rcnn_resnet18_v1b_coco'
-    input_name = "data"
-    data_layout = "NCHW"
 
     #======================== Load testing image =======================
-    im_fname = download_testdata('https://raw.githubusercontent.com/dmlc/web-data/master/' +
+    img_file = download_testdata('https://raw.githubusercontent.com/dmlc/web-data/master/' +
                                  'gluoncv/segmentation/voc_examples/1.jpg', 'example.jpg',
                                  module='data')
-    img_norm, _ = data.transforms.presets.rcnn.load_test(im_fname)
-    input_data = img_norm.asnumpy()
 
-    #======================== Load the model ========================
-    model = model_zoo.get_model(model_name, pretrained=True)
-    seg_mod, seg_params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
-
-    #======================== Compile the model ========================
-    model_compile(model_name, seg_mod, seg_params, data_layout, input_name, input_data)
+    #======================== Load and compile the model ========================
+    gluoncv_compile_model(model_name, img_file, img_norm="rcnn")
 
 if __name__ == '__main__':
     test_tidl_classification()

@@ -44,6 +44,16 @@ def traverse_expr(node, node_dict):
         return 
     node_dict[node] = len(node_dict)
 
+def find_data_layout(mod):
+    all_nodes = {}
+    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes))
+    data_layout = None
+    for node in all_nodes:
+        if isinstance(node, relay.expr.Call) and node.op.name == 'nn.conv2d':
+            data_layout = node.attrs.data_layout
+            break
+    return data_layout
+
 def find_in_nodes(all_nodes, this_node, input_prefix):
     r""" Find the input nodes of a given relay.expr.Call node.
     
@@ -787,7 +797,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         str3 = str2.replace(",","",len(in_list)-1)
         return str3
 
-    if data_layout=="NCHW":
+    if data_layout == "NCHW":
         isNCHW = 1
     else:
         isNCHW = 0
@@ -1284,6 +1294,12 @@ class TIDLImport:
                 in_shape = (input_shape[0],1,1,input_shape[1])
             else:
                 in_shape = (input_shape[0],1,input_shape[1],1)
+        elif len(input_shape) == 3:
+            # expand (N,H,W) to (N,1,H,W) or (N,H,W,1)
+            if self.data_layout == "NCHW":
+                in_shape = (input_shape[0],1,input_shape[1],input_shape[2])
+            else:
+                in_shape = (input_shape[0],input_shape[1],input_shape[2],1)
         elif len(input_shape) == 4:
             in_shape = input_shape
         else:
@@ -1589,8 +1605,6 @@ class TIDLCompiler:
     **kwargs : keyword arguments to pass what's needed for Relay IR graph conversion
         num_tidl_subgraphs : int
             Number of subgraphs to run on TIDL
-        data_layout : string
-            Data layout, "NCHW" or "NHWC"
         tidl_tools_path : string
             Folder to TIDL tools
         artifacts_folder : string
@@ -1602,14 +1616,13 @@ class TIDLCompiler:
             # Set default values for AM57 6.3
             self.tidl_target = "tidl"
             self.num_tidl_subgraphs = 1
-            self.data_layout = "NCHW"
             self.artifacts_folder = None
             self.tidl_tools_path = None
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
-            for key in ('num_tidl_subgraphs', 'data_layout', 'artifacts_folder', 'tidl_tools_path'):
+            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -1630,8 +1643,8 @@ class TIDLCompiler:
             Original Relay IR graph
         params : dict of str to tvm.NDArray
             The parameter dict to be used by relay
-        input: dictionary
-            A dictionary where the key in input name and the value is input tensor
+        graph_input: dictionary
+            A dictionary where the key is input name and the value is input tensor
 
         Returns
         -------
@@ -1649,6 +1662,9 @@ class TIDLCompiler:
         mod['main'] = bind_params_by_name(mod['main'], params)
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+
+        #============= Find data layout =============
+        data_layout = find_data_layout(mod)
 
         #============= Annotation and graph partition ==============
         mod = tidl._merge_sequential_ops(mod) 
@@ -1673,7 +1689,7 @@ class TIDLCompiler:
             if os.path.exists(tidl_calib_tool) and os.path.exists(tidl_import_lib):
                 import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
                 tidl_import = TIDLImport(import_lib, tidl_calib_tool, self.artifacts_folder,
-                                         self.tidl_target, self.data_layout)
+                                         self.tidl_target, data_layout)
                 import_success = tidl_import.ImportRelayIR(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
                 if import_success:
