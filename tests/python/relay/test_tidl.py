@@ -21,11 +21,6 @@ import numpy as np
 from tvm import relay
 from tvm.contrib.download import download_testdata
 from tvm.relay.backend.contrib import tidl
-try:
-    from gluoncv import model_zoo, data
-    GLUONCV_INSTALLED = True
-except ModuleNotFoundError:
-    print("gluoncv not installed. Skipping Gluon-CV model compilation.")
 
 def get_compiler_path():
     arm_gcc_path = os.getenv("ARM_GCC_PATH")
@@ -111,7 +106,9 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     return status
 
 def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", batch_size=1):
-    if GLUONCV_INSTALLED:
+    try:
+        from gluoncv import model_zoo, data
+
         #======================== Obtain input data ========================
         if img_norm == "rcnn":
             img_norm, _ = data.transforms.presets.rcnn.load_test(img_file)
@@ -128,6 +125,9 @@ def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", b
         #======================== Compile the model ========================
         status = model_compile(model_name, mod, params, {input_name:input_data})
         assert status != -1, "TIDL compilation failed"   # For CI test
+
+    except ModuleNotFoundError:
+        print("gluoncv not installed. Skipping Gluon-CV model compilation.")
 
 def test_tidl_classification():
     classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
