@@ -394,6 +394,11 @@ class ExprReplacer(ExprMutator):
             return self.call_map[tuplegetitem]
         return super().visit_tuple_getitem(tuplegetitem)
 
+    def visit_tuple(self, tup):
+        if tup in self.call_map:
+            return self.call_map[tup]
+        return super().visit_tuple(tup)
+
 class VarRenamer(ExprMutator):
     """
     Renames vars to match the new subgraph name. Used when subgraphs are renamed starting from zero.
@@ -494,13 +499,13 @@ def FindCommonAncestor(expr):
         """
         Creates a map of nodes -> distance from expr
         """
-        def __init__(self, expr, ancestors_from_first_traversal=None):
+        def __init__(self, expr, ancestors_from_previous=None):
             """
             Parameters
             ----------
             expr : tvm.relay.Expr
                 Output node
-            ancestors_from_first_traversal : Dict[tvm.relay.ir.expr, int]
+            ancestors_from_previous : Dict[tvm.relay.ir.expr, int]
                 CommonAncestor.ancestors_with_distance from previous traversal of a different
                 output of the same graph. Will be used to terminate traversal early to avoid
                 visiting nodes unnecessarily.
@@ -508,7 +513,7 @@ def FindCommonAncestor(expr):
             ExprVisitor.__init__(self)
             self.ancestors_with_distance = {expr: 0}
             self.call_outputs = {expr: []}
-            self.ancestors_from_first_traversal = ancestors_from_first_traversal
+            self.ancestors_from_previous = ancestors_from_previous
             super().visit(expr)
 
         def _update(self, expr, expr_inputs):
@@ -529,8 +534,7 @@ def FindCommonAncestor(expr):
         def _terminate_early(self, node):
             # Second traversal (from fields[1] can stop when it reaches any node already visited
             # by first traversal).
-            return self.ancestors_from_first_traversal and \
-                   node in self.ancestors_from_first_traversal
+            return self.ancestors_from_previous and node in self.ancestors_from_previous
 
         def visit_tuple_getitem(self, tuplegetitem):
             self._update(tuplegetitem, [tuplegetitem.tuple_value])
@@ -551,23 +555,31 @@ def FindCommonAncestor(expr):
                 for arg in call.args:
                     super().visit(arg)
 
-    assert len(expr.fields) == 2, "Only subgraphs with 1 or 2 outputs are supported \
-                                   by ReduceSubgraphSize"
-    common0 = CommonAncestor(expr.fields[0])
-    common1 = CommonAncestor(expr.fields[1], common0.ancestors_with_distance)
-    # Find common
-    first_common_ancestor = None
-    distance_to_0 = 999999
-    distance_to_1 = 999999
-    for node in common0.ancestors_with_distance:
-        if node in common1.ancestors_with_distance:
-            if common0.ancestors_with_distance[node] <= distance_to_0 \
-               and common1.ancestors_with_distance[node] <= distance_to_1:
-                first_common_ancestor = node
-                distance_to_0 = common0.ancestors_with_distance[node]
-                distance_to_1 = common1.ancestors_with_distance[node]
-    assert first_common_ancestor is not None
-    return first_common_ancestor, distance_to_0, distance_to_1
+    def _find_common(field0, field1):
+        common0 = CommonAncestor(field0)
+        common1 = CommonAncestor(field1, common0.ancestors_with_distance)
+        # Find common
+        first_common_ancestor = None
+        distance_to_0 = 999999
+        distance_to_1 = 999999
+        for node in common0.ancestors_with_distance:
+            if node in common1.ancestors_with_distance:
+                if common0.ancestors_with_distance[node] <= distance_to_0 and \
+                   common1.ancestors_with_distance[node] <= distance_to_1:
+                    first_common_ancestor = node
+                    distance_to_0 = common0.ancestors_with_distance[node]
+                    distance_to_1 = common1.ancestors_with_distance[node]
+        assert first_common_ancestor is not None
+        return first_common_ancestor, distance_to_0, distance_to_1
+
+    first_common_ancestor = expr.fields[0]
+    distance_to_field = [0 for i in range(len(expr.fields))]
+    for i in range(1, len(expr.fields)):
+        first_common_ancestor, dist0, dist1 = _find_common(first_common_ancestor, expr.fields[i])
+        distance_to_field[i - 1] = dist0
+        distance_to_field[i] = dist1
+
+    return first_common_ancestor, distance_to_field
 
 class SubgraphReducer(ExprMutator):
     """
@@ -591,68 +603,80 @@ class SubgraphReducer(ExprMutator):
             # Compute size of subgraph to see if we need to reduce it.
             counter = SubgraphSizeCounter()
             counter.visit(self.mod[name])
-            if counter.num_layers > self.max_num_layers \
-               or counter.get_total_memory_mb() > self.max_total_memory_mb:
+            if counter.num_layers > self.max_num_layers or \
+               counter.get_total_memory_mb() > self.max_total_memory_mb:
+                # Mark that we have reduced the subgraph size.
+                self.reduced = True
                 # "Inline" the last op only back into new main function.
                 original_func = self.mod[name]
                 last_op = original_func.body
-                if isinstance(last_op, tvm.relay.expr.Tuple) and len(last_op.fields) > 2:
-                    # Currently can't reduce when there are more than 2 outputs.
-                    args = []
-                    for arg in call.args:
-                        args.append(super().visit(arg))
-                    subgraph_gv = relay.GlobalVar(name)
-                    self.new_mod[subgraph_gv] = self.mod[name]
-                    return subgraph_gv(*args)
-                # Mark that we have reduced the subgraph size.
-                self.reduced = True
                 last_op_args = []
                 if isinstance(last_op, tvm.relay.expr.Tuple):
                     # Subgraph has multiple outputs!
-                    ancestor, dist0, dist1 = FindCommonAncestor(last_op)
+                    ancestor, distances = FindCommonAncestor(last_op)
 
-                    def get_field(field, exclude):
+                    def get_field(field):
                         """Get field as it is, unless it is a TupleGetItem which we will remove."""
                         if isinstance(field, tvm.relay.expr.Call):
+                            # Handle concat
+                            if isinstance(field.args[0], tvm.relay.expr.Tuple):
+                                args = []
+                                for f in field.args[0].fields:
+                                    args.append(f)
+                                return args
                             return [field]
                         elif isinstance(field, tvm.relay.expr.TupleGetItem):
                             args = []
                             for arg in field.tuple_value.args:
-                                if arg not in exclude:
-                                    args.append(arg)
+                                args.append(arg)
+                            return args
+                        elif isinstance(field, tvm.relay.expr.Tuple):
+                            args = []
+                            for arg in field.fields:
+                                args.append(arg)
                             return args
                         else:
                             raise ValueError("New output of subgraph must be Call node.")
 
-                    def get_args(field, exclude):
+                    def get_args(field):
                         """Gather args from field, excluding exclude node"""
                         args = []
                         if isinstance(field, tvm.relay.expr.Call):
                             for arg in field.args:
-                                if arg not in exclude:
+                                # Handle concat
+                                if isinstance(arg, tvm.relay.expr.Tuple):
+                                    for f in arg.fields:
+                                        args.append(f)
+                                else:
                                     args.append(arg)
                         elif isinstance(field, tvm.relay.expr.TupleGetItem):
                             for arg in field.tuple_value.args:
-                                if arg not in exclude:
-                                    args.append(arg)
+                                args.append(arg)
+                        elif isinstance(field, tvm.relay.expr.Tuple):
+                            for arg in field.fields:
+                                args.append(arg)
                         else:
                             raise ValueError("New output of subgraph must be Call node.")
                         return args
 
-                    # If all fields in tuple are not CallNodes, we will just remove all
-                    # up to common ancestor.
-                    if (dist0 == 0 and dist1 == 0):
+                    # All nodes come from same parent.
+                    if all([dist == 0 for dist in distances]):
                         last_op_args = ancestor.args
-                    elif dist0 > dist1:
-                        # field[0] is further from LCA, remove it by replacing it with its args.
-                        from_field_0 = get_args(last_op.fields[0], exclude=[last_op.fields[1]])
-                        from_field_1 = get_field(last_op.fields[1], exclude=from_field_0)
-                        last_op_args = from_field_0 + from_field_1
-                    elif dist1 >= dist0:
-                        # field[1] is further from LCA, Remove it by replacing it with its args.
-                        from_field_0 = get_field(last_op.fields[0], exclude=[last_op.fields[1]])
-                        from_field_1 = get_args(last_op.fields[1], exclude=from_field_0)
-                        last_op_args = from_field_0 + from_field_1
+                    else:
+                        # Remove node with longest path
+                        index_to_remove = np.argmax(distances)
+                        # field[index_to_remove] is further from LCA, remove it by replacing it with its args.
+                        last_op_args = []
+                        for i in range(0, len(last_op.fields)):
+                            if i == index_to_remove:
+                                last_op_args += get_args(last_op.fields[i])
+                            else:
+                                last_op_args += get_field(last_op.fields[i])
+
+                        # Remove duplicates.
+                        seen = set()
+                        seen_add = seen.add
+                        last_op_args = [x for x in last_op_args if not (x in seen or seen_add(x))]
                 elif isinstance(last_op, tvm.relay.expr.Call):
                     last_op_args = last_op.args
                 elif isinstance(last_op, tvm.relay.expr.TupleGetItem):
@@ -731,22 +755,7 @@ def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memor
         mod = new_mod
         # Avoid infinite loop.
         sanity_counter -= 1
-
-    # Fallback: Completely remove all subgraphs still in violation.
-    # SubgraphReducer can only handle subgraphs with 1 or 2 outputs.
-    subgraph_names_to_remove = []
-    for subgraph in mod.get_global_vars():
-        name = subgraph.name_hint
-        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
-            continue
-        counter = SubgraphSizeCounter()
-        counter.visit(mod[name])
-        if counter.num_layers > max_num_layers \
-           or counter.get_total_memory_mb() > max_total_memory_mb:
-            subgraph_names_to_remove.append(name)
-    new_mod = tvm.IRModule()
-    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
-    return new_mod
+    return mod
 
 def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
     subgraph_names_to_remove = []
