@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 """TIDL backend compiler"""
+
 import os
 import sys
 import subprocess
@@ -23,9 +24,9 @@ import ctypes
 import _ctypes
 import re
 import numpy as np
+from topi.util import get_const_tuple
 import tvm
 from tvm import relay
-from topi.util import get_const_tuple
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
@@ -220,10 +221,10 @@ def tensor_quant_flatten(input_tensor, data_layout):
         quant_min = -128
         quant_max = 127
 
-    y = np.multiply(input_tensor, scale)
-    z = np.rint(y)
-    z = np.clip(z, quant_min, quant_max)
-    output = z.flatten()   # works only if z is in "CxHxW" format
+    tensor_norm = np.multiply(input_tensor, scale)
+    tensor_quant = np.rint(tensor_norm)
+    tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
+    output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
 
     return output, scale, sign
 
@@ -240,7 +241,7 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
-def UnpackComposites(mod):
+def unpack_composites(mod):
     class Unpacker(ExprMutator):
         def __init__(self):
             ExprMutator.__init__(self)
@@ -412,7 +413,7 @@ class VarRenamer(ExprMutator):
     def visit_var(self, var):
         # TODO: Make sure input isn't from a composite func.
         # TODO: Doesn't account for tuple inputs (not possible due to
-        #       PruneSubgraphsWithMoreThanOneInput)
+        #       prune_subgraphs_with_multiple_inputs)
         if var.name_hint.startswith("tidl") and "_".join(var.name_hint.split('_')[:2]) \
                                                 != self.new_subgraph_name:
             new_var_name = self.new_subgraph_name + "_" + var.name_hint.split('_')[2]
@@ -489,7 +490,7 @@ class SubgraphSizeCounter(ExprVisitor):
             if isinstance(call.checked_type, tvm.relay.TensorType):
                 self.total_memory += np.prod(list(map(int, call.checked_type.shape)))
 
-def FindCommonAncestor(expr):
+def find_common_ancestor(expr):
     """
     Find the closest common ancestor to expr0 and expr1.
     Returns distance from both.
@@ -613,7 +614,7 @@ class SubgraphReducer(ExprMutator):
                 last_op_args = []
                 if isinstance(last_op, tvm.relay.expr.Tuple):
                     # Subgraph has multiple outputs!
-                    ancestor, distances = FindCommonAncestor(last_op)
+                    ancestor, distances = find_common_ancestor(last_op)
 
                     def get_field(field):
                         """Get field as it is, unless it is a TupleGetItem which we will remove."""
@@ -665,7 +666,8 @@ class SubgraphReducer(ExprMutator):
                     else:
                         # Remove node with longest path
                         index_to_remove = np.argmax(distances)
-                        # field[index_to_remove] is further from LCA, remove it by replacing it with its args.
+                        # field[index_to_remove] is further from LCA, remove it
+                        # by replacing it with its args.
                         last_op_args = []
                         for i in range(0, len(last_op.fields)):
                             if i == index_to_remove:
@@ -736,7 +738,7 @@ class SubgraphReducer(ExprMutator):
                 return subgraph_gv(*args)
         return super().visit_call(call)
 
-def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memory_mb=512):
+def reduce_subgraph_size(mod, max_num_layers=256, max_total_memory_mb=512):
     """
     Reduces size of subgraph to fit limitations.
     """
@@ -757,7 +759,7 @@ def ReduceSubgraphSize(mod, compiler="tidl", max_num_layers=256, max_total_memor
         sanity_counter -= 1
     return mod
 
-def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
+def prune_subgraphs_with_multiple_inputs(mod, compiler="tidl"):
     subgraph_names_to_remove = []
     # Remove subgraphs with more than 1 input or tuple inputs.
     for subgraph in mod.get_global_vars():
@@ -771,7 +773,7 @@ def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
+def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
     subgraph_with_macs = []
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint
@@ -817,14 +819,14 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         return str3
 
     if data_layout == "NCHW":
-        isNCHW = 1
+        layout_is_nchw = 1
     else:
-        isNCHW = 0
+        layout_is_nchw = 0
     out_conv_type = []
     out_is_nchw = []
-    for i in range(len(output_scale)):
+    for _ in range(len(output_scale)):
         out_conv_type.append(0)
-        out_is_nchw.append(isNCHW)
+        out_is_nchw.append(layout_is_nchw)
 
     sub_graph_cfg = os.path.join(artifacts_folder, "subgraph" + str(subgraph_id) + ".cfg")
     sub_graph_net_file = "./tidl_subgraph" + str(subgraph_id) + "_net.bin"
@@ -835,7 +837,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("inConvType    = 0\n")
         cfg_file.write("inIsSigned    = {}\n".format(input_signed))
         cfg_file.write("inScaleF2Q    = {}\n".format(round(input_scale, 2)))
-        cfg_file.write("inIsNCHW      = {}\n".format(isNCHW))
+        cfg_file.write("inIsNCHW      = {}\n".format(layout_is_nchw))
         cfg_file.write("outConvType   = {}\n".format(print_list(out_conv_type)))
         cfg_file.write("outIsSigned   = {}\n".format(print_list(output_signed)))
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
@@ -882,28 +884,28 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
     try:
         proc = subprocess.Popen([calib_tool, calib_config_file], stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)
-        o, e = proc.communicate()
-        console_out = o.decode('ascii')
-        error = e.decode('ascii')
+        out, err = proc.communicate()
+        console_out = out.decode('ascii')
+        error = err.decode('ascii')
         print(console_out)
-    except:
+    except: # pylint: disable=bare-except
         print("TIDL calibration crashed")
         return False, None
 
-    # Find output dataQs
+    # Find output dataQs from calibration console output
     if console_out.find('error') == -1 and console_out.find('ERROR') == -1 and error == '':
-        output_dataQ_token = "Number of output dataQ:"
-        out_buf_ind = console_out.rfind(output_dataQ_token)
+        output_data_token = "Number of output dataQ:"
+        out_buf_ind = console_out.rfind(output_data_token)
         if out_buf_ind == -1:
             print("TIDL calibration failed - can't find number of output buffers.")
             return False, None
         else:
-            last_line = console_out.split(output_dataQ_token, 1)[1]
+            last_line = console_out.split(output_data_token, 1)[1]
             num_outputs = int(last_line.split(". Output dataQ:", 1)[0])
             out_quants = last_line.split(". Output dataQ:", 1)[1]
             quants = out_quants.split("End of output dataQ", 1)[0]
-            qs = re.findall(r"\d+", quants)
-            outq = list(map(int, qs))
+            outq_str = re.findall(r"\d+", quants)
+            outq = list(map(int, outq_str))
             if num_outputs != len(outq):
                 print("TIDL calibration failed - can't find all outputQ's")
                 return False, None
@@ -1077,11 +1079,10 @@ class TIDLImport:
         conv2d_params.weights_array = ctypes.c_void_p(weights_flatten.ctypes.data)
 
         # Invoke C lib functions to pass parameters to TIDL
-        _tidlImportConv2d = self.import_lib.tidlImportConv2d
-        _tidlImportConv2d.argtypes = (ctypes.POINTER(Conv2dParams), ctypes.c_void_p)
-        _tidlImportConv2d.restype = None
-        _tidlImportConv2d(conv2d_params, ctypes.POINTER(ctypes.c_int)())
-
+        import_lib_conv2d = self.import_lib.tidlImportConv2d
+        import_lib_conv2d.argtypes = (ctypes.POINTER(Conv2dParams), ctypes.c_void_p)
+        import_lib_conv2d.restype = None
+        import_lib_conv2d(conv2d_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
     def tidl_import_pad(self, node):
@@ -1106,10 +1107,11 @@ class TIDLImport:
         # convert list to numpy array in order to pass to C library
         pad_array = np.asarray(pad_list, dtype=np.int32)
 
-        _tidlImportPad = self.import_lib.tidlImportPad
-        _tidlImportPad.argtypes = (ctypes.c_int, ctypes.c_void_p)
-        _tidlImportPad.restype = None
-        _tidlImportPad(len(pad_array), ctypes.c_void_p(pad_array.ctypes.data))
+        import_lib_pad = self.import_lib.tidlImportPad
+        import_lib_pad.argtypes = (ctypes.c_int, ctypes.c_void_p)
+        import_lib_pad.restype = None
+        import_lib_pad(len(pad_array), ctypes.c_void_p(pad_array.ctypes.data))
+        return True
 
     def tidl_import_add(self):
         r""" Import add operator to TIDL
@@ -1119,10 +1121,11 @@ class TIDLImport:
             This function imports "add" opertor with args being two nodes.
         """
 
-        _tidlImportAdd = self.import_lib.tidlImportAdd
-        _tidlImportAdd.argtypes = None
-        _tidlImportAdd.restype = None
-        _tidlImportAdd()
+        import_lib_add = self.import_lib.tidlImportAdd
+        import_lib_add.argtypes = None
+        import_lib_add.restype = None
+        import_lib_add()
+        return True
 
     def tidl_import_bias_add(self, node):
         r""" Import bias_add or add operator to TIDL
@@ -1159,11 +1162,12 @@ class TIDLImport:
         bias_params_len = bias.checked_type.shape[0]
         bias_params_np = bias_params.asnumpy()
 
-        _tidlImportBiasAdd = self.import_lib.tidlImportBiasAdd
-        _tidlImportBiasAdd.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
-        _tidlImportBiasAdd.restype = None
-        _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
-                           ctypes.c_void_p(bias_params_np.ctypes.data))
+        import_lib_bias = self.import_lib.tidlImportBiasAdd
+        import_lib_bias.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
+        import_lib_bias.restype = None
+        import_lib_bias(bias_params_len, bias_params_dtype,
+                        ctypes.c_void_p(bias_params_np.ctypes.data))
+        return True
 
     def tidl_import_batch_norm(self, node, params):
         r""" Import batch_norm operator to TIDL
@@ -1208,17 +1212,16 @@ class TIDLImport:
         bn_params.epsilon = node.attrs.epsilon
         center = node.attrs.center
         scale = node.attrs.scale
-        bn_params.center_enable = int(center == True)
-        bn_params.scale_enable = int(scale == True)
+        bn_params.center_enable = int(center)
+        bn_params.scale_enable = int(scale)
 
-        _tidlImportBatchNorm = self.import_lib.tidlImportBatchNorm
-        _tidlImportBatchNorm.argtypes = (ctypes.POINTER(BatchNormParams), ctypes.c_void_p)
-        _tidlImportBatchNorm.restype = None
-        _tidlImportBatchNorm(bn_params, ctypes.POINTER(ctypes.c_int)())
-
+        import_lib_bn = self.import_lib.tidlImportBatchNorm
+        import_lib_bn.argtypes = (ctypes.POINTER(BatchNormParams), ctypes.c_void_p)
+        import_lib_bn.restype = None
+        import_lib_bn(bn_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
-    def tidl_import_pooling(self, node, type):
+    def tidl_import_pooling(self, node):
         r""" Import pooling operator to TIDL
             https://docs.tvm.ai/langref/relay_op.html#tvm.relay.nn.avg_pool2d
             https://docs.tvm.ai/doxygen/structtvm_1_1relay_1_1AvgPool2DAttrs.html
@@ -1229,8 +1232,6 @@ class TIDLImport:
         ----------
         node : relay.expr.Call
             A relay.expr.Call node which is a pooling operator
-        type : Bytes literals
-            A string indicating the type of the pooling operator
 
         Returns
         -------
@@ -1250,43 +1251,46 @@ class TIDLImport:
                 (pooling_params.padH, pooling_params.padW) = node.attrs.padding
 
         if node.op.name == "nn.avg_pool2d" or node.op.name == "nn.global_avg_pool2d":
-            type = b'avg_pool2d'
+            pooling_type = b'avg_pool2d'
         else:
-            type = b'max_pool2d'
+            pooling_type = b'max_pool2d'
 
-        _tidlImportPooling = self.import_lib.tidlImportPooling
-        _tidlImportPooling.argtypes = (ctypes.POINTER(PoolingParams), ctypes.c_char_p)
-        _tidlImportPooling.restype = None
-        _tidlImportPooling(pooling_params, type)
-
-        return
+        import_lib_pooling = self.import_lib.tidlImportPooling
+        import_lib_pooling.argtypes = (ctypes.POINTER(PoolingParams), ctypes.c_char_p)
+        import_lib_pooling.restype = None
+        import_lib_pooling(pooling_params, pooling_type)
+        return True
 
     def tidl_import_concat(self, all_nodes, node):
 
         in_nodes = find_in_nodes(all_nodes, node, self.tidl_target) # node indices of input nodes
-        _tidlImportConcat = self.import_lib.tidlImportConcat
-        _tidlImportConcat.argtype = ctypes.c_int
-        _tidlImportConcat.restype = None
-        _tidlImportConcat(len(in_nodes))
+        import_lib_concat = self.import_lib.tidlImportConcat
+        import_lib_concat.argtype = ctypes.c_int
+        import_lib_concat.restype = None
+        import_lib_concat(len(in_nodes))
+        return True
 
     def tidl_import_dense(self, this_node):
 
         weights = this_node.args[1]
         (num_outnodes, num_innodes) = weights.data.shape
         weights_array = weights.data.asnumpy()
-        _tidlImportDense = self.import_lib.tidlImportDense
-        _tidlImportDense.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
-        _tidlImportDense.restype = None
-        _tidlImportDense(num_innodes, num_outnodes, ctypes.c_void_p(weights_array.ctypes.data))
+        import_lib_dense = self.import_lib.tidlImportDense
+        import_lib_dense.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
+        import_lib_dense.restype = None
+        import_lib_dense(num_innodes, num_outnodes, ctypes.c_void_p(weights_array.ctypes.data))
+        return True
 
     def tidl_import_mul(self, this_node):
+
         mul_params = MulParams()
         scale = this_node.args[0].data.asnumpy()
         mul_params.scale = np.amax(scale)
-        _tidlImportMul = self.import_lib.tidlImportMul
-        _tidlImportMul.argtypes = (ctypes.POINTER(MulParams), ctypes.c_void_p)
-        _tidlImportMul.restype = None
-        _tidlImportMul(mul_params, ctypes.POINTER(ctypes.c_int)())
+        import_lib_mul = self.import_lib.tidlImportMul
+        import_lib_mul.argtypes = (ctypes.POINTER(MulParams), ctypes.c_void_p)
+        import_lib_mul.restype = None
+        import_lib_mul(mul_params, ctypes.POINTER(ctypes.c_int)())
+        return True
 
     def tidl_import_init(self, input_scale, input_signed, input_shape):
         r""" Initializing TIDL import
@@ -1332,15 +1336,15 @@ class TIDLImport:
             print('data layout ' + self.data_layout + ' is not supported')
             return False
 
-        inQuantFactor = int(round(input_scale*255))  # 255 is due to TIDL implementation
-        config_params = TIDLconfigParams(12, 50, inQuantFactor, input_signed,
+        in_quant_factor = int(round(input_scale*255))  # 255 is due to TIDL implementation
+        config_params = TIDLconfigParams(12, 50, in_quant_factor, input_signed,
                                          channel, height, width)
 
         # Invoking C library call to initialize TIDL import
-        _tidlImportInit = self.import_lib.tidlImportInit
-        _tidlImportInit.argtypes = (ctypes.POINTER(TIDLconfigParams), ctypes.c_char_p)
-        _tidlImportInit.restype = None
-        _tidlImportInit(config_params, layout)
+        import_lib_init = self.import_lib.tidlImportInit
+        import_lib_init.argtypes = (ctypes.POINTER(TIDLconfigParams), ctypes.c_char_p)
+        import_lib_init.restype = None
+        import_lib_init(config_params, layout)
 
         return True
 
@@ -1374,69 +1378,69 @@ class TIDLImport:
         elif this_node.op.name == 'nn.bias_add':
             status = self.tidl_import_bias_add(this_node)
         elif this_node.op.name == 'clip':
-            _tidlImportRelu = self.import_lib.tidlImportRelu
-            _tidlImportRelu.argtype = (ctypes.c_char_p)
-            _tidlImportRelu.restype = None
-            _tidlImportRelu(b'Relu6')
+            import_lib_relu = self.import_lib.tidlImportRelu
+            import_lib_relu.argtype = (ctypes.c_char_p)
+            import_lib_relu.restype = None
+            import_lib_relu(b'Relu6')
         elif this_node.op.name == 'nn.relu':
-            _tidlImportRelu = self.import_lib.tidlImportRelu
-            _tidlImportRelu.argtype = (ctypes.c_char_p)
-            _tidlImportRelu.restype = None
-            _tidlImportRelu(b'Relu')
+            import_lib_relu = self.import_lib.tidlImportRelu
+            import_lib_relu.argtype = (ctypes.c_char_p)
+            import_lib_relu.restype = None
+            import_lib_relu(b'Relu')
         elif this_node.op.name == 'nn.batch_norm':
             status = self.tidl_import_batch_norm(this_node, params)
         elif this_node.op.name == 'nn.avg_pool2d':
-            status = self.tidl_import_pooling(this_node, b'avg_pool2d')
+            status = self.tidl_import_pooling(this_node)
         elif this_node.op.name == 'squeeze':
-            _tidlImportSqueeze = self.import_lib.tidlImportSqueeze
-            _tidlImportSqueeze.argtype = None
-            _tidlImportSqueeze.restype = None
-            _tidlImportSqueeze()
+            import_lib_squeeze = self.import_lib.tidlImportSqueeze
+            import_lib_squeeze.argtype = None
+            import_lib_squeeze.restype = None
+            import_lib_squeeze()
         elif this_node.op.name == 'reshape':
-            _tidlImportReshape = self.import_lib.tidlImportReshape
-            _tidlImportReshape.argtype = None
-            _tidlImportReshape.restype = None
-            _tidlImportReshape()
+            import_lib_reshape = self.import_lib.tidlImportReshape
+            import_lib_reshape.argtype = None
+            import_lib_reshape.restype = None
+            import_lib_reshape()
         elif this_node.op.name == 'nn.softmax':
-            _tidlImportSoftmax = self.import_lib.tidlImportSoftmax
-            _tidlImportSoftmax.argtype = None
-            _tidlImportSoftmax.restype = None
-            _tidlImportSoftmax()
+            import_lib_softmax = self.import_lib.tidlImportSoftmax
+            import_lib_softmax.argtype = None
+            import_lib_softmax.restype = None
+            import_lib_softmax()
         elif this_node.op.name == 'concatenate':
             status = self.tidl_import_concat(all_nodes, this_node)
         elif this_node.op.name == 'nn.max_pool2d':
-            status = self.tidl_import_pooling(this_node, b'max_pool2d')
+            status = self.tidl_import_pooling(this_node)
         elif this_node.op.name == 'nn.dropout':
-            _tidlImportDropOut = self.import_lib.tidlImportDropOut
-            _tidlImportDropOut.argtype = None
-            _tidlImportDropOut.restype = None
-            _tidlImportDropOut()
+            import_lib_dropout = self.import_lib.tidlImportDropOut
+            import_lib_dropout.argtype = None
+            import_lib_dropout.restype = None
+            import_lib_dropout()
         elif this_node.op.name == 'nn.global_avg_pool2d':
-            status = self.tidl_import_pooling(this_node, b'avg_pool2d')
+            status = self.tidl_import_pooling(this_node)
         elif this_node.op.name == 'nn.batch_flatten':
-            _tidlImportBatchFlatten = self.import_lib.tidlImportBatchFlatten
-            _tidlImportBatchFlatten.argtype = None
-            _tidlImportBatchFlatten.restype = None
-            _tidlImportBatchFlatten()
+            import_lib_flatten = self.import_lib.tidlImportBatchFlatten
+            import_lib_flatten.argtype = None
+            import_lib_flatten.restype = None
+            import_lib_flatten()
         elif this_node.op.name == 'multiply':
-            self.tidl_import_mul(this_node)
+            status = self.tidl_import_mul(this_node)
         elif this_node.op.name == 'nn.dense':
-            self.tidl_import_dense(this_node)
+            status = self.tidl_import_dense(this_node)
         else:
             print("Operator " + this_node.op.name + " is not supported by TIDL!")
             status = False
 
-        if status == False:
+        if not status:
             return False
 
         # Common for all nodes:
         # fill tensor names, update consumer counts, link input/output tensors
         in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target)
 
-        _tidlImportLinkNodes = self.import_lib.tidlImportLinkNodes
-        _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-        _tidlImportLinkNodes.restype = ctypes.c_int
-        if _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+        import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
+        import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+        import_lib_link_nodes.restype = ctypes.c_int
+        if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
             return False
 
         return True
@@ -1445,7 +1449,7 @@ class TIDLImport:
         """
         """
 
-        MAX_NUM_OUTPUTS_PER_DATA_LAYER = 16
+        max_num_outputs_per_data_layer = 16
         out_nodes = find_out_nodes(all_nodes, node)
         if len(out_nodes) == 0:
             # this is the last node of the graph - import this to out data layer
@@ -1453,17 +1457,17 @@ class TIDLImport:
             imported_nodes = 0
             new_node_ind = len(all_nodes)+1
             while imported_nodes < len(in_nodes):
-                if len(in_nodes) - imported_nodes < MAX_NUM_OUTPUTS_PER_DATA_LAYER:
+                if len(in_nodes) - imported_nodes < max_num_outputs_per_data_layer:
                     nodes_for_this_data_layer = len(in_nodes) - imported_nodes
                     this_is_the_last_one = True
                 else:
-                    nodes_for_this_data_layer = MAX_NUM_OUTPUTS_PER_DATA_LAYER
+                    nodes_for_this_data_layer = max_num_outputs_per_data_layer
                     this_is_the_last_one = False
 
-                _tidlImportOutData = self.import_lib.tidlImportOutData
-                _tidlImportOutData.argtype = ctypes.c_int
-                _tidlImportOutData.restype = None
-                _tidlImportOutData(nodes_for_this_data_layer)
+                import_lib_out_data = self.import_lib.tidlImportOutData
+                import_lib_out_data.argtype = ctypes.c_int
+                import_lib_out_data.restype = None
+                import_lib_out_data(nodes_for_this_data_layer)
 
                 # prepare input/output nodes information for linking
                 in_out_nodes = InOutNodes()    # instantiate structure
@@ -1476,15 +1480,15 @@ class TIDLImport:
                 in_out_nodes.out_nodes = None
                 in_out_nodes.num_out_nodes = 0
 
-                _tidlImportLinkNodes = self.import_lib.tidlImportLinkNodes
-                _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-                _tidlImportLinkNodes.restype = ctypes.c_int
-                if _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+                import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
+                import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+                import_lib_link_nodes.restype = ctypes.c_int
+                if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
                     return False
 
                 imported_nodes = imported_nodes + nodes_for_this_data_layer
                 new_node_ind = new_node_ind + 1
-                if this_is_the_last_one == True:
+                if this_is_the_last_one:
                     break
             return True
         else:
@@ -1539,22 +1543,21 @@ class TIDLImport:
                 return False
 
             # Quantize input tensor into 8-bit integer (only support 1 input tensor)
-            input_quant_vec, input_scale, input_signed = tensor_quant_flatten(input_fp[0], 
+            input_quant_vec, input_scale, input_signed = tensor_quant_flatten(input_fp[0],
                                                                               self.data_layout)
 
             # Initialize TIDL import
-            if self.tidl_import_init(input_scale, input_signed, input_fp[0].shape) == False:
+            if not self.tidl_import_init(input_scale, input_signed, input_fp[0].shape):
                 return False
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
-            # TODO: change this and _tidlImportOptimize to a function
             all_nodes_tidl = {}
-            relay.analysis.post_order_visit(mod[tidl_subgraph], 
+            relay.analysis.post_order_visit(mod[tidl_subgraph],
                                             lambda node: traverse_expr(node, all_nodes_tidl))
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params)
-                    if result == False:
+                    if not result:
                         return False
 
             # Import expr.Tuple node after importing all expr.call nodes
@@ -1562,7 +1565,7 @@ class TIDLImport:
                 if isinstance(node, relay.expr.Tuple):
                     #node.fields: array of expr.call nodes
                     result = self.tidl_import_tuple_node(all_nodes_tidl, node)
-                    if result == False:
+                    if not result:
                         print('Error importing output tuple node')
                         return False
 
@@ -1572,20 +1575,20 @@ class TIDLImport:
             par_file = os.path.join(self.artifacts_folder,
                                     'tidl_subgraph'+str(subgraph_id)+'_params.bin')
 
-            _tidlImportOptimize = self.import_lib.tidlImportOptimize
-            _tidlImportOptimize.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
-            _tidlImportOptimize.restype = ctypes.c_int
+            import_lib_optimize = self.import_lib.tidlImportOptimize
+            import_lib_optimize.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
+            import_lib_optimize.restype = ctypes.c_int
             net_fname = net_file.encode('utf-8')
             par_fname = par_file.encode('utf-8')
 
-            if _tidlImportOptimize(net_fname, par_fname, subgraph_id) == 0:
+            if import_lib_optimize(net_fname, par_fname, subgraph_id) == 0:
                 print('TIDL import optimization failed')
                 return False
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, input_quant_vec,
                                                       input_signed, net_file, par_file)
-            if status == False:
+            if not status:
                 return False
 
             # Calculate scaling factor to convert output tensor to floating point
@@ -1609,7 +1612,6 @@ class TIDLImport:
             subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
                              input_scale, input_signed, output_scale, output_signed)
         return True
-
 
 
 class TIDLCompiler:
@@ -1696,13 +1698,12 @@ class TIDLCompiler:
         mod = transform.AnnotateTarget(self.tidl_target)(mod)
         mod = transform.MergeCompilerRegions()(mod)
         mod = transform.PartitionGraph()(mod)
-        mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=self.tidl_target)
-        mod = ReduceSubgraphSize(mod, max_num_layers=self.max_num_layers,
-                                 max_total_memory_mb=self.max_total_memory_mb/batch_size,
-                                 compiler=self.tidl_target)
-        mod = UnpackComposites(mod)
-        mod = PruneSubgraphs(mod, compiler=self.tidl_target,
-                             num_subgraphs_to_keep=self.num_tidl_subgraphs)
+        mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
+        mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
+                                   max_total_memory_mb=self.max_total_memory_mb/batch_size)
+        mod = unpack_composites(mod)
+        mod = prune_subgraphs(mod, compiler=self.tidl_target,
+                              num_subgraphs_to_keep=self.num_tidl_subgraphs)
 
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
