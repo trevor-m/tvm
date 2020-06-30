@@ -19,8 +19,6 @@
 """
 from topi.util import get_const_tuple
 from tvm import relay
-from tvm.relay.frontend.common import infer_shape
-from tvm.relay.frontend.common import infer_type
 import tvm.ir
 from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 
@@ -233,9 +231,9 @@ def _argmax_whitelist_fn(attrs, args):
     keepdims = attrs.keepdims
     exclude = attrs.exclude
     axis = attrs.axis
-    # is checked_type.shape always guaranteed to be there?
     data = args[0]
-    supported = (int(infer_shape(data)[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
+    data_shape = data.checked_type.shape
+    supported = (int(data_shape[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
     return supported
 
 @tvm.ir.register_op_attr("nn.avg_pool2d", "target.tidl")
@@ -248,15 +246,16 @@ def _avg_pool_whitelist_fn(attrs, args):
 @tvm.ir.register_op_attr("nn.batch_flatten", "target.tidl")
 def _batch_flatten_fn(attrs, args):
     data = args[0]
-    if len(infer_shape(data)) == 4:
-        supported = (int(infer_shape(data)[2]) <= 65535 and int(infer_shape(data)[3]) <= 65535)
+    data_shape = data.checked_type.shape
+    if len(data_shape) == 4:
+        supported = (int(data_shape[2]) <= 65535 and int(data_shape[3]) <= 65535)
     else:
         supported = True
     return supported
 
 @tvm.ir.register_op_attr("nn.batch_norm", "target.tidl")
 def _batch_norm_whitelist_fn(attrs, args):
-    data1 = infer_type(args[1])
+    data1 = args[1]
     if data1.checked_type.dtype != 'float32':
         supported = False
     elif attrs.axis != 1 and attrs.axis != 3:
@@ -284,11 +283,11 @@ def _concatenate_whitelist_fn(attrs, args):
 
 @tvm.ir.register_op_attr("nn.conv2d", "target.tidl")
 def _conv2d_whitelist_fn(attrs, args):
-    weight = infer_type(args[1])
+    weight = args[1]
     if weight.checked_type.dtype != 'float32':
         return False
 
-    weight_shape = get_const_tuple(infer_shape(weight))
+    weight_shape = weight.data.shape
     strides = get_const_tuple(attrs.strides)
     dilation = get_const_tuple(attrs.dilation)
     kernel_size = get_const_tuple(attrs.kernel_size)
@@ -309,7 +308,7 @@ def _conv2d_whitelist_fn(attrs, args):
 @tvm.ir.register_op_attr("nn.conv2d_transpose", "target.tidl")
 def _conv2d_transpose_whitelist_fn(attrs, args):
     weight = args[1]
-    weight_shape = get_const_tuple(infer_shape(weight))
+    weight_shape = weight.data.shape
     strides = get_const_tuple(attrs.strides)
     groups = attrs.groups
     supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) \
@@ -320,8 +319,7 @@ def _conv2d_transpose_whitelist_fn(attrs, args):
 def _dense_whitelist_fn(attrs, args):
     weight = args[1]
 
-    #weight_shape = get_const_tuple(weight.checked_type.shape)
-    weight_shape = infer_shape(weight)
+    weight_shape = weight.data.shape
     w_in = weight_shape[1]
     w_out = weight_shape[0]
     supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)

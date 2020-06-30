@@ -18,6 +18,7 @@
 
 import os
 import numpy as np
+import pytest
 from tvm import relay
 from tvm.contrib.download import download_testdata
 from tvm.relay.backend.contrib import tidl
@@ -105,7 +106,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     print("Artifacts can be found at " + tidl_artifacts_folder)
     return status
 
-def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", batch_size=1):
+def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", batch_size=4):
     try:
         from gluoncv import model_zoo, data
 
@@ -154,6 +155,7 @@ def test_tidl_object_detection():
         #======================== Load and compile the model ========================
         gluoncv_compile_model(model_name, img_file, img_size=image_size)
 
+@pytest.mark.skip('skip because of incompatible gluoncv version')
 def test_tidl_segmentation():
     model_name = 'mask_rcnn_resnet18_v1b_coco'
 

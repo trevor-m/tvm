@@ -32,7 +32,7 @@ from tvm.relay.function import Function
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
-from tvm.relay.op.contrib import tidl
+import tvm.relay.op.contrib.tidl as tidl_annotation
 
 
 def traverse_expr(node, node_dict):
@@ -1368,7 +1368,7 @@ class TIDLImport:
             status = self.tidl_import_pad(this_node)
         elif this_node.op.name == 'add':
             if isinstance(this_node.args[1], tvm.relay.expr.Constant):
-                status = self.tidl_import_bias_add(this_node, params)
+                status = self.tidl_import_bias_add(this_node)
             else:
                 status = self.tidl_import_add()
         elif this_node.op.name == 'nn.bias_add':
@@ -1634,7 +1634,7 @@ class TIDLCompiler:
             Folder to hold TIDL artifacts
     """
 
-    def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=128, **kwargs):
+    def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
         if platform == "AM57" and version >= (6, 3):
             # Set default values for AM57 6.3
             self.tidl_target = "tidl"
@@ -1686,17 +1686,19 @@ class TIDLCompiler:
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
 
-        #============= Find data layout =============
+        #============= Find data layout and batch size =============
         data_layout = find_data_layout(mod)
+        input_data = list(graph_input.values())[0]
+        batch_size = input_data.shape[0]
 
         #============= Annotation and graph partition ==============
-        mod = tidl._merge_sequential_ops(mod)
+        mod = tidl_annotation._merge_sequential_ops(mod)
         mod = transform.AnnotateTarget(self.tidl_target)(mod)
         mod = transform.MergeCompilerRegions()(mod)
         mod = transform.PartitionGraph()(mod)
         mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=self.tidl_target)
         mod = ReduceSubgraphSize(mod, max_num_layers=self.max_num_layers,
-                                 max_total_memory_mb=self.max_total_memory_mb,
+                                 max_total_memory_mb=self.max_total_memory_mb/batch_size,
                                  compiler=self.tidl_target)
         mod = UnpackComposites(mod)
         mod = PruneSubgraphs(mod, compiler=self.tidl_target,
