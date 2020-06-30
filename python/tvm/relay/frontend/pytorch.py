@@ -52,7 +52,7 @@ def _infer_type_with_prelude(val, prelude):
 def _convert_to_list_adt(py_lst, prelude):
     elem_tys = [_infer_type_with_prelude(elem, prelude) for elem in py_lst]
     msg = "List elements should have identical types"
-    assert all(map(lambda ty: ty == elem_tys[0], elem_tys)), msg
+    #assert all(map(lambda ty: ty == elem_tys[0], elem_tys)), msg
 
     adt_lst = prelude.nil()
     for elem in reversed(py_lst):
@@ -103,7 +103,7 @@ def _should_construct_dynamic_list(list_construct_node):
 
     op_names = map(inplace_add_to_add, set(use.user.kind() for use in uses))
 
-    list_ops = set(["aten::add", "aten::__getitem__", "aten::stack"])
+    list_ops = set(["aten::add", "aten::__getitem__", "aten::stack", "aten::index"])
     intersect = list_ops.intersection(op_names)
 
     if len(intersect) > 0 and intersect != set(["aten::add"]):
@@ -2030,6 +2030,7 @@ def _get_convert_map(prelude):
         "aten::__getitem__"                     : _list_getitem(prelude),
         "aten::len"                             : _list_len(prelude),
         "aten::type_as"                         : _type_as(),
+        "aten::index"                           : _list_getitem(prelude),
     }
     return convert_map
 
@@ -2610,7 +2611,7 @@ def from_pytorch(script_module, input_shapes, custom_convert_map=None, default_d
         convert_map.update(custom_convert_map)
 
     op_names = get_all_op_names(graph)
-    _report_missing_conversion(op_names, convert_map)
+    #_report_missing_conversion(op_names, convert_map)
 
     is_module = isinstance(script_module, torch.jit.ScriptModule)
     params = script_module.state_dict() if is_module else {}
