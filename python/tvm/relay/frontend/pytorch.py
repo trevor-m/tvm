@@ -193,13 +193,6 @@ def _arange():
             msg = "Unknown number of arguments (%d) to parse." % (len(inputs))
             raise AssertionError(msg)
 
-        # Hack to fix shape inference for arange
-        # Call foldconstant on input
-        mod = tvm.IRModule()
-        mod["main"] = stop
-        mod = tvm.relay.transform.FoldConstant()(mod)
-        stop = mod["main"].body
-
         return _op.transform.arange(start=start,
                                     stop=stop,
                                     step=step,
@@ -1906,6 +1899,7 @@ def _get_convert_map(prelude):
         "aten::split"                           : _split(),
         "aten::split_with_sizes"                : _split_with_sizes(),
         "aten::select"                          : _select(),
+        "aten::index_select"                    : _select(),
         "aten::take"                            : _take(),
         "aten::where"                           : _where(),
         "aten::topk"                            : _topk(),
@@ -2006,7 +2000,9 @@ def _get_convert_map(prelude):
         "aten::isinf"                           : _unary("isinf"),
         "aten::isnan"                           : _unary("isnan"),
         "aten::clamp"                           : _clamp(),
+        "aten::clamp_"                          : _clamp(),
         "aten::detach"                          : _identity(),
+        "aten::copy_"                           : _identity(),
         "aten::upsample_bilinear2d"             : _upsample("bilinear", prelude),
         "aten::upsample_nearest2d"              : _upsample("nearest_neighbor", prelude),
         "aten::upsample_trilinear3d"            : _upsample3d("trilinear"),
