@@ -193,6 +193,13 @@ def _arange():
             msg = "Unknown number of arguments (%d) to parse." % (len(inputs))
             raise AssertionError(msg)
 
+        # Hack to fix shape inference for arange
+        # Call foldconstant on input
+        mod = tvm.IRModule()
+        mod["main"] = stop
+        mod = tvm.relay.transform.FoldConstant()(mod)
+        stop = mod["main"].body
+
         return _op.transform.arange(start=start,
                                     stop=stop,
                                     step=step,
@@ -246,13 +253,13 @@ def _concatenate(prelude):
         return _op.tensor.concatenate(data, int(axis))
     return _impl
 
-def _slice():
+def _slice(prelude):
     def _impl(inputs, input_types):
         data = inputs[0]
         strides = []
 
         if isinstance(data, _expr.Expr):
-            inferred_shape = _infer_shape(data)
+            inferred_shape = _infer_shape(data, prelude.mod)
             end = []
             for infer in inferred_shape:
                 end.append(int(infer))
@@ -1895,7 +1902,7 @@ def _get_convert_map(prelude):
         "aten::squeeze"                         : _squeeze(),
         "aten::unsqueeze"                       : _unsqueeze(),
         "aten::cat"                             : _concatenate(prelude),
-        "aten::slice"                           : _slice(),
+        "aten::slice"                           : _slice(prelude),
         "aten::split"                           : _split(),
         "aten::split_with_sizes"                : _split_with_sizes(),
         "aten::select"                          : _select(),
