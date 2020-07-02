@@ -23,6 +23,7 @@ import shutil
 import ctypes
 import _ctypes
 import re
+import functools
 import numpy as np
 from topi.util import get_const_tuple
 import tvm
@@ -1273,8 +1274,8 @@ class TIDLImport:
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
-            relay.analysis.post_order_visit(mod[tidl_subgraph],
-                                            lambda node: traverse_expr(node, all_nodes_tidl))
+            traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
+            relay.analysis.post_order_visit(mod[tidl_subgraph], traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params)
