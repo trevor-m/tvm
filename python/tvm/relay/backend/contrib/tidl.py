@@ -28,7 +28,7 @@ import numpy as np
 from topi.util import get_const_tuple
 import tvm
 from tvm import relay
-from tvm.relay.expr_functor import ExprMutator, ExprVisitor
+from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
 from tvm.relay import transform
@@ -197,11 +197,11 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
 
 def tensor_quant_flatten(input_tensor, data_layout):
     r""" Convert float32 n-d array to int8 or uint8 1-d array
+
     Parameters
     ----------
-    input: float32 array
+    input_tensor: float32 array
     data_layout: "NCHW" or "NHWC"
-    output: 1 dimension int8 or uint8 array
     """
 
     # only use 1 batch for calibration
@@ -563,7 +563,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
 def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, params_file):
-
+    """ Run TIDL calibation for the imported subgraph.
+    """
     # Prepare for calibration
     temp_folder = './tempDir/'
     if os.path.isdir(temp_folder):
@@ -633,7 +634,7 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
     else:
         print("TIDL calibration failed.")
         print(error)
-        status, out_data_q =  False, None
+        status, out_data_q = False, None
 
     return status, out_data_q
 
