@@ -16,3 +16,4 @@
 # under the License.
 """Backend contrib modules."""
 from .tidl import *
+from .tidl_reduce_subgraph_size import *
