@@ -23,6 +23,7 @@ import shutil
 import ctypes
 import _ctypes
 import re
+import functools
 import numpy as np
 from topi.util import get_const_tuple
 import tvm
@@ -46,7 +47,8 @@ def traverse_expr(node, node_dict):
 
 def find_data_layout(mod):
     all_nodes = {}
-    relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, all_nodes))
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
     data_layout = None
     for node in all_nodes:
         if isinstance(node, relay.expr.Call) and node.op.name == 'nn.conv2d':
@@ -123,15 +125,14 @@ def find_out_nodes(all_nodes, this_node):
             if this_node == node.tuple_value:
                 output_nodes = output_nodes + find_out_nodes(all_nodes, node)
         elif isinstance(node, relay.expr.Tuple):
-            for i in range(len(node.fields)):
-                if this_node == node.fields[i]:
-                    tuple_node_outs = find_out_nodes(all_nodes, node)
-                    if len(tuple_node_outs) == 0:
-                        # this is an output node
-                        output_nodes.append(all_nodes[node])
-                    else:
-                        # this is an input node to another node
-                        output_nodes = output_nodes + tuple_node_outs
+            if this_node in node.fields:
+                tuple_node_outs = find_out_nodes(all_nodes, node)
+                if len(tuple_node_outs) == 0:
+                    # this is an output node
+                    output_nodes.append(all_nodes[node])
+                else:
+                    # this is an input node to another node
+                    output_nodes = output_nodes + tuple_node_outs
 
     return output_nodes
 
@@ -543,11 +544,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         layout_is_nchw = 1
     else:
         layout_is_nchw = 0
-    out_conv_type = []
-    out_is_nchw = []
-    for _ in range(len(output_scale)):
-        out_conv_type.append(0)
-        out_is_nchw.append(layout_is_nchw)
+    out_conv_type = [0 for i in range(len(output_scale))]
+    out_is_nchw = [layout_is_nchw for i in range(len(output_scale))]
 
     sub_graph_cfg = os.path.join(artifacts_folder, "subgraph" + str(subgraph_id) + ".cfg")
     sub_graph_net_file = "./tidl_subgraph" + str(subgraph_id) + "_net.bin"
@@ -619,7 +617,7 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
         out_buf_ind = console_out.rfind(output_data_token)
         if out_buf_ind == -1:
             print("TIDL calibration failed - can't find number of output buffers.")
-            return False, None
+            status, out_data_q = False, None
         else:
             last_line = console_out.split(output_data_token, 1)[1]
             num_outputs = int(last_line.split(". Output dataQ:", 1)[0])
@@ -629,13 +627,15 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
             outq = list(map(int, outq_str))
             if num_outputs != len(outq):
                 print("TIDL calibration failed - can't find all outputQ's")
-                return False, None
+                status, out_data_q = False, None
             else:
-                return True, outq
+                status, out_data_q = True, outq
     else:
         print("TIDL calibration failed.")
         print(error)
-        return False, None
+        status, out_data_q =  False, None
+
+    return status, out_data_q
 
 class TIDLconfigParams(ctypes.Structure):
     """ TIDL config parameters defined in ctypes for passing to TIDL C library """
@@ -646,7 +646,6 @@ class TIDLconfigParams(ctypes.Structure):
                 ('inNumChannels', ctypes.c_int),
                 ('inHeight', ctypes.c_int),
                 ('inWidth', ctypes.c_int)]
-
 
 class Conv2dParams(ctypes.Structure):
     """ Conv2d parameters defined in ctypes for passing to TIDL C library """
@@ -676,12 +675,12 @@ class BatchNormParams(ctypes.Structure):
 
 class PoolingParams(ctypes.Structure):
     """ Pooling parameters defined in ctypes for passing to TIDL C library """
-    _fields_ = [('kernelH', ctypes.c_int),
-                ('kernelW', ctypes.c_int),
-                ('strideH', ctypes.c_int),
-                ('strideW', ctypes.c_int),
-                ('padH', ctypes.c_int),
-                ('padW', ctypes.c_int)]
+    _fields_ = [('kernel_h', ctypes.c_int),
+                ('kernel_w', ctypes.c_int),
+                ('stride_h', ctypes.c_int),
+                ('stride_w', ctypes.c_int),
+                ('pad_h', ctypes.c_int),
+                ('pad_w', ctypes.c_int)]
 
 class MulParams(ctypes.Structure):
     _fields_ = [('scale', ctypes.c_float)]
@@ -821,8 +820,8 @@ class TIDLImport:
         """
 
         pad_width = []
-        for i in range(len(node.attrs.pad_width)):
-            pad_width.append(get_const_tuple(node.attrs.pad_width[i]))
+        for width in node.attrs.pad_width:
+            pad_width.append(get_const_tuple(width))
         pad_list = [x for xs in pad_width for x in xs]
 
         # convert list to numpy array in order to pass to C library
@@ -960,16 +959,16 @@ class TIDLImport:
 
         pooling_params = PoolingParams()
         if node.op.name == "nn.global_avg_pool2d":
-            pooling_params.kernelH = pooling_params.kernelW = 0
-            pooling_params.padH = pooling_params.padW = 0
-            pooling_params.strideH = pooling_params.strideW = 1
+            pooling_params.kernel_h = pooling_params.kernel_w = 0
+            pooling_params.pad_h = pooling_params.pad_w = 0
+            pooling_params.stride_h = pooling_params.stride_w = 1
         else:
-            (pooling_params.kernelH, pooling_params.kernelW) = node.attrs.pool_size
-            (pooling_params.strideH, pooling_params.strideW) = node.attrs.strides
+            (pooling_params.kernel_h, pooling_params.kernel_w) = node.attrs.pool_size
+            (pooling_params.stride_h, pooling_params.stride_w) = node.attrs.strides
             if len(node.attrs.padding) == 4:
-                (pooling_params.padH, pooling_params.padW) = node.attrs.padding[2:4]
+                (pooling_params.pad_h, pooling_params.pad_w) = node.attrs.padding[2:4]
             else:
-                (pooling_params.padH, pooling_params.padW) = node.attrs.padding
+                (pooling_params.pad_h, pooling_params.pad_w) = node.attrs.padding
 
         if node.op.name == "nn.avg_pool2d" or node.op.name == "nn.global_avg_pool2d":
             pooling_type = b'avg_pool2d'
@@ -1167,7 +1166,9 @@ class TIDLImport:
         return True
 
     def tidl_import_tuple_node(self, all_nodes, node):
-        """
+        """ Importing a Relay tuple node, e.g. (%232, %279, %283, %274).
+            If this node is the last node, import it to TIDL output data layer.
+            If this node is not the last node, do nothing.
         """
 
         max_num_outputs_per_data_layer = 16
@@ -1176,7 +1177,8 @@ class TIDLImport:
             # this is the last node of the graph - import this to out data layer
             in_nodes = find_in_nodes(all_nodes, node, self.tidl_target)
             imported_nodes = 0
-            new_node_ind = len(all_nodes)+1
+            new_node_ind = len(all_nodes) + 1
+            status = True
             while imported_nodes < len(in_nodes):
                 if len(in_nodes) - imported_nodes < max_num_outputs_per_data_layer:
                     nodes_for_this_data_layer = len(in_nodes) - imported_nodes
@@ -1205,18 +1207,20 @@ class TIDLImport:
                 import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
                 import_lib_link_nodes.restype = ctypes.c_int
                 if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
-                    return False
+                    status = False
+                    break
 
                 imported_nodes = imported_nodes + nodes_for_this_data_layer
                 new_node_ind = new_node_ind + 1
                 if this_is_the_last_one:
                     break
-            return True
         else:
             # this is not the last node of the graph - ignore it
-            return True
+            status = True
 
-    def ImportRelayIR(self, mod, params, subgraph_tensors):
+        return status
+
+    def import_relay_ir(self, mod, params, subgraph_tensors):
         r""" Relay IR import to TIDL
 
         Parameters
@@ -1236,8 +1240,8 @@ class TIDLImport:
 
         # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
         all_nodes_main = {}
-        relay.analysis.post_order_visit(mod['main'],
-                                        lambda node: traverse_expr(node, all_nodes_main))
+        traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
+        relay.analysis.post_order_visit(mod['main'], traverse_func)
         tidl_subgraphs = []
         for node in all_nodes_main:
             if isinstance(node, relay.expr.GlobalVar):
@@ -1273,8 +1277,8 @@ class TIDLImport:
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
-            relay.analysis.post_order_visit(mod[tidl_subgraph],
-                                            lambda node: traverse_expr(node, all_nodes_tidl))
+            traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
+            relay.analysis.post_order_visit(mod[tidl_subgraph], traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params)
@@ -1323,11 +1327,12 @@ class TIDLImport:
                 return False
             output_signed = []
             output_scale = []
-            for i in range(len(output_fp)):
-                output_signed.append(int(np.amin(output_fp[i]) < 0))
-            for i in range(len(out_data_q)):
+            for tensor in output_fp:
+                # Find out if this output tensor is signed or unsigned
+                output_signed.append(int(np.amin(tensor) < 0))
+            for data_q in out_data_q:
                 # Change data Q to scale - 255 is TIDL implementation specific
-                output_scale.append(round(out_data_q[i]/255.0, 5))
+                output_scale.append(round(data_q/255.0, 5))
 
             # Generate subgraph configuration file
             subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
@@ -1437,18 +1442,20 @@ class TIDLCompiler:
                 import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
                 tidl_import = TIDLImport(import_lib, tidl_calib_tool, self.artifacts_folder,
                                          self.tidl_target, data_layout)
-                import_success = tidl_import.ImportRelayIR(mod, params, subgraph_tensors)
+                import_success = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
                 if import_success:
                     print("TIDL import of Relay IR graph succeeded.")
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
-                    return mod, 1        # TIDL Compilation success
+                    mod_final, status = mod, 1        # TIDL Compilation success
                 else:
                     print("TIDL import of Relay IR graph failed.")
-                    return mod_orig, -1  # TIDL Compilation failure
+                    mod_final, status = mod_orig, -1  # TIDL Compilation failure
             else:
                 print("TIDL tools do not exist. TIDL import skipped.")
-                return mod_orig, 0       # No TIDL compilation
+                mod_final, status = mod_orig, 0       # No TIDL compilation
         else:
             print("TIDL tools path is not set. TIDL import skipped.")
-            return mod_orig, 0           # No TIDL compilation
+            mod_final, status = mod_orig, 0           # No TIDL compilation
+
+        return mod_final, status
