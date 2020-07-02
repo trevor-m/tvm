@@ -16,23 +16,11 @@
 # under the License.
 """TIDL backend compiler"""
 
-import os
-import sys
-import subprocess
-import shutil
-import ctypes
-import _ctypes
-import re
 import numpy as np
-from topi.util import get_const_tuple
 import tvm
 from tvm import relay
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
-from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
-from tvm.relay import transform
-from tvm.relay.build_module import bind_params_by_name
-from tvm.contrib import graph_runtime
 
 class SubgraphSizeCounter(ExprVisitor):
     """
@@ -73,10 +61,10 @@ class ExprReplacer(ExprMutator):
             return self.call_map[call]
         return super().visit_call(call)
 
-    def visit_tuple_getitem(self, t):
-        if t in self.call_map:
-            return self.call_map[t]
-        return super().visit_tuple_getitem(t)
+    def visit_tuple_getitem(self, op):
+        if op in self.call_map:
+            return self.call_map[op]
+        return super().visit_tuple_getitem(op)
 
     def visit_tuple(self, tup):
         if tup in self.call_map:
@@ -190,7 +178,7 @@ class SubgraphReducer(ExprMutator):
         self.reduced = False
 
     def visit_call(self, call):
-        if isinstance(call.op, GlobalVar):
+        if isinstance(call.op, tvm.relay.expr.GlobalVar):
             name = call.op.name_hint
             if not self.mod[name].attrs or self.mod[name].attrs["Compiler"] != self.compiler:
                 return super().visit_call(call)
@@ -320,7 +308,7 @@ class SubgraphReducer(ExprMutator):
                 new_expr = ExprReplacer(call_map).visit(last_op)
 
                 return new_expr
-            elif name != "main":
+            if name != "main":
                 # Transfer subgraph to new mod without modifying
                 args = []
                 for arg in call.args:
