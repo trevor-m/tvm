@@ -365,8 +365,11 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
 
     @tvm.ir.register_op_attr("reshape", "target.tensorrt")
     def reshape_whitelist_fn(attrs, args): # pylint: disable=unused-variable
-        if any([x.checked_type.dtype != "float32" for x in args]):
+        if args[0].checked_type.dtype != "float32":
             print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if not isinstance(args[1], Constant):
+            print("reshape: New shape must be a constant.")
             return False
         if any([x < -1 for x in map(int, attrs.newshape)]):
             print("reshape: new shape dims must be explicit.")
