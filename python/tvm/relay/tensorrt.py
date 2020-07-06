@@ -43,6 +43,10 @@ class LegalizeLayoutTranform(ExprMutator):
                 return relay.transpose(visit.args[0], axes=[0, 2, 3, 1])
             elif src_layout == "NHWC" and dst_layout == "NCHW":
                 return relay.transpose(visit.args[0], axes=[0, 3, 1, 2])
+            elif src_layout == "NDHWC" and dst_layout == "NCDHW":
+                return relay.transpose(visit.args[0], axes=[0, 4, 1, 2, 3])
+            elif src_layout == "NCDHW" and dst_layout == "NDHWC":
+                return relay.transpose(visit.args[0], axes=[0, 2, 3, 4, 1])
             elif src_layout == "HWIO" and dst_layout == "OIHW":
                 return relay.transpose(visit.args[0], axes=[3, 2, 0, 1])
             elif src_layout == "HWOI" and dst_layout == "OIHW":
