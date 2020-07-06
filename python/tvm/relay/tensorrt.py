@@ -492,6 +492,51 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         # TODO(trevmorr): Output does not match TVM. Disable.
         return False
 
+    @tvm.ir.register_op_attr("nn.conv3d", "target.tensorrt")
+    def conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if trt_version < (6, 0, 1):
+            print("nn.conv3d: requires TensorRT version 6.0.1 or higher.")
+            return False
+        if attrs.data_layout != "NCDHW":
+            print("nn.conv2d: data_layout is {} but must be NCDHW.".format(attrs.data_layout))
+            return False
+        if attrs.kernel_layout != "OIDHW":
+            print("nn.conv2d: kernel_layout is {} but must be OIDHW.".format(attrs.kernel_layout))
+            return False
+        if attrs.out_layout and attrs.out_layout != "NCDHW":
+            print("nn.conv2d: out_layout is {} but must be NCDHW.".format(attrs.out_layout))
+            return False
+        return True
+
+    @tvm.ir.register_op_attr("nn.max_pool3d", "target.tensorrt")
+    def max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if trt_version < (6, 0, 1):
+            print("nn.max_pool3d: requires TensorRT version 6.0.1 or higher.")
+            return False
+        if attrs.layout != "NCDHW":
+            print("nn.max_pool3d: layout is {} but must be NCDHW.".format(attrs.layout))
+            return False
+        return True
+
+    @tvm.ir.register_op_attr("nn.avg_pool3d", "target.tensorrt")
+    def avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if trt_version < (6, 0, 1):
+            print("nn.avg_pool3d: requires TensorRT version 6.0.1 or higher.")
+            return False
+        if attrs.layout != "NCDHW":
+            print("nn.avg_pool3d: layout is {} but must be NCDHW.".format(attrs.layout))
+            return False
+        return True
+
 class VarReplacer(ExprMutator):
     """
     Visit an expression while replacing vars according to var_map. Used by
@@ -680,7 +725,8 @@ def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True,
                                     SimplifySliceLikePass(),
                                     RemoveDropoutPass(),
                                     transform.RemoveUnusedFunctions(),
-                                    transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']}),
+                                    transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default'],
+                                                             'nn.conv3d': ['NCDHW', 'default']}),
                                     transform.FoldConstant(),
                                     LegalizeLayoutTranformPass(),
                                     transform.AnnotateTarget('tensorrt'),
