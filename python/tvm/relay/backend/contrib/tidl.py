@@ -478,7 +478,7 @@ def prune_subgraphs_with_multiple_inputs(mod, compiler="tidl"):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
+def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_threshold=None):
     """Removes subgraphs from mod and returns them to the regular TVM compilation path.
     The subgraphs with the highest number of multiply-accumulates are kept.
 
@@ -490,6 +490,8 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
         Only subgraphs from this external codegen compiler will be modified.
     num_subgraphs_to_keep : int
         How many subgraphs to keep.
+    min_mac_threshold : int (optional)
+        If set, will also prune all subgraphs with # macs < the threshold.
 
     Returns
     -------
@@ -505,6 +507,9 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
         subgraph_with_macs.append([name, num_macs])
     subgraph_with_macs = sorted(subgraph_with_macs, key=lambda x: int(x[1]))
     subgraphs_to_remove = subgraph_with_macs[:-num_subgraphs_to_keep]
+    if min_mac_threshold:
+        # Also remove all subgraphs under the minimum threshold.
+        subgraphs_to_remove += [[x[0], x[1]] for x in subgraph_with_macs if x[1] < min_mac_threshold]
     subgraph_names_to_remove = {x[0] for x in subgraphs_to_remove}
     # Create new pruned module
     new_mod = tvm.IRModule()
@@ -1430,7 +1435,8 @@ class TIDLCompiler:
                                    max_total_memory_mb=self.max_total_memory_mb/batch_size)
         mod = unpack_composites(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
-                              num_subgraphs_to_keep=self.num_tidl_subgraphs)
+                              num_subgraphs_to_keep=self.num_tidl_subgraphs,
+                              min_mac_threshold=1)
 
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
