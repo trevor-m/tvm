@@ -117,6 +117,13 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(add_out)
         return relu_out
 
+    def _add_relu_checker(extract):
+        add = extract.args[0]
+        if any([isinstance(arg, tvm.relay.expr.Constant) for arg in add.args]):
+            # Can't add constant unless used like bias_add in a pattern such as "conv2d_add_relu".
+            return False
+        return True
+
     def _dense_relu_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         relu_out = is_op('nn.relu')(dense_out)
@@ -164,7 +171,7 @@ def _merge_sequential_ops(mod):
         ('tidl.conv2d_add', _conv2d_add_pattern()),
         ('tidl.conv2d_pad', _conv2d_pad_pattern()),
         ('tidl.bn_relu', _bn_relu_pattern()),
-        ('tidl.add_relu', _add_relu_pattern()),
+        ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
         ('tidl.dense_add_relu', _dense_add_relu_pattern()),
