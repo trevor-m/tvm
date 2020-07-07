@@ -351,6 +351,27 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
+@transform.function_pass(opt_level=0)
+class RemoveDropoutPass:
+    """
+    Removes all nn.dropout from an expr.
+    """
+
+    class RemoveDropout(ExprMutator):
+        """
+        Removes all nn.dropout from an expr.
+        """
+        def visit_tuple_getitem(self, expr):
+            visit = super().visit_tuple_getitem(expr)
+            if visit.index != 0:
+                return visit
+            elif isinstance(visit.tuple_value, tvm.relay.expr.Call) and visit.tuple_value.op.name == "nn.dropout":
+                return visit.tuple_value.args[0]
+            return visit
+
+    def transform_function(self, func, mod, _):
+        return self.RemoveDropout().visit(func)
+
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
@@ -1426,6 +1447,7 @@ class TIDLCompiler:
         batch_size = input_data.shape[0]
 
         #============= Annotation and graph partition ==============
+        mod = RemoveDropoutPass()(mod)
         mod = tidl_annotation._merge_sequential_ops(mod)
         mod = transform.AnnotateTarget(self.tidl_target)(mod)
         mod = transform.MergeCompilerRegions()(mod)
