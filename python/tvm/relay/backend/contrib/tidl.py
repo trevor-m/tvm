@@ -1459,6 +1459,8 @@ class TIDLCompiler:
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
                               min_mac_threshold=1)
+        with tvm.transform.PassContext(opt_level=3):
+            mod = tvm.transform.Sequential([relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})])(mod)
 
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
