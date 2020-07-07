@@ -103,6 +103,7 @@ GetOpConverters() {
   map->emplace("nn.conv3d", std::make_shared<Conv3DOpConverter>());
   map->emplace("nn.max_pool3d", std::make_shared<Pooling3DOpConverter>());
   map->emplace("nn.avg_pool3d", std::make_shared<Pooling3DOpConverter>());
+  map->emplace("nn.conv3d_transpose", std::make_shared<Conv3DTransposeOpConverter>());
 #endif
   return map;
 }

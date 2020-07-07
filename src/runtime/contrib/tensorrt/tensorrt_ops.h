@@ -964,6 +964,64 @@ class Conv2DTransposeOpConverter : public TrtOpConverter {
   }
 };
 
+#if TRT_VERSION_GE(6, 0, 1)
+class Conv3DTransposeOpConverter : public TrtOpConverter {
+ public:
+  Conv3DTransposeOpConverter() : TrtOpConverter({kTensor, kWeight}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input_tensor = params->inputs.at(0).tensor;
+    auto weight_shape = params->inputs.at(1).weight_shape;
+    const auto* attrs = params->call->attrs.as<Conv3DTransposeAttrs>();
+    CHECK_EQ(attrs->data_layout, "NCDHW");
+    CHECK(attrs->out_layout == "" || attrs->out_layout == "NCDHW");
+    CHECK_EQ(attrs->kernel_layout, "OIDHW");
+    CHECK(attrs->dilation[0].as<IntImmNode>()->value == 1 &&
+          attrs->dilation[1].as<IntImmNode>()->value == 1 &&
+          attrs->dilation[2].as<IntImmNode>()->value == 1);
+
+    nvinfer1::Dims prepadding, postpadding;
+    bool use_asymmetric_padding;
+    GetPadding3D(attrs->padding, &use_asymmetric_padding, &prepadding, &postpadding);
+
+    // Could use attrs->channels.as<IntImmNode>()->value
+    const int num_outputs = weight_shape[1];
+    const auto kernel_size = nvinfer1::Dims3(weight_shape[2], weight_shape[3], weight_shape[4]);
+    nvinfer1::Weights bias{nvinfer1::DataType::kFLOAT, nullptr, 0};
+    auto deconv_layer = params->network->addDeconvolutionNd(*input_tensor, num_outputs, kernel_size,
+                                                            params->inputs.at(1).weight, bias);
+    CHECK(deconv_layer != nullptr);
+    if (use_asymmetric_padding) {
+      deconv_layer->setPrePadding(prepadding);
+      deconv_layer->setPostPadding(postpadding);
+    } else {
+      deconv_layer->setPaddingNd(prepadding);
+    }
+    const auto strides = nvinfer1::Dims3(attrs->strides[0].as<IntImmNode>()->value,
+                                         attrs->strides[1].as<IntImmNode>()->value,
+                                         attrs->strides[2].as<IntImmNode>()->value);
+    deconv_layer->setStrideNd(strides);
+    deconv_layer->setNbGroups(attrs->groups);
+    nvinfer1::ITensor* output = deconv_layer->getOutput(0);
+    // Output padding.
+    if (attrs->output_padding.size()) {
+      GetPadding3D(attrs->output_padding, &use_asymmetric_padding, &prepadding, &postpadding);
+      // Are any post-padding values non-zero?
+      if (std::any_of(postpadding.d, postpadding.d + postpadding.nbDims,
+                      [](int x) { return x != 0; })) {
+        // TODO(trevmorr): TRT only supports 2-D padding, so this is currently not supported.
+        CHECK(false) << "TRT does not support padding on 3 dimensions.";
+        // Output padding for Conv2D transpose is always asymmetric and applied to post only.
+        prepadding = nvinfer1::Dims3(0, 0, 0);
+        auto pad_layer = params->network->addPaddingNd(*output, prepadding, postpadding);
+        output = pad_layer->getOutput(0);
+      }
+    }
+    params->outputs.push_back(output);
+  }
+};
+#endif  // TRT_VERSION_GE(6, 0, 1)
+
 class TransposeOpConverter : public TrtOpConverter {
  public:
   TransposeOpConverter() : TrtOpConverter({kTensor}) {}

@@ -343,6 +343,13 @@ def test_tensorrt_ops():
         f = relay.Function([x], out)
         return f, {'x': x_shape}, []
 
+    def test_conv3d_transpose(x_shape=(1, 32, 8, 8, 8), k_shape=(32, 16, 3, 3, 3), groups=1, padding=(0, 0, 0), strides=(1, 1, 1), output_padding=(0, 0, 0)):
+        x = relay.var('x', shape=(x_shape), dtype='float32')
+        kernel = relay.var('kernel', shape=(k_shape), dtype='float32')
+        out = relay.nn.conv3d_transpose(x, kernel, channels=k_shape[1], kernel_size=k_shape[2:5], groups=groups, padding=padding, strides=strides, output_padding=output_padding)
+        f = relay.Function([x, kernel], out)
+        return f, {'x': x_shape, 'kernel': k_shape}, ['kernel']
+
     run_and_verify(test_float_const())
     run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
@@ -433,6 +440,9 @@ def test_tensorrt_ops():
     run_and_verify(test_pool3d(relay.nn.max_pool3d))
     run_and_verify(test_pool3d(relay.nn.max_pool3d, padding=(0, 0, 0, 1, 1, 1)))
     run_and_verify(test_pool3d(relay.nn.max_pool3d, strides=(1, 1, 1)))
+    run_and_verify(test_conv3d_transpose())
+    # Verify that op is not converted because output_padding isn't supported by TRT.
+    run_and_verify(test_conv3d_transpose(output_padding=(1, 1, 1, 1, 1, 1)))
 
 def test_tensorrt_integration(test_all_models=False):
     if should_skip():

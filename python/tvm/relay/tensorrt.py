@@ -497,7 +497,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         return False
 
     @tvm.ir.register_op_attr("nn.conv3d", "target.tensorrt")
-    def conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+    def conv3d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if any([x.checked_type.dtype != "float32" for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
@@ -505,18 +505,18 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
             print("nn.conv3d: requires TensorRT version 6.0.1 or higher.")
             return False
         if attrs.data_layout != "NCDHW":
-            print("nn.conv2d: data_layout is {} but must be NCDHW.".format(attrs.data_layout))
+            print("nn.conv3d: data_layout is {} but must be NCDHW.".format(attrs.data_layout))
             return False
         if attrs.kernel_layout != "OIDHW":
-            print("nn.conv2d: kernel_layout is {} but must be OIDHW.".format(attrs.kernel_layout))
+            print("nn.conv3d: kernel_layout is {} but must be OIDHW.".format(attrs.kernel_layout))
             return False
         if attrs.out_layout and attrs.out_layout != "NCDHW":
-            print("nn.conv2d: out_layout is {} but must be NCDHW.".format(attrs.out_layout))
+            print("nn.conv3d: out_layout is {} but must be NCDHW.".format(attrs.out_layout))
             return False
         return True
 
     @tvm.ir.register_op_attr("nn.max_pool3d", "target.tensorrt")
-    def max_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+    def max_pool_3d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if any([x.checked_type.dtype != "float32" for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
@@ -529,7 +529,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         return True
 
     @tvm.ir.register_op_attr("nn.avg_pool3d", "target.tensorrt")
-    def avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+    def avg_pool_3d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         if any([x.checked_type.dtype != "float32" for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
@@ -538,6 +538,31 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
             return False
         if attrs.layout != "NCDHW":
             print("nn.avg_pool3d: layout is {} but must be NCDHW.".format(attrs.layout))
+            return False
+        return True
+
+    @tvm.ir.register_op_attr("nn.conv3d_transpose", "target.tensorrt")
+    def conv3d_transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if attrs.data_layout != "NCDHW":
+            print("nn.conv3d_transpose: data_layout is {} but must be NCDHW.".format(
+                attrs.data_layout))
+            return False
+        if attrs.kernel_layout != "OIDHW":
+            print("nn.conv3d_transpose: kernel_layout is {} but must be OIDHW.".format(
+                attrs.kernel_layout))
+            return False
+        if attrs.out_layout and attrs.out_layout != "NCDHW":
+            print("nn.conv3d_transpose: out_layout is {} but must be NCDHW.".format(
+                attrs.out_layout))
+            return False
+        if attrs.dilation and any([rate != 1 for rate in map(int, attrs.dilation)]):
+            print("nn.conv3d_transpose: dilation rate must be 1.")
+            return False
+        if attrs.output_padding and any([x != 0 for x in map(int, attrs.output_padding)]):
+            print("nn.conv3d_transpose: output padding is not supported.")
             return False
         return True
 
