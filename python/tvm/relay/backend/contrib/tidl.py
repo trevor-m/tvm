@@ -1415,6 +1415,7 @@ class TIDLCompiler:
         mod['main'] = bind_params_by_name(mod['main'], params)
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+        mod = relay.transform.EliminateCommonSubexpr()(mod)
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod)
