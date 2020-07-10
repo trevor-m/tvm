@@ -14,10 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=wildcard-import
-"""Contrib modules."""
-from .register import get_pattern_table, register_pattern_table
-
-from .dnnl import *
-from .coreml import *
+"""Backend contrib modules."""
 from .tidl import *
+from .tidl_reduce_subgraph_size import *

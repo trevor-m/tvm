@@ -14,10 +14,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=wildcard-import
-"""Contrib modules."""
-from .register import get_pattern_table, register_pattern_table
 
-from .dnnl import *
-from .coreml import *
-from .tidl import *
+if(USE_TIDL STREQUAL "ON")
+  message(STATUS "Build with contrib.tidl")
+  file(GLOB TIDL_RELAY_CONTRIB_SRC src/relay/backend/contrib/tidl/*.cc)
+  list(APPEND COMPILER_SRCS ${TIDL_RELAY_CONTRIB_SRC})
+
+  file(GLOB TIDL_CONTRIB_SRC src/runtime/contrib/tidl/*.cc)
+  list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
+endif(USE_TIDL)
+
