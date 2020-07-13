@@ -520,6 +520,9 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         if any([x.checked_type.dtype != "float32" for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
+        if trt_version < (6, 0, 1):
+            print("nn.conv3d_transpose: requires TensorRT version 6.0.1 or higher.")
+            return False
         if attrs.data_layout != "NCDHW":
             print("nn.conv3d_transpose: data_layout is {} but must be NCDHW.".format(
                 attrs.data_layout))
