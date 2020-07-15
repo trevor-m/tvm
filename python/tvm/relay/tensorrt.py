@@ -142,7 +142,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
 
     @tvm.ir.register_op_attr("add", "target.tensorrt")
     def add_whitelist_fn(attrs, args): # pylint: disable=unused-variable
-        if any([x.checked_type.dtype != "float32" for x in args]):
+        if any([x.checked_type.dtype not in ["float32", "int32"] for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
         if (isinstance(args[0], Constant) or isinstance(args[1], Constant)) and \
@@ -187,6 +187,38 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         if attrs.out_layout and attrs.out_layout != "NCHW":
             print("nn.conv2d: out_layout is {} but must be NCHW.".format(attrs.out_layout))
             return False
+        return True
+    
+    @tvm.ir.register_op_attr("qnn.conv2d", "target.tensorrt")
+    def qnn_conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        # if any([x.checked_type.dtype != "float32" for x in args]):
+        #     print("Only float32 inputs are supported for TensorRT.")
+        #     return False
+        if attrs.data_layout != "NCHW":
+            print("nn.conv2d: data_layout is {} but must be NCHW.".format(attrs.data_layout))
+            return False
+        if attrs.kernel_layout != "OIHW":
+            print("nn.conv2d: kernel_layout is {} but must be OIHW.".format(attrs.kernel_layout))
+            return False
+        if attrs.out_layout and attrs.out_layout != "NCHW":
+            print("nn.conv2d: out_layout is {} but must be NCHW.".format(attrs.out_layout))
+            return False
+        return True
+
+    @tvm.ir.register_op_attr("qnn.requantize", "target.tensorrt")
+    def qnn_conv2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        # if any([x.checked_type.dtype != "float32" for x in args]):
+        #     print("Only float32 inputs are supported for TensorRT.")
+        #     return False
+        # if attrs.data_layout != "NCHW":
+        #     print("nn.conv2d: data_layout is {} but must be NCHW.".format(attrs.data_layout))
+        #     return False
+        # if attrs.kernel_layout != "OIHW":
+        #     print("nn.conv2d: kernel_layout is {} but must be OIHW.".format(attrs.kernel_layout))
+        #     return False
+        # if attrs.out_layout and attrs.out_layout != "NCHW":
+        #     print("nn.conv2d: out_layout is {} but must be NCHW.".format(attrs.out_layout))
+        #     return False
         return True
 
     @tvm.ir.register_op_attr("nn.dense", "target.tensorrt")
@@ -234,7 +266,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
 
     @tvm.ir.register_op_attr("nn.avg_pool2d", "target.tensorrt")
     def avg_pool_2d_whitelist_fn(attrs, args): # pylint: disable=unused-variable
-        if any([x.checked_type.dtype != "float32" for x in args]):
+        if any([x.checked_type.dtype not in ["float32", "int32"] for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
         if attrs.layout != "NCHW":
@@ -247,6 +279,14 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
         if attrs.ceil_mode and trt_version < (5, 1, 5):
             print("nn.avg_pool2d: ceil_mode=True requires TensorRT 5.1.5 or greater.")
             return False
+        return True
+
+    @tvm.ir.register_op_attr("cast", "target.tensorrt")
+    def cast_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        return True
+
+    @tvm.ir.register_op_attr("qnn.dequantize", "target.tensorrt")
+    def dequantize_whitelist_fn(attrs, args): # pylint: disable=unused-variable
         return True
 
     @tvm.ir.register_op_attr("nn.global_max_pool2d", "target.tensorrt")
@@ -333,7 +373,7 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
 
     @tvm.ir.register_op_attr("transpose", "target.tensorrt")
     def transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
-        if any([x.checked_type.dtype != "float32" for x in args]):
+        if any([x.checked_type.dtype not in ["float32", "uint8"] for x in args]):
             print("Only float32 inputs are supported for TensorRT.")
             return False
         if use_implicit_batch and int(attrs.axes[0]) != 0:
@@ -731,6 +771,7 @@ def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True,
                                     RemoveDropoutPass(),
                                     transform.RemoveUnusedFunctions(),
                                     transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default'],
+                                                             'qnn.conv2d': ['NCHW', 'default'],
                                                              'nn.conv3d': ['NCDHW', 'default']}),
                                     transform.FoldConstant(),
                                     LegalizeLayoutTranformPass(),

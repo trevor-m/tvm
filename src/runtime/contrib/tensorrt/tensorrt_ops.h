@@ -1349,6 +1349,37 @@ class UpsamplingOpConverter : public TrtOpConverter {
 };
 #endif  // TRT_VERSION_GE(6, 0, 1)
 
+class RequantizeOpConverter : public TrtOpConverter {
+ public:
+  RequantizeOpConverter() : TrtOpConverter({kTensor, kWeight}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input_tensor = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
+    const int required_rank = TRT_HAS_IMPLICIT_BATCH(params) ? 3 : 4;
+    CHECK(input_dims.size() > 0 && input_dims.size() <= required_rank);
+    const bool need_reshape_on_input = input_dims.size() != required_rank;
+    if (need_reshape_on_input) {
+      // Add dims of size 1 until rank is required_rank.
+      std::vector<int> new_shape(input_dims);
+      while (new_shape.size() < required_rank) new_shape.insert(new_shape.end(), 1);
+      input_tensor = Reshape(params, input_tensor, new_shape);
+    }
+
+    nvinfer1::Weights shift{nvinfer1::DataType::kFLOAT, nullptr, 0};
+    nvinfer1::Weights power{nvinfer1::DataType::kFLOAT, nullptr, 0};
+    nvinfer1::IScaleLayer* scale_layer = params->network->addScale(
+        *input_tensor, nvinfer1::ScaleMode::kCHANNEL, params->inputs.at(1).weight, shift, power);
+    CHECK(scale_layer != nullptr);
+    auto output_tensor = scale_layer->getOutput(0);
+    if (need_reshape_on_input) {
+      // Remove added dims.
+      output_tensor = Reshape(params, output_tensor, input_dims);
+    }
+    params->outputs.push_back(output_tensor);
+  }
+};
+
 }  // namespace contrib
 }  // namespace relay
 }  // namespace tvm

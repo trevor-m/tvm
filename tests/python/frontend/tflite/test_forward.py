@@ -109,7 +109,7 @@ def vmobj_to_list(o):
     else:
         raise RuntimeError("Unknown object type: %s" % type(o))
 
-def run_tvm_graph(tflite_model_buf, input_data, input_node, num_output=1, target='llvm',
+def run_tvm_graph(tflite_model_buf, input_data, input_node, num_output=1, target='cuda',
                   out_names=None, mode='graph_runtime'):
     """ Generic function to compile on relay and execute on tvm """
     # TFLite.Model.Model has changed to TFLite.Model from 1.14 to 2.1
@@ -134,7 +134,7 @@ def run_tvm_graph(tflite_model_buf, input_data, input_node, num_output=1, target
     mod, params = relay.frontend.from_tflite(tflite_model,
                                              shape_dict=shape_dict,
                                              dtype_dict=dtype_dict)
-
+    print(mod)
     if mode in ['debug', 'vm']:
         ex = relay.create_executor(mode, mod=mod, ctx=tvm.cpu(), target="llvm")
         inputs = []
@@ -151,6 +151,10 @@ def run_tvm_graph(tflite_model_buf, input_data, input_node, num_output=1, target
         result = ex.evaluate()(*inputs)
         return vmobj_to_list(result)
     else:
+        import tvm.relay.tensorrt
+        mod = tvm.relay.tensorrt.EnableTrt(mod, params)
+        print("=== Mod after TRT ===")
+        print(mod)
         with tvm.transform.PassContext(opt_level=3):
             graph, lib, params = relay.build(mod, target, params=params)
 
@@ -2588,6 +2592,8 @@ def test_forward_mediapipe_hand_landmark():
 # Main
 # ----
 if __name__ == '__main__':
+    test_forward_qnn_mobilenet_v1_net()
+    exit(0)
     # BatchToSpaceND
     test_forward_batch_to_space_nd()
 
