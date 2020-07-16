@@ -138,7 +138,8 @@ def _merge_sequential_ops(mod):
         return pad_out
 
     def _conv2d_pad_checker(extract):
-        pad_supported = (float(extract.attrs.pad_value) == 0.0 and extract.attrs.pad_mode == 'constant')
+        pad_supported = (float(extract.attrs.pad_value) == 0.0 and \
+                         extract.attrs.pad_mode == 'constant')
         conv2d_op = extract.args[0]
         return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args) and pad_supported
 
@@ -222,7 +223,8 @@ def _merge_sequential_ops(mod):
         #('tidl.transpose_reshape', _transpose_reshape_pattern()),
         #('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
         ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
-        ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(), _reshape_global_avg_pool_checker),
+        ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
+         _reshape_global_avg_pool_checker),
         ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
         ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
@@ -235,9 +237,9 @@ def _merge_sequential_ops(mod):
         ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
         ('tidl.dense_relu', _dense_relu_pattern(), _dense_relu_checker),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern(), _dense_bias_relu_checker),
-        ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_pattern),
+        ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_checker),
         ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
-        ('tidl.dense_add', _dense_add_pattern(), _dense_add_pattern),
+        ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
