@@ -151,7 +151,7 @@ def _merge_sequential_ops(mod):
         return relu_out
 
     def _bn_relu_checker(extract):
-        bn_op = extract.args[0].tuple
+        bn_op = extract.args[0].tuple_value
         return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
 
     def _add_relu_pattern():
