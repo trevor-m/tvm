@@ -24,6 +24,16 @@ from .generic import *
 from .. import op as _op
 from .... import get_global_func
 
+def get_cross_compile_compute_ver():
+    """Temporary workaround to enable cross compiling for GPU in Neo. tvm.gpu(0).compute_version
+    will encounter an error if there is no GPU present. Instead, we use compute_version from
+    set_cuda_target_arch"""
+    from tvm.autotvm.env import AutotvmGlobalScope
+    if AutotvmGlobalScope.current.cuda_target_arch:
+        arch = AutotvmGlobalScope.current.cuda_target_arch.split("sm_")[-1]
+        return arch[0] + "." + arch[1]
+    return tvm.gpu(0).compute_version
+
 @schedule_injective.register(["cuda", "gpu"])
 def schedule_injective_cuda(attrs, outs, target):
     """schedule injective ops for cuda"""
@@ -146,7 +156,7 @@ def conv2d_strategy_cuda(attrs, inputs, out_type, target):
                                                                              pre_flag=False)
             if judge_winograd_shape:
                 if target.target_name == "cuda" and \
-                    nvcc.have_tensorcore(tvm.gpu(0).compute_version) and \
+                    nvcc.have_tensorcore(get_cross_compile_compute_ver()) and \
                     judge_winograd_tensorcore:
                     strategy.add_implementation(
                         wrap_compute_conv2d(topi.cuda.conv2d_nhwc_winograd_tensorcore),
@@ -163,7 +173,7 @@ def conv2d_strategy_cuda(attrs, inputs, out_type, target):
                         name="conv2d_nhwc_winograd_direct.cuda",
                         plevel=5)
             if target.target_name == "cuda":
-                if nvcc.have_tensorcore(tvm.gpu(0).compute_version):
+                if nvcc.have_tensorcore(get_cross_compile_compute_ver()):
                     if (N % 16 == 0 and CI % 16 == 0 and CO % 16 == 0) or \
                             (N % 8 == 0 and CI % 16 == 0 and CO % 32 == 0) or \
                             (N % 32 == 0 and CI % 16 == 0 and CO % 8 == 0):
@@ -265,7 +275,7 @@ def conv2d_winograd_without_weight_transfrom_strategy_cuda(attrs, inputs, out_ty
                                                       dilation_h, dilation_w,
                                                       pre_flag=True)
         if target.target_name == "cuda" and \
-            nvcc.have_tensorcore(tvm.gpu(0).compute_version) and \
+            nvcc.have_tensorcore(get_cross_compile_compute_ver()) and \
             judge_winograd_tensorcore:
             strategy.add_implementation(
                 wrap_compute_conv2d(
@@ -363,7 +373,7 @@ def conv3d_strategy_cuda(attrs, inputs, out_type, target):
         N, _, _, _, _ = get_const_tuple(data.shape)
         _, _, _, CI, CO = get_const_tuple(kernel.shape)
         if target.target_name == "cuda":
-            if nvcc.have_tensorcore(tvm.gpu(0).compute_version):
+            if nvcc.have_tensorcore(get_cross_compile_compute_ver()):
                 if (N % 16 == 0 and CI % 16 == 0 and CO % 16 == 0) or \
                 (N % 8 == 0 and CI % 16 == 0 and CO % 32 == 0) or \
                 (N % 32 == 0 and CI % 16 == 0 and CO % 8 == 0):
@@ -459,7 +469,7 @@ def dense_strategy_cuda(attrs, inputs, out_type, target):
                 name="dense_large_batch.cuda",
                 plevel=5)
         if target.target_name == "cuda":
-            if nvcc.have_tensorcore(tvm.gpu(0).compute_version):
+            if nvcc.have_tensorcore(get_cross_compile_compute_ver()):
                 if(i % 16 == 0 and b % 16 == 0 and o % 16 == 0) \
                         or (i % 16 == 0 and b % 8 == 0 and o % 32 == 0) \
                         or (i % 16 == 0 and b % 32 == 0 and o % 8 == 0):
