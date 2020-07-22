@@ -20,6 +20,7 @@ import topi
 import tvm
 from tvm.te import SpecializedCondition
 from tvm.contrib import nvcc
+from tvm.autotvm.env import AutotvmGlobalScope
 from .generic import *
 from .. import op as _op
 from .... import get_global_func
@@ -28,7 +29,6 @@ def get_cross_compile_compute_ver():
     """Temporary workaround to enable cross compiling for GPU in Neo. tvm.gpu(0).compute_version
     will encounter an error if there is no GPU present. Instead, we use compute_version from
     set_cuda_target_arch"""
-    from tvm.autotvm.env import AutotvmGlobalScope
     if AutotvmGlobalScope.current.cuda_target_arch:
         arch = AutotvmGlobalScope.current.cuda_target_arch.split("sm_")[-1]
         return arch[0] + "." + arch[1]
