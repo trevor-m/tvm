@@ -51,7 +51,7 @@ echo "clang-format check..."
 # check lastest change, for squash merge into master
 ./tests/lint/git-clang-format.sh HEAD~1
 # chekc against origin/master for PRs.
-./tests/lint/git-clang-format.sh origin/dev
+./tests/lint/git-clang-format.sh origin/release-1.3.0
 
 echo "Check codestyle of python code..."
 make pylint
