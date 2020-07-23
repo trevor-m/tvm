@@ -350,6 +350,17 @@ def test_tensorrt_ops():
         f = relay.Function([x, kernel], out)
         return f, {'x': x_shape, 'kernel': k_shape}, ['kernel']
 
+    def test_topk(x_shape, k, axis, ret_type):
+        x = relay.var('x', shape=(x_shape), dtype='float32')
+        if not k:
+            out = relay.topk(x, axis=axis, ret_type=ret_type)
+        else:
+            out = relay.topk(x, k=k, axis=axis, ret_type=ret_type)
+        if isinstance(out, relay.expr.TupleWrapper):
+            out = out.astuple()
+        f = relay.Function([x], out)
+        return f, {'x': x_shape}, []
+
     run_and_verify(test_float_const())
     run_and_verify(test_multiple_outputs())
     run_and_verify(test_clip())
@@ -443,6 +454,9 @@ def test_tensorrt_ops():
     run_and_verify(test_conv3d_transpose())
     # Verify that op is not converted because output_padding isn't supported by TRT.
     run_and_verify(test_conv3d_transpose(output_padding=(1, 1, 1, 1, 1, 1)))
+    un_and_verify(test_topk((1, 100), 5, -1, "both"))
+    run_and_verify(test_topk((1, 100), 5, 1, "indices"))
+    run_and_verify(test_topk((1, 10, 5), None, 1, "values"))
 
 def test_tensorrt_integration(test_all_models=False):
     if should_skip():

@@ -540,6 +540,19 @@ def register_tensorrt_annotations(trt_version, use_implicit_batch=True):
             return False
         return True
 
+    @tvm.ir.register_op_attr("topk", "target.tensorrt")
+    def conv3d_transpose_whitelist_fn(attrs, args): # pylint: disable=unused-variable
+        if any([x.checked_type.dtype != "float32" for x in args]):
+            print("Only float32 inputs are supported for TensorRT.")
+            return False
+        if attrs.is_ascend:
+            print("topk: only descending order is supported.")
+            return False
+        if use_implicit_batch and attrs.axis == 0:
+            print("topk: can't modify batch dimension.")
+            return False
+        return True
+
 class VarReplacer(ExprMutator):
     """
     Visit an expression while replacing vars according to var_map. Used by

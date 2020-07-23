@@ -25,6 +25,7 @@
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_OPS_H_
 
+#include <tvm/relay/attrs/algorithm.h>
 #include <tvm/relay/attrs/image.h>
 #include <tvm/relay/attrs/nn.h>
 #include <tvm/relay/attrs/reduce.h>
@@ -1347,6 +1348,34 @@ class UpsamplingOpConverter : public TrtOpConverter {
   }
 };
 #endif  // TRT_VERSION_GE(6, 0, 1)
+
+class TopKOpConverter : public TrtOpConverter {
+ public:
+  TopKOpConverter() : TrtOpConverter({kTensor}) {}
+
+  void Convert(AddTrtLayerParams* params) const {
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const auto* attrs = params->call->attrs.as<TopKAttrs>();
+    const int axis = ConvertAxis(params, attrs->axis, input_dims.size());
+    const int k = attrs->k.value_or(input_dims[axis]);
+
+    nvinfer1::ITopKLayer* topk_layer =
+        params->network->addTopK(*input, nvinfer1::TopKOperation::kMAX, k, 1 << axis);
+    CHECK(topk_layer != nullptr);
+    auto output_values = topk_layer->getOutput(0);
+    auto output_indices = topk_layer->getOutput(1);
+    if (attrs->ret_type == "values") {
+      params->outputs.push_back(output_values);
+    } else if (attrs->ret_type == "indices") {
+      params->outputs.push_back(output_indices);
+    } else {
+      // default - "both"
+      params->outputs.push_back(output_values);
+      params->outputs.push_back(output_indices);
+    }
+  }
+};
 
 }  // namespace contrib
 }  // namespace relay

@@ -94,6 +94,7 @@ GetOpConverters() {
   map->emplace("floor", std::make_shared<UnaryOpConverter>());
   map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
   map->emplace("split", std::make_shared<SplitOpConverter>());
+  map->emplace("topk", std::make_shared<TopKOpConverter>());
 #else
   map->emplace("clip", std::make_shared<ClipLegacyOpConverter>());
 #endif
