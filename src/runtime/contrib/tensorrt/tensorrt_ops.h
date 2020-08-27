@@ -1070,7 +1070,12 @@ class PadOpConverter : public TrtOpConverter {
     // Check if we need to transpose from NHWC -> NCHW.
     const bool need_transpose = attrs->pad_width[1][0].as<IntImmNode>()->value != 0 ||
                                 attrs->pad_width[1][1].as<IntImmNode>()->value != 0;
-    if (need_transpose) {
+    if (input_rank_with_batch == 5) {
+      prepadding = nvinfer1::DimsHW(attrs->pad_width[3][0].as<IntImmNode>()->value,
+                                    attrs->pad_width[4][0].as<IntImmNode>()->value);
+      postpadding = nvinfer1::DimsHW(attrs->pad_width[3][1].as<IntImmNode>()->value,
+                                     attrs->pad_width[4][1].as<IntImmNode>()->value);
+    } else if (need_transpose) {
       input = Transpose(params, input, {0, 3, 1, 2});
       prepadding = nvinfer1::DimsHW(attrs->pad_width[1][0].as<IntImmNode>()->value,
                                     attrs->pad_width[2][0].as<IntImmNode>()->value);
