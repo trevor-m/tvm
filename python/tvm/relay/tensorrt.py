@@ -669,9 +669,18 @@ def PruneSubgraphs(mod, compiler="tensorrt", use_implicit_batch=True, prune_no_m
         return mod
     print("Will remove these subgraphs:", subgraphs_to_remove)
     # Create new pruned module
-    new_mod = tvm.IRModule()
-    new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
-    return new_mod
+    # new_mod = tvm.IRModule(mod.type_definitions)
+    # new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
+    # return new_mod
+    for subgraph in mod.get_global_vars():
+        name = subgraph.name_hint
+        if name in subgraphs_to_remove:
+            func = mod[name]
+            func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 0))
+            func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+            func = func.with_attr("Compiler", None)
+            mod[name] = func
+    return mod
 
 def EnableTrt(mod, params=None, trt_version=None, use_implicit_batch=True,
               max_workspace_size=1 << 30, prune_subgraphs=False):
