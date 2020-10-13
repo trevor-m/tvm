@@ -16,30 +16,14 @@
 # under the License.
 # pylint: disable=invalid-name, import-self, len-as-condition, unused-argument, too-many-lines
 # pylint: disable=import-outside-toplevel
-
+"""Scikit-learn frontend."""
 import numpy as np
-import tvm
 from tvm.ir import IRModule
 
-from ... import nd as _nd
 from .. import analysis
 from .. import expr as _expr
 from .. import function as _function
 from .. import op as _op
-from .. import vision as _vision
-
-from ..function import Function
-from ..expr import Call, Let
-from ..expr import If, Tuple, TupleGetItem
-from ..expr import RefCreate, RefRead, RefWrite
-from ..expr_functor import ExprFunctor
-from ..adt import Match, Clause
-
-from .common import AttrCvt, Renamer, ExprTable
-from .common import get_relay_op, new_var, infer_shape, infer_channels
-from .common import infer_type, get_name
-from .common import infer_value as _infer_value
-from .common import infer_value_simulated as _infer_value_simulated
 
 
 def _SimpleImputer(op, inexpr, dshape, dtype, columns=None):
@@ -145,9 +129,11 @@ def sklearn_op_to_relay(op, inexpr, dshape, dtype, columns=None):
 
 
 def from_sklearn(model, shape=None, dtype="float32", columns=None):
-
+    """
+    Import scikit-learn model to Relay.
+    """
     try:
-        import sklearn
+        import sklearn  # pylint: disable=unused-import
     except ImportError as e:
         raise ImportError("Unable to import scikit-learn which is required {}".format(e))
 
@@ -159,9 +145,11 @@ def from_sklearn(model, shape=None, dtype="float32", columns=None):
 
 
 def from_auto_ml(model, shape=None, dtype="float32"):
-
+    """
+    Import automl model to Relay.
+    """
     try:
-        import sklearn
+        import sklearn  # pylint: disable=unused-import
     except ImportError as e:
         raise ImportError("Unable to import scikit-learn which is required {}".format(e))
 

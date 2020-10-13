@@ -23,6 +23,7 @@ by the script.
 """
 import numpy as np
 import tvm
+import pytest
 from tvm import te
 from tvm.contrib import graph_runtime
 from tvm.contrib.download import download_testdata
