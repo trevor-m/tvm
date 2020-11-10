@@ -45,6 +45,14 @@
 namespace tvm {
 namespace runtime {
 
+struct PairHash {
+	template <class T1, class T2>
+	std::size_t operator() (const std::pair<T1, T2> &pair) const {
+		return std::hash<T1>()(pair.first) ^ std::hash<T2>()(pair.second);
+	}
+};
+
+
 /*! \brief A module for TensorRT runtime. */
 class TensorRTModule : public runtime::ModuleNode {
  public:
@@ -78,22 +86,23 @@ class TensorRTModule : public runtime::ModuleNode {
 #if TVM_GRAPH_RUNTIME_TENSORRT
     // Generate an external packed function
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-      auto it = trt_engine_cache_.find(name);
+      auto inputs = ConvertInputs(args);
+      const int batch_size = inputs[0]->shape[0];
+      auto it = trt_engine_cache_.find(std::make_pair(name, batch_size));
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
-        LOG(INFO) << "Building new TensorRT engine for subgraph " << name;
+        LOG(INFO) << "Building new TensorRT engine for subgraph " << name << " with batch size " << batch_size;
         auto func = Downcast<relay::Function>(
             LoadJSON(this->serialized_subgraphs_[name]));
-        auto inputs = ConvertInputs(args);
         std::string key = GetSubgraphKey(serialized_subgraphs_[name]);
-        this->serialized_subgraphs_[name].clear();
+        // this->serialized_subgraphs_[name].clear();
         relay::contrib::TensorRTBuilder builder(&logger_, inputs, max_workspace_size_,
                                                 use_implicit_batch_);
         auto engine_and_context = builder.BuildEngine(func);
         CacheEngineToDisk(key, engine_and_context);
         LOG(INFO) << "Finished building TensorRT engine for subgraph " << name;
-        this->trt_engine_cache_[name] = engine_and_context;
-        this->ExecuteEngine(&this->trt_engine_cache_[name], args, rv);
+        this->trt_engine_cache_[std::make_pair(name, batch_size)] = engine_and_context;
+        this->ExecuteEngine(&this->trt_engine_cache_[std::make_pair(name, batch_size)], args, rv);
       } else {
         this->ExecuteEngine(&it->second, args, rv);
       }
@@ -147,7 +156,7 @@ class TensorRTModule : public runtime::ModuleNode {
 
 #if TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Map of function name to TRT engine if built already. */
-  std::unordered_map<std::string, TrtEngineAndContext> trt_engine_cache_;
+  std::unordered_map<std::pair<std::string, int>, TrtEngineAndContext, PairHash> trt_engine_cache_;
 
   /*! \brief TensorRT object used to log warnings and errors. */
   TensorRTLogger logger_;
@@ -300,7 +309,8 @@ class TensorRTModule : public runtime::ModuleNode {
       helper.DeclareField("input_is_baked", &engine_and_context.input_is_baked);
       helper.DeclareField("outputs", &engine_and_context.outputs);
       helper.ReadAllFields(&reader);
-      trt_engine_cache_[it.first] = engine_and_context;
+      const int batch_size = 1;
+      trt_engine_cache_[std::make_pair(it.first, batch_size)] = engine_and_context;
     }
   }
 
