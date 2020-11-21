@@ -86,6 +86,7 @@ class TensorRTModule : public runtime::ModuleNode {
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
       auto inputs = ConvertInputs(args);
       const int batch_size = inputs[0]->shape[0];
+      if (batch_size == 0) return;
       auto it = trt_engine_cache_.find(std::make_pair(name, batch_size));
       if (it == trt_engine_cache_.end()) {
         // Build new trt engine and place in cache.
