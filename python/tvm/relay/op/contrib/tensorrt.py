@@ -25,6 +25,9 @@ from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar, Var, TupleGetItem
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 
+from ...dataflow_pattern import wildcard, is_op, is_constant, is_tuple_get_item
+from .register import register_pattern_table
+
 logger = logging.getLogger("TensorRT")
 
 
@@ -143,6 +146,7 @@ def partition_for_tensorrt(
                 {"nn.conv2d": ["NCHW", "default"], "nn.conv3d": ["NCDHW", "default"]}
             ),
             transform.FoldConstant(),
+            transform.MergeComposite(tensorrt_pattern_table()),
             transform.AnnotateTarget("tensorrt"),
             transform.MergeCompilerRegions(),
             transform.PartitionGraph(),
@@ -990,3 +994,26 @@ class RemoveDropout(ExprMutator):
 class RemoveDropoutPass:
     def transform_function(self, func, mod, _):
         return RemoveDropout().visit(func)
+
+
+@register_pattern_table("tensorrt")
+def tensorrt_pattern_table():
+    """Get the TensorRT pattern table."""
+
+    def nms_pattern():
+        """Fuse get_valid_count and non_max_suppression into a single composite
+        function which can be partitioned and converted to TRT.
+        """
+        pattern = is_op("vision.get_valid_counts")(wildcard(), is_constant())
+        data = is_tuple_get_item(pattern, 1)
+        count = is_tuple_get_item(pattern, 0)
+        indices = is_tuple_get_item(pattern, 2)
+        pattern = is_op("vision.non_max_suppression")(
+            data, count, indices, is_constant(), is_constant()
+        )
+        return pattern
+
+    return [
+        # TODO(trevmorr): Add check for nms pattern.
+        ("tensorrt.nms", nms_pattern())
+    ]

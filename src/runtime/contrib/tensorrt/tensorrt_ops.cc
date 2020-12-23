@@ -33,6 +33,7 @@
 
 #include "../json/json_node.h"
 #include "NvInfer.h"
+#include "NvInferPlugin.h"
 #include "tensorrt_utils.h"
 
 namespace tvm {
@@ -1040,6 +1041,77 @@ class AdaptivePoolingOpConverter : public TensorRTOpConverter {
   }
 };
 
+class NmsOpConverter : public TensorRTOpConverter {
+ public:
+  NmsOpConverter() : TensorRTOpConverter({kTensor}) {}
+
+  void Convert(TensorRTOpConverterParams* params) const {
+    int score_index = std::stoi(params->node.GetAttr<std::vector<std::string>>("score_index")[0]);
+    int coord_start = std::stoi(params->node.GetAttr<std::vector<std::string>>("coord_start")[0]);
+    int top_k = std::stoi(params->node.GetAttr<std::vector<std::string>>("top_k")[0]);
+    float score_threshold =
+        std::stof(params->node.GetAttr<std::vector<std::string>>("score_threshold")[0]);
+    float iou_threshold =
+        std::stof(params->node.GetAttr<std::vector<std::string>>("iou_threshold")[0]);
+
+    auto input = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input->getDimensions());
+    const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
+    const int num_boxes = input_dims[params->network->hasImplicitBatchDimension() ? 0 : 1];
+    // Slice input into boxes and scores
+    std::vector<int> scores_begin(input_dims.size(), 0);
+    std::vector<int> scores_size(input_dims.begin(), input_dims.end());
+    scores_begin[params_index] = score_index;
+    scores_size[params_index] = 1;
+    std::vector<int> strides(input_dims.size(), 1);
+    auto scores = params->network
+                      ->addSlice(*input, VectorToTrtDims(scores_begin),
+                                 VectorToTrtDims(scores_size), VectorToTrtDims(strides))
+                      ->getOutput(0);
+    std::vector<int> boxes_begin(input_dims.size(), 0);
+    std::vector<int> boxes_size(input_dims.begin(), input_dims.end());
+    boxes_begin[params_index] = coord_start;
+    boxes_size[params_index] = 4;
+    auto boxes = params->network
+                     ->addSlice(*input, VectorToTrtDims(boxes_begin), VectorToTrtDims(boxes_size),
+                                VectorToTrtDims(strides))
+                     ->getOutput(0);
+    // Insert 1 for classes
+    boxes_size.insert(boxes_size.begin() + params_index, 1);
+    boxes = Reshape(params, boxes, boxes_size);
+
+    nvinfer1::plugin::NMSParameters nms_params;
+    nms_params.shareLocation = true;  // if num_classes = 1
+    nms_params.backgroundLabelId = -1;
+    nms_params.numClasses = 1;
+    nms_params.topK = top_k == -1 ? num_boxes : std::min(num_boxes, top_k);
+    nms_params.keepTopK = nms_params.topK;  // TODO(trevmorr): Difference between topK and keepTopK?
+    nms_params.scoreThreshold = score_threshold;
+    nms_params.iouThreshold = iou_threshold;
+    nms_params.isNormalized = false;  // TODO(trevmorr): True or false?
+    nvinfer1::IPluginV2* nms_plugin = createBatchedNMSPlugin(nms_params);
+    std::vector<nvinfer1::ITensor*> nms_inputs = {boxes, scores};
+    nvinfer1::IPluginV2Layer* nms_layer =
+        params->network->addPluginV2(nms_inputs.data(), nms_inputs.size(), *nms_plugin);
+    // auto num_valid = nms_layers->getOutput(0);
+    auto output_boxes = nms_layer->getOutput(1);
+    auto output_scores = nms_layer->getOutput(2);
+    // TODO(trevmorr): include batch dim in shape for explicit mode
+    output_scores = Reshape(params, output_scores, {num_boxes, 1});
+    std::vector<nvinfer1::ITensor*> concat_inputs;
+    if (score_index == 0) {
+      concat_inputs = {output_scores, output_boxes};
+    } else {
+      concat_inputs = {output_boxes, output_scores};
+    }
+    nvinfer1::IConcatenationLayer* concat_layer =
+        params->network->addConcatenation(concat_inputs.data(), concat_inputs.size());
+    concat_layer->setAxis(params_index);
+    params->outputs.push_back(concat_layer->getOutput(0));
+    // TODO(trevmorr): Return indices?
+  }
+};
+
 const std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<TensorRTOpConverter>>>
 GetOpConverters() {
   static auto map =
@@ -1085,6 +1157,7 @@ GetOpConverters() {
   map->emplace("mean", std::make_shared<ReduceOpConverter>());
   map->emplace("nn.adaptive_max_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
   map->emplace("nn.adaptive_avg_pool2d", std::make_shared<AdaptivePoolingOpConverter>());
+  map->emplace("tensorrt.nms", std::make_shared<NmsOpConverter>());
 #if TRT_VERSION_GE(5, 1, 5)
   map->emplace("clip", std::make_shared<ActivationOpConverter>());
   map->emplace("nn.leaky_relu", std::make_shared<ActivationOpConverter>());
