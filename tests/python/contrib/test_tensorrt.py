@@ -955,6 +955,37 @@ def test_conv3d_transpose():
     run_and_verify_func(get_graph(strides=(2, 2, 2), output_padding=(1, 1, 1)))
 
 
+def test_non_max_suppression():
+    def get_graph(
+        x_shape=(1, 100, 5),
+        score_threshold=0.3,
+        max_output_size=100,
+        iou_threshold=0.5,
+    ):
+        x = relay.var("x", shape=(x_shape), dtype="float32")
+        ct, data, indices = relay.vision.get_valid_counts(
+            x, score_threshold=score_threshold, id_index=-1, score_index=0
+        )
+        ret = relay.vision.non_max_suppression(
+            data=data,
+            valid_count=ct,
+            indices=indices,
+            max_output_size=max_output_size,
+            iou_threshold=iou_threshold,
+            force_suppress=True,
+            top_k=-1,
+            coord_start=1,
+            score_index=0,
+            id_index=-1,
+            return_indices=False,
+            invalid_to_bottom=False,
+        )
+        f = relay.Function([x], ret)
+        return f, {"x": x_shape}, []
+
+    run_and_verify_func(get_graph())
+
+
 def test_alexnet():
     run_and_verify_model("alexnet")
 

@@ -23,6 +23,7 @@
  */
 #include <tvm/ir/module.h>
 #include <tvm/relay/attrs/nn.h>
+#include <tvm/relay/attrs/vision.h>
 #include <tvm/relay/type.h>
 
 #include <memory>
@@ -83,6 +84,10 @@ class TensorRTJSONSerializer : public backend::contrib::JSONSerializer {
     std::string name;
     if (const auto* op_node = cn->op.as<OpNode>()) {
       name = op_node->name;
+    } else if (const auto* fn = cn->op.as<FunctionNode>()) {
+      auto comp = fn->GetAttr<String>(attr::kComposite);
+      ICHECK(comp.defined());
+      name = comp.value();
     } else {
       return JSONSerializer::VisitExpr_(cn);
     }
@@ -99,6 +104,8 @@ class TensorRTJSONSerializer : public backend::contrib::JSONSerializer {
       SetPadNodeAttribute(node, cn);
     } else if (name == "strided_slice") {
       SetStridedSliceNodeAttribute(node, cn);
+    } else if (name == "tensorrt.nms") {
+      SetCompositeNmsNodeAttribute(node, cn);
     } else {
       SetCallNodeAttribute(node, cn);
     }
@@ -167,6 +174,58 @@ class TensorRTJSONSerializer : public backend::contrib::JSONSerializer {
     node->SetAttr("start", start_attr);
     node->SetAttr("size", size_attr);
     node->SetAttr("strides", strides_attr);
+  }
+
+  void SetCompositeNmsNodeAttribute(std::shared_ptr<JSONGraphNode> node, const CallNode* cn) {
+    auto nms_call = cn->op.as<FunctionNode>()->body.as<CallNode>();
+    ICHECK(nms_call);
+    auto tuple_get_item = nms_call->args[0].as<TupleGetItemNode>();
+    ICHECK(tuple_get_item);
+    auto get_valid_counts_call = tuple_get_item->tuple.as<CallNode>();
+    ICHECK(get_valid_counts_call);
+    // Get non_max_suppression and get_valid_counts attributes.
+    auto nms_attrs = nms_call->attrs.as<NonMaximumSuppressionAttrs>();
+    ICHECK(nms_attrs);
+    auto get_valid_counts_attrs = get_valid_counts_call->attrs.as<GetValidCountsAttrs>();
+    ICHECK(get_valid_counts_attrs);
+
+    // Unused:
+    // nms: max_output_size
+    // nms: force_suppress
+    // nms: return_indices
+    // nms: invalid_to_bottom
+    ICHECK_EQ(nms_attrs->score_index, get_valid_counts_attrs->score_index);
+    ICHECK_EQ(nms_attrs->id_index, get_valid_counts_attrs->id_index);
+    ICHECK_EQ(nms_attrs->id_index, -1);
+
+    auto max_output_size_node = nms_call->args[3].as<ConstantNode>();
+    ICHECK(max_output_size_node);
+    auto iou_threshold_node = nms_call->args[4].as<ConstantNode>();
+    ICHECK(iou_threshold_node);
+    auto score_threshold_node = get_valid_counts_call->args[1].as<ConstantNode>();
+    ICHECK(score_threshold_node);
+    // TODO(trevmorr): Use max_output_size.
+    const int max_output_size = *static_cast<int*>(max_output_size_node->data->data);
+
+    std::vector<std::string> score_index = {std::to_string(nms_attrs->score_index)};
+    std::vector<std::string> coord_start = {std::to_string(nms_attrs->coord_start)};
+    std::vector<std::string> top_k = {std::to_string(nms_attrs->top_k)};
+    std::vector<std::string> iou_threshold = {
+        std::to_string(*static_cast<float*>(iou_threshold_node->data->data))};
+    std::vector<std::string> score_threshold = {
+        std::to_string(*static_cast<float*>(score_threshold_node->data->data))};
+    std::vector<dmlc::any> score_index_attr, coord_start_attr, top_k_attr, iou_threshold_attr,
+        score_threshold_attr;
+    score_index_attr.emplace_back(score_index);
+    coord_start_attr.emplace_back(coord_start);
+    top_k_attr.emplace_back(top_k);
+    iou_threshold_attr.emplace_back(iou_threshold);
+    score_threshold_attr.emplace_back(score_threshold);
+    node->SetAttr("score_index", score_index_attr);
+    node->SetAttr("coord_start", coord_start_attr);
+    node->SetAttr("top_k", top_k_attr);
+    node->SetAttr("iou_threshold", iou_threshold_attr);
+    node->SetAttr("score_threshold", score_threshold_attr);
   }
 
   void SaveGlobalAttributes(std::shared_ptr<JSONGraphNode> node) {
