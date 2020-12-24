@@ -1009,7 +1009,7 @@ def tensorrt_pattern_table():
         count = is_tuple_get_item(pattern, 0)
         indices = is_tuple_get_item(pattern, 2)
         pattern = is_op("vision.non_max_suppression")(
-            data, count, indices, is_constant(), is_constant()
+            data, count, indices, wildcard(), is_constant()
         )
         return pattern
 
