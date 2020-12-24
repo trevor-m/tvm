@@ -198,14 +198,14 @@ class TensorRTJSONSerializer : public backend::contrib::JSONSerializer {
     ICHECK_EQ(nms_attrs->id_index, get_valid_counts_attrs->id_index);
     ICHECK_EQ(nms_attrs->id_index, -1);
 
-    auto max_output_size_node = nms_call->args[3].as<ConstantNode>();
-    ICHECK(max_output_size_node);
+    // auto max_output_size_node = nms_call->args[3].as<ConstantNode>();
+    // ICHECK(max_output_size_node);
+    // TODO(trevmorr): Use max_output_size.
+    // const int max_output_size = *static_cast<int*>(max_output_size_node->data->data);
     auto iou_threshold_node = nms_call->args[4].as<ConstantNode>();
     ICHECK(iou_threshold_node);
     auto score_threshold_node = get_valid_counts_call->args[1].as<ConstantNode>();
     ICHECK(score_threshold_node);
-    // TODO(trevmorr): Use max_output_size.
-    const int max_output_size = *static_cast<int*>(max_output_size_node->data->data);
 
     std::vector<std::string> score_index = {std::to_string(nms_attrs->score_index)};
     std::vector<std::string> coord_start = {std::to_string(nms_attrs->coord_start)};
