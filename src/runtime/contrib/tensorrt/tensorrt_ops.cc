@@ -1042,9 +1042,11 @@ class AdaptivePoolingOpConverter : public TensorRTOpConverter {
 
 class NmsOpConverter : public TensorRTOpConverter {
  public:
-  NmsOpConverter() : TensorRTOpConverter({kTensor}) {}
+  // TODO(trevmorr): make input count variable
+  NmsOpConverter() : TensorRTOpConverter({kTensor, kTensor}) {}
 
   void Convert(TensorRTOpConverterParams* params) const {
+    // TODO(trevmorr): add return_indices to json
     int score_index = std::stoi(params->node.GetAttr<std::vector<std::string>>("score_index")[0]);
     int coord_start = std::stoi(params->node.GetAttr<std::vector<std::string>>("coord_start")[0]);
     int top_k = std::stoi(params->node.GetAttr<std::vector<std::string>>("top_k")[0]);
@@ -1079,22 +1081,44 @@ class NmsOpConverter : public TensorRTOpConverter {
     boxes_size.insert(boxes_size.begin() + params_index, 1);
     boxes = Reshape(params, boxes, boxes_size);
 
-    nvinfer1::plugin::NMSParameters nms_params;
-    nms_params.shareLocation = true;  // if num_classes = 1
-    nms_params.backgroundLabelId = -1;
-    nms_params.numClasses = 1;
-    nms_params.topK = top_k == -1 ? num_boxes : std::min(num_boxes, top_k);
-    nms_params.keepTopK = nms_params.topK;  // TODO(trevmorr): Difference between topK and keepTopK?
-    nms_params.scoreThreshold = score_threshold;
-    nms_params.iouThreshold = iou_threshold;
-    nms_params.isNormalized = false;  // TODO(trevmorr): True or false?
-    nvinfer1::IPluginV2* nms_plugin = createBatchedNMSPlugin(nms_params);
+
+    bool shareLocation = true;  // if num_classes = 1
+    int backgroundLabelId = -1;
+    int numClasses = 1;
+    int topK = top_k == -1 ? num_boxes : std::min(num_boxes, top_k);
+    // TODO(trevmorr): Difference between topK and keepTopK?
+    bool isNormalized = false;  // TODO(trevmorr): True or false?
+    nvinfer1::PluginField fields[8] = {
+      nvinfer1::PluginField{"shareLocation", &shareLocation,
+                            nvinfer1::PluginFieldType::kINT32, 1},
+      nvinfer1::PluginField{"backgroundLabelId", &backgroundLabelId,
+                            nvinfer1::PluginFieldType::kINT32, 1},
+      nvinfer1::PluginField{"numClasses", &numClasses,
+                            nvinfer1::PluginFieldType::kINT32, 1},
+      nvinfer1::PluginField{"topK", &topK, nvinfer1::PluginFieldType::kINT32,
+                            1},
+      nvinfer1::PluginField{"keepTopK", &topK,
+                            nvinfer1::PluginFieldType::kINT32, 1},
+      nvinfer1::PluginField{"scoreThreshold", &score_threshold,
+                            nvinfer1::PluginFieldType::kFLOAT32, 1},
+      nvinfer1::PluginField{"iouThreshold", &iou_threshold,
+                            nvinfer1::PluginFieldType::kFLOAT32, 1},
+      nvinfer1::PluginField{"isNormalized", &isNormalized,
+                            nvinfer1::PluginFieldType::kINT32, 1},
+    };
+    nvinfer1::PluginFieldCollection fc{8, fields};
+
+    auto creator =
+      getPluginRegistry()->getPluginCreator("BatchedNMS_TRT", "1", "");
+    // TODO(trevmorr): Make layer name unique?
+    nvinfer1::IPluginV2* nms_plugin = creator->createPlugin("mynmsplugin", &fc);
     std::vector<nvinfer1::ITensor*> nms_inputs = {boxes, scores};
     nvinfer1::IPluginV2Layer* nms_layer =
         params->network->addPluginV2(nms_inputs.data(), nms_inputs.size(), *nms_plugin);
-    // auto num_valid = nms_layers->getOutput(0);
+    auto num_valid = nms_layer->getOutput(0);
     auto output_boxes = nms_layer->getOutput(1);
     auto output_scores = nms_layer->getOutput(2);
+    auto output_indices = nms_layer->getOutput(4);
     // TODO(trevmorr): include batch dim in shape for explicit mode
     output_scores = Reshape(params, output_scores, {num_boxes, 1});
     std::vector<nvinfer1::ITensor*> concat_inputs;
@@ -1106,7 +1130,9 @@ class NmsOpConverter : public TensorRTOpConverter {
     nvinfer1::IConcatenationLayer* concat_layer =
         params->network->addConcatenation(concat_inputs.data(), concat_inputs.size());
     concat_layer->setAxis(params_index);
-    params->outputs.push_back(concat_layer->getOutput(0));
+    //params->outputs.push_back(concat_layer->getOutput(0));
+    params->outputs.push_back(output_indices);
+    params->outputs.push_back(num_valid);
     // TODO(trevmorr): Return indices?
   }
 };

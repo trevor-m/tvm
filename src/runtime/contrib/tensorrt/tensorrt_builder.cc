@@ -33,6 +33,8 @@
 #include "tensorrt_ops.h"
 #include "tensorrt_utils.h"
 
+#include "NvInferPlugin.h"
+
 namespace tvm {
 namespace runtime {
 namespace contrib {
@@ -48,6 +50,8 @@ TensorRTBuilder::TensorRTBuilder(TensorRTLogger* logger,
       batch_size_(batch_size) {
   // Create TRT builder and network.
   builder_ = nvinfer1::createInferBuilder(*logger);
+
+  initLibNvInferPlugins(logger, "");
 #if TRT_VERSION_GE(6, 0, 1)
   // Use INetworkV2.
   auto flags =
@@ -74,13 +78,15 @@ void TensorRTBuilder::AddInput(int nid, uint32_t entry_id, const JSONGraphNode& 
   node_output_map_[nid] = {};
   for (size_t i = 0; i < shapes.size(); ++i) {
     const std::string name = node_name + "_" + std::to_string(i);
-    auto shape = shapes[i];
+    std::vector<int64_t> shape(data_entry_[entry_id + i]->shape,
+                               data_entry_[entry_id + i]->shape + data_entry_[entry_id + i]->ndim);
     // Remove batch dim when not in explicit batch mode.
     if (use_implicit_batch_ && shape.size() > 1) {
       shape.erase(shape.begin());
     }
     nvinfer1::Dims dims = VectorToTrtDims(shape);
-    ICHECK(TypeMatch(dtypes[i], kDLFloat, 32)) << "Only FP32 inputs are supported.";
+    // TODO(trevmorr): Handle non fp32 inputs properly
+    //ICHECK(TypeMatch(dtypes[i], kDLFloat, 32)) << "Only FP32 inputs are supported.";
     auto input_tensor = network_->addInput(name.c_str(), nvinfer1::DataType::kFLOAT, dims);
     node_output_map_[nid].push_back(TensorRTOpInput(input_tensor));
     network_input_names_.push_back(name);
@@ -170,7 +176,7 @@ TensorRTEngineAndContext TensorRTBuilder::BuildEngine() {
 #else
   nvinfer1::ICudaEngine* engine = builder_->buildCudaEngine(*network_);
 #endif
-  ICHECK_EQ(engine->getNbBindings(), network_input_names_.size() + network_output_names_.size());
+  // ICHECK_EQ(engine->getNbBindings(), network_input_names_.size() + network_output_names_.size());
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
   CleanUp();
 
@@ -236,7 +242,8 @@ void TensorRTBuilder::AllocateDeviceBuffer(nvinfer1::ICudaEngine* engine, const 
   const uint32_t entry_id = entry_id_map_[name];
   if (data_entry_[entry_id]->ctx.device_type != kDLGPU) {
     const int binding_index = engine->getBindingIndex(name.c_str());
-    ICHECK_NE(binding_index, -1);
+    //ICHECK_NE(binding_index, -1);
+    if (binding_index == -1) return; //unused input
     std::vector<int64_t> shape(data_entry_[entry_id]->shape,
                                data_entry_[entry_id]->shape + data_entry_[entry_id]->ndim);
     device_buffers->at(binding_index) =

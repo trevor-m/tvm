@@ -871,12 +871,15 @@ class IsComputeIntensiveGraph(ExprVisitor):
                 "nn.conv3d_transpose",
                 "nn.dense",
                 "nn.batch_matmul",
+                "tensorrt.nms",
             ]
         )
         if isinstance(call.op, tvm.tir.op.Op):
             if str(call.op) in compute_intensive_ops:
                 self.is_compute_intensive = True
-
+        elif isinstance(call.op, tvm.relay.Function):
+            if "Composite" in call.op.attrs and call.op.attrs["Composite"] in compute_intensive_ops:
+                self.is_compute_intensive = True
         return super().visit_call(call)
 
     def is_graph_compute_intensive(self, subgraph) -> bool:
@@ -898,19 +901,17 @@ def is_valid_subgraph(params, body):
 
             if isinstance(var.checked_type, relay.TupleType):
                 for tupe_type in var.checked_type.fields:
-                    # Scalar inputs not allowed
-                    if len(tupe_type.shape) == 0:
-                        logger.info("tensorrt: scalar inputs not supported")
-                        return False
-
-                    if not isinstance(tupe_type.shape[0], tvm.tir.expr.Any):
+                    if len(tupe_type.shape.shape) == 0:
+                        input_batch_sizes.append(1)
+                    elif not isinstance(tupe_type.shape[0], tvm.tir.expr.Any):
                         input_batch_sizes.append(int(tupe_type.shape[0]))
             else:
                 # Scalar inputs not allowed
                 if len(var.checked_type.shape) == 0:
-                    logger.info("tensorrt: scalar inputs not supported")
-                    return False
-                if not isinstance(var.checked_type.shape[0], tvm.tir.expr.Any):
+                    #logger.info("tensorrt: scalar inputs not supported")
+                    #return False
+                    input_batch_sizes.append(1)
+                elif not isinstance(var.checked_type.shape[0], tvm.tir.expr.Any):
                     input_batch_sizes.append(int(var.checked_type.shape[0]))
         if len(input_batch_sizes) > 1 and len(set(input_batch_sizes)) != 1:
             logger.info("tensorrt: inputs have different batch sizes")
@@ -1012,8 +1013,53 @@ def tensorrt_pattern_table():
             data, count, indices, wildcard(), is_constant()
         )
         return pattern
+    
+    def dynamic_nms_pattern():
+        """Fuse get_valid_count and non_max_suppression into a single composite
+        function which can be partitioned and converted to TRT.
+        
+        %1455 = vision.get_valid_counts(%1454, 0f /* ty=float32 */, meta[relay.attrs.GetValidCountsAttrs][16]) /* ty=(Tensor[(1), int32], Tensor[(1, ?, 5), float32], Tensor[(1, ?), int32]) */;
+        %1456 = %1455.1;
+        %1457 = %1455.0;
+        %1458 = %1455.2;
+        %1463 = vision.non_max_suppression(%1456, %1457, %1458, %1462, 0.6f /* ty=float32 */, meta[relay.attrs.NonMaximumSuppressionAttrs][16]) /* ty=(Tensor[(1, ?), int32], Tensor[(1, 1), int32]) */;
+        %1464 = %1463.0;
+        %1465 = squeeze(%1464, axis=[0]) /* ty=Tensor[(?), int32] */;
+        %1466 = shape_of(%1465, dtype="int32") /* ty=Tensor[(1), int32] */;
+        %1467 = cast_like(%1466, meta[relay.Constant][49] /* ty=Tensor[(1), int32] */) /* ty=Tensor[(1), int32] */;
+        %1468 = add(meta[relay.Constant][49] /* ty=Tensor[(1), int32] */, %1467) /* ty=Tensor[(1), int32] */;
+        %1469 = where(meta[relay.Constant][48] /* ty=Tensor[(1), bool] */, %1468, meta[relay.Constant][49] /* ty=Tensor[(1), int32] */) /* ty=Tensor[(1), int32] */;
+        %1470 = %1463.1;
+        %1471 = squeeze(%1470, axis=[1]) /* ty=Tensor[(1), int32] */;
+        %1472 = dyn.strided_slice(%1465, %1469, %1471, meta[relay.Constant][50] /* ty=Tensor[(1), int32] */, begin=None, end=None, strides=None, slice_mode="size") /* ty=Tensor[(?), int32] */;
+        %1473 = take(%1449, %1472, axis=0) /* ty=Tensor[(?), float32] */;
+
+        """
+        pattern = is_op("vision.get_valid_counts")(wildcard(), is_constant())
+        data = is_tuple_get_item(pattern, 1)
+        count = is_tuple_get_item(pattern, 0)
+        indices = is_tuple_get_item(pattern, 2)
+        pattern = is_op("vision.non_max_suppression")(
+            data, count, indices, wildcard(), is_constant()
+        )
+        nms_data = is_tuple_get_item(pattern, 0)
+        nms_data = is_op("squeeze")(nms_data)
+
+        # slice_begin = is_op("shape_of")(nms_data)
+        # slice_begin = is_op("cast_like")(slice_begin, is_constant())
+        # slice_begin = is_op("add")(is_constant(), slice_begin)
+        # slice_begin = is_op("where")(is_constant(), slice_begin, is_constant())
+        
+        nms_count = is_tuple_get_item(pattern, 1)
+        nms_count = is_op("squeeze")(nms_count)
+
+        data_slice = is_op("dyn.strided_slice")(nms_data, wildcard(), nms_count, is_constant())
+
+        pattern = is_op("take")(wildcard(), data_slice)
+        return pattern
 
     return [
         # TODO(trevmorr): Add check for nms pattern.
-        ("tensorrt.nms", nms_pattern())
+        ("tensorrt.nms", nms_pattern()),
+        # ("tensorrt.dynamic_nms", dynamic_nms_pattern())
     ]

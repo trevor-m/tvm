@@ -430,6 +430,9 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
 
   Array<te::Tensor> VisitExpr_(const VarNode* var_node) final {
     auto var = GetRef<Var>(var_node);
+    if (composite_param_map_.count(var)) {
+      return VisitExpr(composite_param_map_[var]);
+    }
     auto it = param_states_.find(var);
     if (it == param_states_.end()) {
       LOG(FATAL) << "Free variable " << var->name_hint();
@@ -506,6 +509,31 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
   }
 
   Array<te::Tensor> VisitExpr_(const CallNode* call_node) final {
+
+    if (const auto* fn = call_node->op.as<FunctionNode>()) {
+      //data_dependants_.push_back(IsDataDependant(fn->body.as<CallNode>()));
+      // Array<te::Tensor> inputs;
+      // int count_tuple = 0;
+      // for (Expr arg : call_node->args) {
+      //   if (arg->checked_type().as<TupleTypeNode>()) {
+      //     ++count_tuple;
+      //   }
+      //   for (te::Tensor tensor : VisitExpr(arg)) {
+      //     inputs.push_back(tensor);
+      //   }
+      // }
+      // ICHECK_EQ(inputs.size(), fn->params.size());
+      for (int i = 0; i < call_node->args.size(); ++i) {
+        composite_param_map_[fn->params[i]] = call_node->args[i];
+      }
+      auto comp = fn->GetAttr<String>(attr::kComposite);
+      LOG(INFO) << "FUNCTION WAS COMPOSITE!" << comp;
+      auto outputs = VisitExpr(fn->body);
+      // TODO remove composite param map entries
+
+      //data_dependants_.pop_back();
+      return outputs;
+    }
     static auto fshape_func = Op::GetAttrMap<FShapeFunc>("FShapeFunc");
     static auto tshape_data_dependant = Op::GetAttrMap<TShapeDataDependant>("TShapeDataDependant");
     ICHECK(call_node->op.as<OpNode>()) << "Primitive function only allows call into primitive ops";
@@ -597,6 +625,8 @@ class MakeShapeFunc : public backend::MemoizedExprTranslator<Array<te::Tensor>> 
   std::vector<bool> data_dependants_;
   /*! \brief Scalars used in the shape function */
   Array<te::Tensor> scalars_;
+  /*! \brief Composite function var input mapping */
+  std::unordered_map<Expr, Expr, ObjectPtrHash, ObjectPtrEqual> composite_param_map_;
 };
 
 class CompileEngineImpl : public CompileEngineNode {

@@ -31,6 +31,7 @@
 #include "../../file_utils.h"
 #include "../json/json_node.h"
 #include "../json/json_runtime.h"
+#include "../../cuda/cuda_common.h"
 
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
 #include "NvInfer.h"
@@ -49,6 +50,15 @@ struct PairHash {
 };
 
 using namespace tvm::runtime::json;
+
+std::string DebugString(const DLTensor* tensor) {
+  std::string ret = "[";
+  for (int i = 0; i < tensor->ndim; ++i) {
+    if (i != 0) ret += ", ";
+    ret += std::to_string(tensor->shape[i]);
+  }
+  return ret + "]";
+}
 
 class TensorRTRuntime : public JSONRuntimeBase {
  public:
@@ -111,6 +121,43 @@ class TensorRTRuntime : public JSONRuntimeBase {
 #ifdef TVM_GRAPH_RUNTIME_TENSORRT
   /*! \brief Run inference using built engine. */
   void Run() override {
+    // Find if input has any empty tensor.
+    bool has_empty_tensor = false;
+    for (size_t i = 0; i < input_nodes_.size(); ++i) {
+      auto nid = input_nodes_[i];
+      if (nodes_[nid].GetOpType() == "input") {
+        for (size_t j = 0; j < nodes_[nid].GetOpShape().size(); ++j) {
+          uint32_t eid = EntryID(nid, j);
+          // LOG(INFO) << "Input " << i << "_" << j << ": " << DebugString(data_entry_[eid]);
+          for (size_t k = 0; k < data_entry_[eid]->ndim; ++k) {
+            if (data_entry_[eid]->shape[k] == 0) {
+              has_empty_tensor = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (has_empty_tensor) {
+      // Not currently handling empty tensor properly.
+      // Instead, zero out all non-empty outputs.
+      // For most subgraphs, if input is empty tensor, then outputs are all empty tensors, so no computation needs to be done.
+      // However, for NMS, there is a non empty output for num_valid_boxes which still needs to be set to 0.
+      // Zeroing out the non-empty outputs here will solve that case.
+      for (size_t i = 0; i < outputs_.size(); ++i) {
+        uint32_t eid = EntryID(outputs_[i]);
+        auto tensor = const_cast<DLTensor*>(data_entry_[eid]);
+        const size_t size_bytes = GetDataSize(*tensor);
+        if (size_bytes == 0) continue;
+        if (tensor->ctx.device_type == kDLGPU) {
+          cudaMemset(tensor->data, 0, size_bytes);
+        } else {
+          ICHECK_EQ(tensor->ctx.device_type, kDLCPU);
+          std::memset(tensor->data, 0, size_bytes);
+        }
+      }
+      return;
+    }
     BuildEngine();
     batch_size_ = data_entry_[input_var_eid_[0]]->shape[0];
     if (batch_size_ == 0) return;
@@ -126,7 +173,11 @@ class TensorRTRuntime : public JSONRuntimeBase {
           uint32_t eid = EntryID(nid, j);
           const std::string name = nodes_[nid].GetOpName() + "_" + std::to_string(j);
           int binding_index = engine->getBindingIndex(name.c_str());
-          ICHECK_NE(binding_index, -1);
+          // ICHECK_NE(binding_index, -1);
+          if (binding_index == -1) {
+            // Unused input.
+            continue;
+          }
           if (data_entry_[eid]->ctx.device_type == kDLGPU) {
             bindings[binding_index] = data_entry_[eid]->data;
           } else {
