@@ -994,7 +994,7 @@ def test_non_max_suppression():
             invalid_to_bottom=False,
         )
         f = relay.Function([x], nms_ret.astuple())
-        return f, {"x": (1, 1000, 5)}, []
+        return f, {"x": (1, 4096, 5)}, []
 
     run_and_verify_func(get_graph())
 

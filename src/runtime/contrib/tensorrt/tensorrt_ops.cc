@@ -1046,7 +1046,6 @@ class NmsOpConverter : public TensorRTOpConverter {
   NmsOpConverter() : TensorRTOpConverter({kTensor, kTensor}) {}
 
   void Convert(TensorRTOpConverterParams* params) const {
-    // TODO(trevmorr): add return_indices to json
     int score_index = std::stoi(params->node.GetAttr<std::vector<std::string>>("score_index")[0]);
     int coord_start = std::stoi(params->node.GetAttr<std::vector<std::string>>("coord_start")[0]);
     int top_k = std::stoi(params->node.GetAttr<std::vector<std::string>>("top_k")[0]);
@@ -1055,6 +1054,8 @@ class NmsOpConverter : public TensorRTOpConverter {
     float iou_threshold =
         std::stof(params->node.GetAttr<std::vector<std::string>>("iou_threshold")[0]);
 
+    // TODO(trevmorr): add return_indices to json
+    bool return_indices = true;
     auto input = params->inputs.at(0).tensor;
     auto input_dims = TrtDimsToVector(input->getDimensions());
     const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
@@ -1077,15 +1078,17 @@ class NmsOpConverter : public TensorRTOpConverter {
                      ->addSlice(*input, VectorToTrtDims(boxes_begin), VectorToTrtDims(boxes_size),
                                 VectorToTrtDims(strides))
                      ->getOutput(0);
-    // Insert 1 for classes
+    // Insert 1 for classes [N, num_boxes, 4] -> [N, num_boxes, 1, 4]
     boxes_size.insert(boxes_size.begin() + params_index, 1);
     boxes = Reshape(params, boxes, boxes_size);
 
-
-    bool shareLocation = true;  // if num_classes = 1
+    // shareLocation value doesnt matter if num_classes is 1.
+    bool shareLocation = true;  
     int backgroundLabelId = -1;
     int numClasses = 1;
     int topK = top_k == -1 ? num_boxes : std::min(num_boxes, top_k);
+    // TF OD models cap at 100
+    topK = std::min(topK, 100);
     // TODO(trevmorr): Difference between topK and keepTopK?
     bool isNormalized = false;  // TODO(trevmorr): True or false?
     nvinfer1::PluginField fields[8] = {
@@ -1119,6 +1122,32 @@ class NmsOpConverter : public TensorRTOpConverter {
     auto output_boxes = nms_layer->getOutput(1);
     auto output_scores = nms_layer->getOutput(2);
     auto output_indices = nms_layer->getOutput(4);
+
+    // Slice to max output size
+    // TODO(trevmorr): Only do this if num inputs is 2. 
+    // TODO(trevmorr): Do for output scores, boxes also
+    // auto max_output_size = params->inputs.at(1).tensor;
+    // max_output_size = Reshape(params, max_output_size, {1});
+    // auto output_indices_dims = TrtDimsToVector(output_indices->getDimensions());
+    // std::vector<int> output_indices_begin(output_indices_dims.size(), 0);
+    // std::vector<int> output_indices_size(output_indices_dims.begin(), output_indices_dims.end());
+    // output_indices_size[params_index] = 1;
+    // std::vector<int> output_indices_strides(output_indices_dims.size(), 1);
+    // LOG(INFO) << "output indices dims " << output_indices_dims.size();
+    // LOG(INFO) << "max_output_size dims " << max_output_size->getDimensions().nbDims;
+    // auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(output_indices_begin),
+    //                                              nvinfer1::Dims{1},
+    //                                              VectorToTrtDims(output_indices_strides));
+    // slice_layer->setInput(2, *max_output_size);
+    // output_indices = slice_layer->getOutput(0);
+
+
+    if (return_indices) {
+      params->outputs.push_back(output_indices);
+      params->outputs.push_back(num_valid);
+      return;
+    }
+
     // TODO(trevmorr): include batch dim in shape for explicit mode
     output_scores = Reshape(params, output_scores, {num_boxes, 1});
     std::vector<nvinfer1::ITensor*> concat_inputs;
@@ -1130,10 +1159,7 @@ class NmsOpConverter : public TensorRTOpConverter {
     nvinfer1::IConcatenationLayer* concat_layer =
         params->network->addConcatenation(concat_inputs.data(), concat_inputs.size());
     concat_layer->setAxis(params_index);
-    //params->outputs.push_back(concat_layer->getOutput(0));
-    params->outputs.push_back(output_indices);
-    params->outputs.push_back(num_valid);
-    // TODO(trevmorr): Return indices?
+    params->outputs.push_back(concat_layer->getOutput(0));
   }
 };
 

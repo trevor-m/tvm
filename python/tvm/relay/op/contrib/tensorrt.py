@@ -901,7 +901,10 @@ def is_valid_subgraph(params, body):
 
             if isinstance(var.checked_type, relay.TupleType):
                 for tupe_type in var.checked_type.fields:
-                    if len(tupe_type.shape.shape) == 0:
+                    if not isinstance(tupe_type, relay.TensorType):
+                        print("@@@got weird type", type(tupe_type))
+                        continue
+                    if len(tupe_type.shape) == 0:
                         input_batch_sizes.append(1)
                     elif not isinstance(tupe_type.shape[0], tvm.tir.expr.Any):
                         input_batch_sizes.append(int(tupe_type.shape[0]))
