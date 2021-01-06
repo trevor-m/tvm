@@ -113,6 +113,9 @@ void TensorRTOpConverter::GetPadding(const std::vector<std::string>& padding,
     *prepadding = nvinfer1::DimsHW(std::stoi(padding[0]), std::stoi(padding[1]));
     *postpadding = nvinfer1::DimsHW(std::stoi(padding[2]), std::stoi(padding[3]));
     *use_asymmetric_padding = true;
+    if (prepadding->h() == postpadding->h() && prepadding->w() == postpadding->w()) {
+      *use_asymmetric_padding = false;
+    }
   } else if (padding.size() == 2) {
     // two int : bottom, right will use same padding as top, left
     *prepadding = nvinfer1::DimsHW(std::stoi(padding[0]), std::stoi(padding[1]));
@@ -218,7 +221,7 @@ class ElementWiseBinaryOpConverter : public TensorRTOpConverter {
         input1 = Reshape(params, input1, new_shape);
       }
     }
-
+    input0 = params->network->addIdentity(*input0)->getOutput(0);
     nvinfer1::IElementWiseLayer* elemwise_layer =
         params->network->addElementWise(*input0, *input1, it->second);
     ICHECK(elemwise_layer != nullptr);

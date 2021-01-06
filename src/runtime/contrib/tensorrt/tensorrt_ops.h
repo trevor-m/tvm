@@ -36,7 +36,7 @@
 #include "NvInfer.h"
 #include "tensorrt_utils.h"
 
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
 #define TRT_HAS_IMPLICIT_BATCH(params) (params->network->hasImplicitBatchDimension())
 #else
 #define TRT_HAS_IMPLICIT_BATCH(params) (true)

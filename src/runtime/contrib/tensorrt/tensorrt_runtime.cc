@@ -149,7 +149,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
       }
     }
 
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
     if (use_implicit_batch_) {
       ICHECK(context->execute(batch_size_, bindings.data())) << "Running TensorRT failed.";
     } else {
@@ -179,7 +179,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
   void BuildEngine() {
     batch_size_ = data_entry_[input_var_eid_[0]]->shape[0];
     if (trt_engine_cache_.count(std::make_pair(symbol_name_, batch_size_))) return;
-    DLOG(INFO) << "Building new TensorRT engine for subgraph " << symbol_name_
+    LOG(INFO) << "Building new TensorRT engine for subgraph " << symbol_name_
                << " with batch size " << batch_size_;
     const bool use_fp16 = dmlc::GetEnv("TVM_TENSORRT_USE_FP16", false);
     TensorRTBuilder builder(&logger_, data_entry_, max_workspace_size_, use_implicit_batch_,

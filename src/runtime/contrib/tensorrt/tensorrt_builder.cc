@@ -48,7 +48,7 @@ TensorRTBuilder::TensorRTBuilder(TensorRTLogger* logger,
       batch_size_(batch_size) {
   // Create TRT builder and network.
   builder_ = nvinfer1::createInferBuilder(*logger);
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
   // Use INetworkV2.
   auto flags =
       1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
@@ -60,7 +60,7 @@ TensorRTBuilder::TensorRTBuilder(TensorRTLogger* logger,
 #else
   // Use INetwork with implicit batch.
   builder_->setMaxBatchSize(batch_size_);
-  builder_->setMaxWorkspaceSize(max_workspace_size_);
+  builder_->setMaxWorkspaceSize(size_t(1) << 32);
   builder_->setFp16Mode(use_fp16_);
   network_ = builder_->createNetwork();
 #endif
@@ -148,9 +148,9 @@ void TensorRTBuilder::AddLayer(int nid, const JSONGraphNode& node) {
 TensorRTEngineAndContext TensorRTBuilder::BuildEngine() {
   // Process graph to create INetworkDefinition.
 // Build engine.
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
   config_ = builder_->createBuilderConfig();
-  config_->setMaxWorkspaceSize(max_workspace_size_);
+  config_->setMaxWorkspaceSize(size_t(1) << 32);
   if (use_fp16_) {
     config_->setFlag(nvinfer1::BuilderFlag::kFP16);
   }
@@ -218,7 +218,7 @@ nvinfer1::ITensor* TensorRTBuilder::GetInputAsTensor(const TensorRTOpInput& inpu
 
 void TensorRTBuilder::CleanUp() {
   network_->destroy();
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
   config_->destroy();
 #endif
   builder_->destroy();

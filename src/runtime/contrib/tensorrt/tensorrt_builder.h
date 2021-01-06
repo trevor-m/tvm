@@ -135,7 +135,7 @@ class TensorRTBuilder {
   /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
 
-#if TRT_VERSION_GE(6, 0, 1)
+#if 0 && TRT_VERSION_GE(6, 0, 1)
   /*! \brief TensorRT builder config. */
   nvinfer1::IBuilderConfig* config_;
 #endif

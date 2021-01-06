@@ -41,7 +41,7 @@ class TensorRTLogger : public nvinfer1::ILogger {
   explicit TensorRTLogger(Severity severity) : reportable_severity(severity) {}
   void log(Severity severity, const char* msg) override {
     // suppress messages with severity enum value greater than the reportable
-    if (severity > reportable_severity) return;
+    //if (severity > reportable_severity) return;
 
     switch (severity) {
       case Severity::kINTERNAL_ERROR:
@@ -58,7 +58,7 @@ class TensorRTLogger : public nvinfer1::ILogger {
         break;
 #if TRT_VERSION_GE(5, 1, 5)
       case Severity::kVERBOSE:
-        DLOG(INFO) << "VERBOSE: " << msg;
+        LOG(INFO) << "VERBOSE: " << msg;
         break;
 #endif
       default:
