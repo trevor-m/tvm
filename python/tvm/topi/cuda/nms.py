@@ -204,46 +204,51 @@ def get_valid_indices_ir(valid_boxes, valid_count, valid_indices):
                     valid_indices[by * num_anchors + end[0] - 1] += valid_indices[
                         by * num_anchors + middle[0] - 1
                     ]
-
-    # Down Sweep of exclusive scan
-    with ib.new_scope():
-        bx = te.thread_axis("blockIdx.x")
-        ib.scope_attr(bx, "thread_extent", batch_size)
-        with ib.if_scope(bx < batch_size):
-            valid_count[bx] = valid_indices[(bx + 1) * num_anchors - 1]
-            valid_indices[(bx + 1) * num_anchors - 1] = 0
-
-    with ib.for_range(0, lim, dtype="int64") as l2_width:
-        width = 2 << (lim - l2_width - 1)
-
+    with ib.if_scope(num_anchors > 0):
+        # Down Sweep of exclusive scan
         with ib.new_scope():
-            tx = te.thread_axis("threadIdx.x")
             bx = te.thread_axis("blockIdx.x")
-            ib.scope_attr(tx, "thread_extent", nthread_tx)
-            ib.scope_attr(
-                bx,
-                "thread_extent",
-                tvm.tir.generic.cast(ceil_div(num_anchors, max_threads * width), "int32"),
-            )
-            tid = bx * nthread_tx + tx
+            ib.scope_attr(bx, "thread_extent", batch_size)
+            with ib.if_scope(bx < batch_size):
+                valid_count[bx] = valid_indices[(bx + 1) * num_anchors - 1]
+                valid_indices[(bx + 1) * num_anchors - 1] = 0
 
-            by = te.thread_axis("blockIdx.y")
-            ib.scope_attr(by, "thread_extent", nthread_by)
-            start = ib.allocate("int64", (1,), name="start", scope="local")
-            middle = ib.allocate("int64", (1,), name="middle", scope="local")
-            end = ib.allocate("int64", (1,), name="end", scope="local")
-            tmp = ib.allocate("int32", (1,), name="end", scope="local")
-            start[0] = width * tid
-            with ib.if_scope(tvm.tir.all(start[0] < num_anchors)):
-                middle[0] = start[0] + tvm.tir.indexdiv(width, 2)
-                end[0] = tvm.tir.min(start[0] + width, num_anchors)
-                with ib.if_scope(middle[0] < num_anchors):
-                    tmp[0] = valid_indices[by * num_anchors + middle[0] - 1]
-                    valid_indices[by * num_anchors + middle[0] - 1] = valid_indices[
-                        by * num_anchors + end[0] - 1
-                    ]
-                    valid_indices[by * num_anchors + end[0] - 1] += tmp[0]
+        with ib.for_range(0, lim, dtype="int64") as l2_width:
+            width = 2 << (lim - l2_width - 1)
 
+            with ib.new_scope():
+                tx = te.thread_axis("threadIdx.x")
+                bx = te.thread_axis("blockIdx.x")
+                ib.scope_attr(tx, "thread_extent", nthread_tx)
+                ib.scope_attr(
+                    bx,
+                    "thread_extent",
+                    tvm.tir.generic.cast(ceil_div(num_anchors, max_threads * width), "int32"),
+                )
+                tid = bx * nthread_tx + tx
+
+                by = te.thread_axis("blockIdx.y")
+                ib.scope_attr(by, "thread_extent", nthread_by)
+                start = ib.allocate("int64", (1,), name="start", scope="local")
+                middle = ib.allocate("int64", (1,), name="middle", scope="local")
+                end = ib.allocate("int64", (1,), name="end", scope="local")
+                tmp = ib.allocate("int32", (1,), name="end", scope="local")
+                start[0] = width * tid
+                with ib.if_scope(tvm.tir.all(start[0] < num_anchors)):
+                    middle[0] = start[0] + tvm.tir.indexdiv(width, 2)
+                    end[0] = tvm.tir.min(start[0] + width, num_anchors)
+                    with ib.if_scope(middle[0] < num_anchors):
+                        tmp[0] = valid_indices[by * num_anchors + middle[0] - 1]
+                        valid_indices[by * num_anchors + middle[0] - 1] = valid_indices[
+                            by * num_anchors + end[0] - 1
+                        ]
+                        valid_indices[by * num_anchors + end[0] - 1] += tmp[0]
+    with ib.else_scope():
+        with ib.new_scope():
+            bx = te.thread_axis("blockIdx.x")
+            ib.scope_attr(bx, "thread_extent", batch_size)
+            with ib.if_scope(bx < batch_size):
+                valid_count[bx] = 0
     return ib.get()
 
 
