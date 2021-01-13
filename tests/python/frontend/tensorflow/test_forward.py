@@ -52,6 +52,8 @@ from packaging import version as package_version
 
 import tvm.testing
 
+import time
+
 #######################################################################
 # Generic run functions for TVM & tensorflow
 # ------------------------------------------
@@ -150,17 +152,23 @@ def run_tvm_graph(
         return vmobj_to_list(result)
     elif mode == "vm":
         with tvm.transform.PassContext(opt_level=opt_level, disabled_pass=disabled_pass):
-            print(mod["main"])
+            #print(mod["main"])
             mod = relay.transform.InferType()(mod)
-            vm_exec = relay.vm.compile(mod, target="llvm", params=params)
+            vm_exec = relay.vm.compile(mod, target="cuda", params=params)
         if serialize:
             code, lib = vm_exec.save()
             vm_exec = tvm.runtime.vm.Executable.load_exec(code, lib)
-        vm = VirtualMachine(vm_exec, tvm.cpu())
+        vm = VirtualMachine(vm_exec, tvm.gpu())
         inputs = {}
         for e, i in zip(input_node, input_data):
             inputs[e] = tvm.nd.array(i)
-        result = vm.invoke("main", **inputs)
+        
+        times = []
+        for i in range(1000):
+            start = time.time()
+            result = vm.invoke("main", **inputs)
+            times.append(time.time() - start)
+        print("avg tvm latency", np.mean(times[50:])*1000)
         return vmobj_to_list(result)
     else:
         with tvm.transform.PassContext(opt_level=opt_level, disabled_pass=disabled_pass):
@@ -193,10 +201,16 @@ def run_tf_graph(sess, input_data, input_node, output_node):
     tensor = [sess.graph.get_tensor_by_name(output_name) for output_name in output_node]
 
     input_dict = {e: input_data[i] for i, e in enumerate(input_node)}
-    if len(input_node) == 1 and input_node[0] == "":
-        output_data = sess.run(tensor)
-    else:
-        output_data = sess.run(tensor, input_dict)
+
+    times = []
+    for i in range(1000):
+        start = time.time()
+        if len(input_node) == 1 and input_node[0] == "":
+            output_data = sess.run(tensor)
+        else:
+            output_data = sess.run(tensor, input_dict)
+        times.append(time.time() - start)
+    print("avg tf latency ", np.mean(times[50:]) * 1000)
     return output_data
 
 
@@ -233,7 +247,7 @@ def compare_tf_with_tvm(
 
         tf_output = run_tf_graph(sess, in_data, in_name, out_name)
 
-        for device in ["llvm", "cuda"]:
+        for device in ["cuda"]:
             ctx = tvm.context(device, 0)
             if not tvm.testing.device_enabled(device):
                 print("Skip because %s is not enabled" % device)
@@ -2593,6 +2607,7 @@ def test_forward_crop_and_resize():
 def _test_forward_nms_v3(
     bx_shape, score_shape, iou_threshold, score_threshold, out_size, dtype="float32"
 ):
+    print('test nms', bx_shape)
     boxes = np.random.uniform(0, 10, size=bx_shape).astype(dtype)
     scores = np.random.uniform(size=score_shape).astype(dtype)
     max_output_size = np.int32(out_size)
@@ -2614,12 +2629,12 @@ def _test_forward_nms_v3(
         "nms/NonMaxSuppressionV3:0",
         mode="vm",
     )
-    compare_tf_with_tvm(
-        [boxes, scores, max_output_size],
-        ["in_data_1:0", "in_data_2:0", "in_data_3:0"],
-        "nms/NonMaxSuppressionV3:0",
-        mode="debug",
-    )
+    # compare_tf_with_tvm(
+    #     [boxes, scores, max_output_size],
+    #     ["in_data_1:0", "in_data_2:0", "in_data_3:0"],
+    #     "nms/NonMaxSuppressionV3:0",
+    #     mode="debug",
+    # )
 
 
 def _test_forward_nms_v4(
@@ -2686,11 +2701,13 @@ def _test_forward_nms_v5(
 
 def test_forward_nms():
     """ NonMaxSuppressionV3,5 """
-    for _test_forward_nms in [_test_forward_nms_v3, _test_forward_nms_v5]:
+    for _test_forward_nms in [_test_forward_nms_v3]:
         _test_forward_nms((5, 4), (5,), 0.7, 0.5, 5)
         _test_forward_nms((20, 4), (20,), 0.5, 0.6, 10)
         _test_forward_nms((1000, 4), (1000,), 0.3, 0.7, 1000)
-        _test_forward_nms((2000, 4), (2000,), 0.4, 0.6, 7)
+        _test_forward_nms((2000, 4), (2000,), 0.4, 0.6, 100)
+        _test_forward_nms((64, 4), (64,), 0.7, 0.0, 100)
+        _test_forward_nms((67500, 4), (67500,), 0.7, 0.0, 100)
 
 
 #######################################################################
@@ -4682,4 +4699,5 @@ def test_forward_dynmaic_rnn_lstmblockcell():
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    test_forward_nms()
+    #pytest.main([__file__])
