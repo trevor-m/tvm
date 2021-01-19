@@ -49,6 +49,7 @@ void StorageAccessVisitor::VisitExpr_(const LoadNode* op) {
   }
   // traverse child
   StmtExprVisitor::VisitExpr_(op);
+  curr_stmt_.access.clear();
 }
 
 void StorageAccessVisitor::VisitStmt_(const StoreNode* op) {
@@ -165,7 +166,9 @@ void StorageAccessVisitor::VisitStmt_(const IfThenElseNode* op) {
   ++condition_counter_;
   this->VisitExpr(op->condition);
   scope_.push_back(std::vector<StmtEntry>());
+  allow_append_ = true;
   this->VisitStmt(op->then_case);
+  allow_append_ = false;
   StmtEntry s;
   s.stmt = op;
   s.access = Summarize(std::move(scope_.back()), nullptr);
