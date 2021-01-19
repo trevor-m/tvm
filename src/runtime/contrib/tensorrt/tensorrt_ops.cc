@@ -1060,6 +1060,7 @@ class NmsOpConverter : public TensorRTOpConverter {
     auto input_dims = TrtDimsToVector(input->getDimensions());
     const int params_index = params->network->hasImplicitBatchDimension() ? 1 : 2;
     const int num_boxes = input_dims[params->network->hasImplicitBatchDimension() ? 0 : 1];
+    LOG(INFO) << "NMS Num boxes: " << num_boxes;
     // Slice input into boxes and scores
     std::vector<int> scores_begin(input_dims.size(), 0);
     std::vector<int> scores_size(input_dims.begin(), input_dims.end());
@@ -1088,7 +1089,7 @@ class NmsOpConverter : public TensorRTOpConverter {
     int numClasses = 1;
     int topK = top_k == -1 ? num_boxes : std::min(num_boxes, top_k);
     // TF OD models cap at 100
-    topK = std::min(topK, 100);
+    int keepTopK = std::min(topK, 100);//topK = std::min(topK, 100);
     // TODO(trevmorr): Difference between topK and keepTopK?
     bool isNormalized = false;  // TODO(trevmorr): True or false?
     nvinfer1::PluginField fields[8] = {
@@ -1100,7 +1101,7 @@ class NmsOpConverter : public TensorRTOpConverter {
                             nvinfer1::PluginFieldType::kINT32, 1},
       nvinfer1::PluginField{"topK", &topK, nvinfer1::PluginFieldType::kINT32,
                             1},
-      nvinfer1::PluginField{"keepTopK", &topK,
+      nvinfer1::PluginField{"keepTopK", &keepTopK,
                             nvinfer1::PluginFieldType::kINT32, 1},
       nvinfer1::PluginField{"scoreThreshold", &score_threshold,
                             nvinfer1::PluginFieldType::kFLOAT32, 1},

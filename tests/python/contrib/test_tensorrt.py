@@ -103,7 +103,7 @@ def run_and_verify_func(config, target="cuda"):
             result_key = mode + ("_trt" if use_trt else "")
             if use_trt:
                 mod, config = tensorrt.partition_for_tensorrt(mod, params, remove_no_mac_subgraphs=True)
-                print(mod)
+                #print(mod)
                 with tvm.transform.PassContext(
                     opt_level=3, config={"relay.ext.tensorrt.options": config}
                 ):
@@ -119,7 +119,7 @@ def run_and_verify_func(config, target="cuda"):
                     s = time.time()
                     result_dict[result_key] = exec.evaluate()(**input_dict, **params)
                     times.append(time.time() - s)
-                print(use_trt, np.mean(times) * 1000)
+                print(use_trt, np.mean(times[50:]) * 1000)
 
     if not skip_runtime_test():
         assert_result_dict_holds(result_dict)
@@ -1000,18 +1000,21 @@ def test_non_max_suppression():
 
 def test_dynamic_non_max_suppression():
     def get_graph(
+        num_anchors=64,
         boxes_shape=(relay.Any(), 4),
         scores_shape=(relay.Any(),),
         score_threshold=0.3,
         iou_threshold=0.5,
     ):
+        print('testing num anchors', num_anchors)
         boxes = relay.var("boxes", shape=(boxes_shape), dtype="float32")
         scores = relay.var("scores", shape=(scores_shape), dtype="float32")
 
-        max_output_size = relay.shape_of(boxes)
-        max_output_size = relay.strided_slice(max_output_size, begin=[0], end=[1], strides=[1])
-        max_output_size = relay.squeeze(max_output_size)
-        max_output_size = relay.minimum(relay.const(100, dtype="int32"), max_output_size)
+        # max_output_size = relay.shape_of(boxes)
+        # max_output_size = relay.strided_slice(max_output_size, begin=[0], end=[1], strides=[1])
+        # max_output_size = relay.squeeze(max_output_size)
+        # max_output_size = relay.minimum(relay.const(100, dtype="int32"), max_output_size)
+        max_output_size = 100
 
         scores_exp = relay.expand_dims(scores, -1, 1)
         data = relay.concatenate([scores_exp, boxes], -1)
@@ -1047,9 +1050,16 @@ def test_dynamic_non_max_suppression():
 
         # ret = relay.take(scores, ret, axis=0)
         f = relay.Function([boxes, scores], ret)
-        return f, {"boxes": (0, 4), "scores": (0,)}, []
+        return f, {"boxes": (num_anchors, 4), "scores": (num_anchors,)}, []
 
-    run_and_verify_func(get_graph())
+    run_and_verify_func(get_graph(num_anchors=0))
+    run_and_verify_func(get_graph(num_anchors=1))
+    run_and_verify_func(get_graph(num_anchors=2))
+    run_and_verify_func(get_graph(num_anchors=4))
+    run_and_verify_func(get_graph(num_anchors=8))
+    run_and_verify_func(get_graph(num_anchors=16))
+    run_and_verify_func(get_graph(num_anchors=32))
+    run_and_verify_func(get_graph(num_anchors=64))
 
 def test_alexnet():
     run_and_verify_model("alexnet")

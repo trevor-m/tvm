@@ -176,6 +176,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
           // ICHECK_NE(binding_index, -1);
           if (binding_index == -1) {
             // Unused input.
+            //LOG(INFO) << "unused input";
             continue;
           }
           if (data_entry_[eid]->ctx.device_type == kDLGPU) {
