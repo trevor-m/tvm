@@ -739,6 +739,88 @@ def _nms(return_scores=False):
     return _impl
 
 
+def _combined_nms():
+    def _impl(inputs, attr, params, mod):
+        # Get parameter values
+        boxes = inputs[0]
+        scores = inputs[1]
+        try:
+            max_output_size = int(np.atleast_1d(inputs[2].data.asnumpy().astype("int64"))[0])
+        except Exception:
+            try:
+                max_output_size = (
+                    _infer_value(inputs[2], params, mod).asnumpy().astype("int64").tolist()[0]
+                )
+            except Exception:
+                max_output_size = inputs[2]        
+        max_total_size = np.atleast_1d(inputs[3].data.asnumpy())[0]
+        iou_threshold = np.atleast_1d(inputs[4].data.asnumpy())[0]
+        score_threshold = np.atleast_1d(inputs[5].data.asnumpy())[0]
+        pad_output = "pad_per_class"
+        clip_boxes = "clip_boxes"
+        
+        # boxes is [batch_size, num_boxes, q, 4]
+        # scores is [batch_size, num_boxes, num_classes
+        print(_infer_shape(inputs[0], mod))
+        print(_infer_shape(inputs[1], mod))
+        boxes_shape = _infer_shape(inputs[0], mod)
+        scores_shape = _infer_shape(inputs[1], mod)
+        batch_size = boxes_shape[0]
+        num_anchors = boxes_shape[1]
+        q = boxes_shape[2]
+        num_classes = scores_shape[2]
+        print(attr)
+        # TODO(trevmorr): pad_per_class, clip_boxes, max_total_size unused
+        
+
+        if q != num_classes:
+            # When q is 1, it means same box coords are used for all classes.
+            boxes = _op.broadcast_to(boxes, (batch_size, num_anchors, num_classes, 4))
+        boxes = _op.reshape(boxes, newshape=[batch_size, num_anchors * num_classes, 4])
+        scores = _op.reshape(scores, newshape=[batch_size, num_anchors * num_classes, 1])
+
+        ids = _op.arange(_op.const(num_classes, dtype="float32"))
+        ids = _op.broadcast_to(ids, (batch_size, num_anchors, num_classes))
+        ids = _op.reshape(ids, newshape=[batch_size, num_anchors * num_classes, 1])
+
+        #boxes = get_relay_op("squeeze")(inputs[0], axis=[2])
+        #scores = get_relay_op("squeeze")(inputs[1], axis=[2])
+        data = get_relay_op("concatenate")([ids, scores, boxes], -1)
+        #data = get_relay_op("expand_dims")(data, 0, 1)
+
+        # reason why using get_valid_counts is for inference performance
+        ct, data, indices = get_relay_op("get_valid_counts")(
+            data, score_threshold=score_threshold, id_index=0, score_index=1
+        )
+        # TensorFlow NMS doesn't have parameter top_k
+        top_k = -1
+        # TF doesn't have class id for nms input
+        nms_ret = get_relay_op("non_max_suppression")(
+            data=data,
+            valid_count=ct,
+            indices=indices,
+            max_output_size=max_output_size,
+            iou_threshold=iou_threshold,
+            force_suppress=True,
+            top_k=top_k,
+            coord_start=2,
+            score_index=1,
+            id_index=0,
+            return_indices=False,
+            invalid_to_bottom=False, # should be True?
+        )
+        # print("NMS DATA SHAPE", _infer_shape(nms_ret[0], mod))
+        # print("NMS SIZE SHAPE", _infer_shape(nms_ret[1], mod))
+
+        # TODO(trevmorr): end = max_output_size
+        nmsed_boxes = get_relay_op("strided_slice")(nms_ret, begin=[0, 0, 2], end=[-1, 100, -1], slice_mode="size")
+        nmsed_scores = get_relay_op("strided_slice")(nms_ret, begin=[0, 0, 1], end=[-1, 100, 1], slice_mode="size")
+        nmsed_classes = get_relay_op("strided_slice")(nms_ret, begin=[0, 0, 0], end=[-1, 100, 1], slice_mode="size")
+        return _expr.TupleWrapper(_expr.Tuple([nmsed_boxes, nmsed_scores, nmsed_classes, ct]), 4)
+
+    return _impl
+
+
 def _decode_image():
     def _impl(inputs, attr, params, mod):
         # Image decode wrapper: Expecting user to feed decoded input to next layer drop this layer.
@@ -2409,6 +2491,7 @@ _convert_map = {
     "NonMaxSuppressionV3": _nms(),
     "NonMaxSuppressionV4": _nms(),
     "NonMaxSuppressionV5": _nms(True),
+    "CombinedNonMaxSuppression": _combined_nms_stack(),
     "NoOp": _no_op(),
     "NotEqual": _broadcast("not_equal"),
     "OneHot": _one_hot(),
